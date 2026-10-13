@@ -7,7 +7,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 work=$(mktemp -d)
-sed 's|^\temail {$ACME_EMAIL}|\temail {$ACME_EMAIL}\n\tlocal_certs|' deploy/Caddyfile > "$work/Caddyfile"
+# Caddy's local CA for everything: local_certs, and the custom-domain block's own ACME issuer swapped for it too.
+sed -e 's|^\temail {$ACME_EMAIL}|\temail {$ACME_EMAIL}\n\tlocal_certs|' -e 's|^\t\tissuer acme$|\t\tissuer internal|' deploy/Caddyfile > "$work/Caddyfile"
 cat > "$work/override.yml" <<EOF
 services:
   brod:
