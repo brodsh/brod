@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Pages and sign-in on the API host: magic links, Google, the hand-off of a sign-in to an app's own address,
 // invitations, confirmations of agent requests, and the workspace home page.
 //

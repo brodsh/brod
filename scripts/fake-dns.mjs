@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // A small DNS-over-HTTPS resolver (the JSON API Cloudflare and Google serve) that answers TXT lookups from records
 // tests set, for custom-domain verification. POST /_test/records {name, value} adds a TXT record; DELETE removes all.
 // The same handler runs as a Node HTTP server (e2e) and as Miniflare's outbound service (vitest).

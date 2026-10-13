@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // One server, four jobs, split by hostname and path:
 //   <slug>.<workspace>.<APPS_DOMAIN>  -> gateway (signs people in, decides access, serves an app)
 //   <workspace>.<APPS_DOMAIN>         -> redirect to the workspace home page

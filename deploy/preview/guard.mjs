@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Which URLs a previewed page may load (deploy/preview/server.mjs): its own sandbox, data and blob URLs, and the
 // public internet. Never Brod's private network: private and loopback addresses, single-label names (brod, runtime,
 // postgres) and names under .internal, .local, .localhost and the like.

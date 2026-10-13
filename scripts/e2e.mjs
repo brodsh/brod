@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // End-to-end check against a running Brod server with DEV_MODE=1 (started by scripts/e2e-rust.mjs), using the official MCP client
 // the way an agent would, and a small cookie-keeping browser for people signing in across the API and app hosts.
 // Usage: node scripts/e2e.mjs [api origin]   (default http://localhost:8787)

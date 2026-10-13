@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // App files in any S3-compatible bucket: Cloudflare R2's S3 endpoint, MinIO, AWS S3, Backblaze B2 and others.
 // Requests are signed with AWS Signature Version 4, written out here rather than pulling in an SDK.
 use axum::body::Body;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // The workspace layer: people, workspaces, groups, invites, per-app role grants, sessions,
 // and the one access decision the gateway makes for every visitor request.
 // Functions here are synchronous over one database connection; callers run them on the blocking pool.

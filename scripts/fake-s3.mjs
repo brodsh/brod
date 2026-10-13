@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // A small in-memory S3-compatible server for tests: path-style buckets, PUT/GET/HEAD/DELETE objects and ListObjectsV2.
 // It checks every request's SigV4 signature (header or presigned query) with its own implementation from the AWS spec,
 // so a signing mistake in server/src/storage/s3.rs fails the tests instead of passing silently.

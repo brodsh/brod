@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // The marketplace on the Rust server: one workspace lists an app, another installs a copy, and updates are offered to
 // the copy but only deployed when its workspace asks. Run by scripts/e2e-rust.mjs after scripts/e2e-billing.mjs.
 // Usage: node scripts/e2e-market.mjs <api origin>

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Outside addresses: an app may only send data to the hosts it declares. A scan cannot prove code is harmless, so Brod
 // does not try to; it makes leaving undeclared impossible instead, in both places an app's code runs:
 //

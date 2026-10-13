@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // The workspace admin page at /w/<workspace>/admin, for builders and admins: apps (deploy from a zip, versions,
 // access, secrets, pause, delete), the marketplace (install, updates, listings), people and invites, groups, a link to
 // the agent connections page, and the activity log.

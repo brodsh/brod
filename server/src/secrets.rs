@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Per-app secrets. Encrypted at rest with AES-256-GCM under a key derived from SECRETS_KEY with HKDF-SHA256,
 // with the app id as associated data.
 // Stored as base64(iv) + "." + base64(ciphertext and tag).

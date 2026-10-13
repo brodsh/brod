@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Server apps: bundles with a _worker.js (or a _worker/ folder), in the Cloudflare Pages layout.
 //
 // The Rust server does not run JavaScript itself. With BROD_RUNTIME_URL and BROD_RUNTIME_SECRET set, it hands

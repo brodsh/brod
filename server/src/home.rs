@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // The public landing page at / for people who are not signed in. Signed-in people are sent on to their workspace
 // (auth.rs), so the same URL answers differently by cookie: the page may be cached, but only with revalidation and
 // "Vary: Cookie", so that someone who has just signed in is never shown a stored copy of it.

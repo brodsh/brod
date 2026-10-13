@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Analytics: what visitors do in a workspace's apps, kept as long as the workspace's plan allows.
 //
 // Three kinds of data, all collected off the request path and written in batches (one transaction every few seconds,

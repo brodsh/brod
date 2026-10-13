@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // A small in-memory stand-in for the parts of the Stripe API Brod uses: customers, prices, Checkout sessions,
 // subscriptions, invoices and customer portal sessions. Opening a Checkout session's url "pays" it: the fake makes an
 // active subscription and an invoice, sends checkout.session.completed and customer.subscription.created to the

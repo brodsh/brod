@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Brod's own HTTPS (BROD_TLS=acme, server/src/tls.rs) against Pebble, Let's Encrypt's test CA: certificates are
 // issued on demand over real HTTP-01 challenges, only for names Brod serves, custom domains included.
 // Downloads Pebble v2.8.0 into node_modules/.cache/pebble the first time (or set PEBBLE_DIR to a folder holding the

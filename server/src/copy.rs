@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // `brod migrate-to-postgres <sqlite-file> <postgres-url>`: a one-time copy of a SQLite database into a fresh Postgres one.
 // Every row of every table, with its ids, and the event and log id sequences carried on, so nothing is renumbered.
 use rusqlite::OpenFlags;

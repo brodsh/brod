@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Custom domains.
 //
 // A workspace can serve one app at a domain it owns (shop.example.com), or point a whole domain at the workspace

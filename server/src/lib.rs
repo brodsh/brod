@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Brod, the self-hosted server: the gateway, the MCP endpoint, the REST API and the sign-in pages in one binary.
 
 pub mod abuse;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Billing through Stripe. A workspace's plan (free, solo, team) is a Stripe subscription to one of two prices.
 //
 // Upgrading starts a Stripe Checkout session; changing between paid plans updates the subscription in place; moving

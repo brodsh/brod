@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // The server-app runtime for the self-hosted Brod: a host Worker that runs in workerd next to the Rust server.
 // The Rust gateway decides access and forwards an app's request here with
 // the app id, version and secrets revision; this Worker loads the app's code into its own isolate with the Worker

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Brod's preview service: a headless Chromium that screenshots and records marketplace releases (server/src/preview.rs).
 //
 // Brod opens a release in an empty sandbox at http://<token>.brod-preview.internal on its internal listener and asks

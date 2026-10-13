@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // HTTPS without a proxy in front. With BROD_TLS set, Brod listens on 443 and 80 itself:
 //
 // - 443: TLS. The handshake's server name (SNI) picks the certificate. A name without one gets it on its first

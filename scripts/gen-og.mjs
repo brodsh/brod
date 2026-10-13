@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Render server/src/og.png, the 1200 × 630 picture link previews show for https://brod.sh (og:image, twitter:image).
 // It is the landing page's own hero: the headline beside the transcript of an agent putting an app online.
 // Usage: npm run gen:og

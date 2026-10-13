@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Agent connections that expire, renew and can be read-only, on the Rust server: read-only tokens are refused when they
 // try to change anything, OAuth access tokens come with a refresh token that rotates, and a reused refresh token
 // disconnects the agent. Run by scripts/e2e-rust.mjs.

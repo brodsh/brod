@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Where app files live: under "<app id>/<version>/<path>", in a local folder or an S3-compatible bucket.
 // Five calls (put, get, head, list, delete); bodies are streamed on the way out.
 use axum::body::Body;
