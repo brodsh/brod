@@ -8,22 +8,22 @@
 <meta property="og:title" content="Brod: a cloud for small software">
 <meta property="og:description" content="Your agent built it. Brod puts it online for your team, with sign-in, roles and storage already there.">
 <meta property="og:type" content="website">
-<meta property="og:url" content="https://brod.sh/">
-<meta property="og:image" content="https://brod.sh/og.png">
+<meta property="og:url" content="{{ORIGIN}}/">
+<meta property="og:image" content="{{ORIGIN}}/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Brod: an agent puts a shift swap tool online and shares it with the warehouse team.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Brod: a cloud for small software">
 <meta name="twitter:description" content="Your agent built it. Brod puts it online for your team, with sign-in, roles and storage already there.">
-<meta name="twitter:image" content="https://brod.sh/og.png">
-<link rel="canonical" href="https://brod.sh/">
+<meta name="twitter:image" content="{{ORIGIN}}/og.png">
+<link rel="canonical" href="{{ORIGIN}}/">
 <meta name="theme-color" content="#F1F5F2">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='13' width='22' height='13' rx='6.5' fill='%23F4B62E'/%3E%3Ccircle cx='21' cy='12' r='7' fill='%23F4B62E'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Instrument+Sans:wght@400..700&family=JetBrains+Mono:wght@400;600&display=swap">
-<!-- Google tag (gtag.js), on this public page only. Google Consent Mode v2: every kind of storage is denied until a
+{{#analytics}}<!-- Google tag (gtag.js), on this public page only. Google Consent Mode v2: every kind of storage is denied until a
      visitor accepts in the banner at the foot of the page, and the choice is remembered in this browser. -->
 <script>
   window.dataLayer = window.dataLayer || [];
@@ -32,9 +32,9 @@
   try { if (localStorage.getItem('brod-analytics') === 'granted') gtag('consent', 'update', { analytics_storage: 'granted' }); } catch (e) {}
   gtag('js', new Date());
 
-  gtag('config', 'G-CCYYNHQKR7');
+  gtag('config', '{{GA_ID}}');
 </script>
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-CCYYNHQKR7"></script>
+<script async src="https://www.googletagmanager.com/gtag/js?id={{GA_ID}}"></script>{{/analytics}}
 <style>
 /* Layout: one left-aligned column on sage paper. The only loud things are the headline and the marigold action;
    the hero is a transcript of the product's one moment, an agent putting an app online. */
@@ -214,8 +214,8 @@ footer .linkish { font: inherit; color: var(--soft); background: none; border: 0
       </div>
       <div class="endpoint">
         <span>Or connect your agent now:</span>
-        <code id="mcp-url">https://brod.sh/mcp</code>
-        <button class="copy" type="button" data-copy="https://brod.sh/mcp">Copy</button>
+        <code id="mcp-url">{{ORIGIN}}/mcp</code>
+        <button class="copy" type="button" data-copy="{{ORIGIN}}/mcp">Copy</button>
       </div>
       <details class="setup" id="connect">
         <summary>Where do I paste it? Steps for Claude, Cursor, VS Code and others</summary>
@@ -223,7 +223,7 @@ footer .linkish { font: inherit; color: var(--soft); background: none; border: 0
           <div class="agent" data-agent="Claude Code">
             <h3>Claude Code</h3>
             <ol>
-              <li>In a terminal, run <code>claude mcp add --transport http brod https://brod.sh/mcp</code></li>
+              <li>In a terminal, run <code>claude mcp add --transport http brod {{ORIGIN}}/mcp</code></li>
               <li>Start <code>claude</code>, type <code>/mcp</code>, choose <b>brod</b> and sign in when the browser opens.</li>
             </ol>
           </div>
@@ -231,28 +231,28 @@ footer .linkish { font: inherit; color: var(--soft); background: none; border: 0
             <h3>Claude (web and desktop app)</h3>
             <ol>
               <li>Open <b>Settings</b>, then <b>Connectors</b>, then <b>Add custom connector</b>.</li>
-              <li>Name it Brod, paste <code>https://brod.sh/mcp</code> as the URL, and add it.</li>
+              <li>Name it Brod, paste <code>{{ORIGIN}}/mcp</code> as the URL, and add it.</li>
               <li>Press <b>Connect</b> and sign in when the browser opens.</li>
             </ol>
           </div>
           <div class="agent" data-agent="Cursor">
             <h3>Cursor</h3>
             <ol>
-              <li>Open <code>~/.cursor/mcp.json</code> (or <b>Settings</b>, then <b>MCP</b>, then <b>Add new MCP server</b>) and add:<pre>{ "mcpServers": { "brod": { "url": "https://brod.sh/mcp" } } }</pre></li>
+              <li>Open <code>~/.cursor/mcp.json</code> (or <b>Settings</b>, then <b>MCP</b>, then <b>Add new MCP server</b>) and add:<pre>{ "mcpServers": { "brod": { "url": "{{ORIGIN}}/mcp" } } }</pre></li>
               <li>Brod shows up in the MCP list; press <b>Connect</b> and sign in when the browser opens.</li>
             </ol>
           </div>
           <div class="agent" data-agent="VS Code">
             <h3>VS Code</h3>
             <ol>
-              <li>Create <code>.vscode/mcp.json</code> in your project with:<pre>{ "servers": { "brod": { "type": "http", "url": "https://brod.sh/mcp" } } }</pre></li>
+              <li>Create <code>.vscode/mcp.json</code> in your project with:<pre>{ "servers": { "brod": { "type": "http", "url": "{{ORIGIN}}/mcp" } } }</pre></li>
               <li>Press <b>Start</b> above the entry, sign in when the browser opens, and use Brod in Copilot's agent mode.</li>
             </ol>
           </div>
           <div class="agent" data-agent="Other agents">
             <h3>Any other agent</h3>
             <ol>
-              <li>Add a remote MCP server over HTTP with the address <code>https://brod.sh/mcp</code>.</li>
+              <li>Add a remote MCP server over HTTP with the address <code>{{ORIGIN}}/mcp</code>.</li>
               <li>When the browser opens, sign in with your email and pick the workspace the agent may use.</li>
               <li>No browser sign-in in your agent? Make a token on your workspace's <b>Connections</b> page and send it as <code>Authorization: Bearer brod_&hellip;</code></li>
             </ol>
@@ -270,7 +270,7 @@ footer .linkish { font: inherit; color: var(--soft); background: none; border: 0
       <div class="call" data-step><code>get_workspace</code><span>Reads your groups and roles, so the app fits without being told.</span></div>
       <div class="call" data-step><code>deploy_app</code><span>Shift swap, version 1. Live in seconds.</span></div>
       <div class="live" data-step>
-        <div class="bar"><i aria-hidden="true"></i>https://shift-swap.harborops.brod.sh</div>
+        <div class="bar"><i aria-hidden="true"></i>https://shift-swap.harborops.{{APPS_DOMAIN}}</div>
         <div class="live-body">
           <div class="who">
             <span id="who-text">Private. Only you can open it.</span>
@@ -392,7 +392,7 @@ footer .linkish { font: inherit; color: var(--soft); background: none; border: 0
       <h2>The next tool your agent builds can be in front of your team today.</h2>
       <div class="actions">
         <a class="btn go" href="/auth/signup">Start free</a>
-        <button class="copy" type="button" data-copy="https://brod.sh/mcp">Copy the MCP address</button>
+        <button class="copy" type="button" data-copy="{{ORIGIN}}/mcp">Copy the MCP address</button>
       </div>
     </div>
   </section>
@@ -404,18 +404,18 @@ footer .linkish { font: inherit; color: var(--soft); background: none; border: 0
     <a href="/auth/signin">Sign in</a>
     <a href="#how">How it works</a>
     <a href="#pricing">Pricing</a>
-    <button class="linkish" type="button" id="consent-open">Cookie settings</button>
-  </nav>
+{{#analytics}}    <button class="linkish" type="button" id="consent-open">Cookie settings</button>
+{{/analytics}}  </nav>
 </footer>
 
-<div class="consent" id="consent" role="region" aria-label="Analytics cookies" hidden>
+{{#analytics}}<div class="consent" id="consent" role="region" aria-label="Analytics cookies" hidden>
   <p>May we use Google Analytics cookies to count visits and see how people find Brod? Nothing is stored unless you accept.</p>
   <div class="consent-actions">
     <button class="btn small" type="button" data-consent="denied">Decline</button>
     <button class="btn small" type="button" data-consent="granted">Accept</button>
   </div>
 </div>
-
+{{/analytics}}
 <script>
 // Copy buttons: say what happened, and fall back to selecting the text.
 document.querySelectorAll('[data-copy]').forEach(function (b) {
@@ -481,7 +481,7 @@ document.querySelectorAll('[data-copy]').forEach(function (b) {
   });
 })();
 
-// Analytics consent: ask once, remember the answer in this browser, and let "Cookie settings" ask again.
+{{#analytics}}// Analytics consent: ask once, remember the answer in this browser, and let "Cookie settings" ask again.
 (function () {
   var box = document.getElementById('consent'), KEY = 'brod-analytics', saved = null;
   try { saved = localStorage.getItem(KEY); } catch (e) {}
@@ -501,6 +501,6 @@ document.querySelectorAll('[data-copy]').forEach(function (b) {
     box.querySelector('[data-consent]').focus();
   });
 })();
-</script>
+{{/analytics}}</script>
 </body>
 </html>

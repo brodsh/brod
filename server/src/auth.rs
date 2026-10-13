@@ -331,7 +331,7 @@ pub async fn serve(st: &State, req: &mut Req) -> Result<Option<Response>> {
             if req.param("return").is_some() || req.param("app").is_some() {
                 return sign_in_page(st, req.param("return"), req.param("app"), None).await.map(Some);
             }
-            return Ok(Some(crate::home::page(req)));
+            return Ok(Some(crate::home::page(&st.cfg, req)));
         };
         let ws = st.db.call(move |c| people::my_workspaces(c, &cfg, &user)).await?;
         let to = ws.first().and_then(|w| w["slug"].as_str()).map(|s| format!("/w/{s}")).unwrap_or_else(|| "/new".into());

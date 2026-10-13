@@ -22,7 +22,10 @@ pub struct Config {
     pub secrets_key: String,
     pub dev_mode: bool,
     pub resend_api_key: Option<String>,
+    /// The sender for sign-in and invitation emails. Required with RESEND_API_KEY.
     pub email_from: Option<String>,
+    /// BROD_GA_ID: a Google Analytics 4 measurement ID for the public landing page (home.rs). None: no Google tag.
+    pub ga_id: Option<String>,
     pub google_client_id: Option<String>,
     pub google_client_secret: Option<String>,
     pub listen: SocketAddr,
@@ -206,6 +209,18 @@ impl Config {
                 )));
             }
         };
+        if get("RESEND_API_KEY").is_some() && get("EMAIL_FROM").is_none() {
+            return Err(ConfigError(
+                "RESEND_API_KEY is set but EMAIL_FROM is not. Set EMAIL_FROM to a sender Resend has verified, for example \"Brod <brod@example.com>\"."
+                    .into(),
+            ));
+        }
+        let ga_id = get("BROD_GA_ID");
+        if let Some(id) = &ga_id
+            && !(id.starts_with("G-") && id.len() <= 24 && id[2..].chars().all(|c| c.is_ascii_alphanumeric()) && id.len() > 2)
+        {
+            return Err(ConfigError(format!("BROD_GA_ID must be a Google Analytics 4 measurement ID such as G-ABC123XYZ, not {id:?}.")));
+        }
         let network = match get("BROD_NETWORK").as_deref() {
             None | Some("log") => NetworkPolicy::Log,
             Some("enforce") => NetworkPolicy::Enforce,
@@ -227,6 +242,7 @@ impl Config {
             dev_mode: get("DEV_MODE").as_deref() == Some("1"),
             resend_api_key: get("RESEND_API_KEY"),
             email_from: get("EMAIL_FROM"),
+            ga_id,
             google_client_id: get("GOOGLE_CLIENT_ID"),
             google_client_secret: get("GOOGLE_CLIENT_SECRET"),
             listen,
@@ -278,5 +294,35 @@ mod tests {
         let c = Config::for_tests();
         assert_eq!(c.api_host, "localhost:8787");
         assert!(matches!(c.storage, StorageConfig::Fs { .. }));
+    }
+
+    fn with(extra: &[(&str, &str)]) -> Result<Config, ConfigError> {
+        let mut v: HashMap<String, String> = [
+            ("APPS_DOMAIN", "localhost:8787"),
+            ("API_ORIGIN", "http://localhost:8787"),
+            ("ADMIN_SECRET", "test-admin-secret"),
+            ("IDENTITY_SECRET", "test-identity-secret"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        v.extend(extra.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+        Config::from_vars(&v)
+    }
+
+    #[test]
+    fn email_needs_an_explicit_sender() {
+        let err = with(&[("RESEND_API_KEY", "re_test")]).unwrap_err();
+        assert!(err.0.contains("EMAIL_FROM"), "{}", err.0);
+        assert!(with(&[("RESEND_API_KEY", "re_test"), ("EMAIL_FROM", "Brod <brod@example.test>")]).is_ok());
+    }
+
+    #[test]
+    fn google_analytics_is_off_unless_a_valid_id_is_set() {
+        assert_eq!(with(&[]).unwrap().ga_id, None);
+        assert_eq!(with(&[("BROD_GA_ID", "G-ABC123")]).unwrap().ga_id.as_deref(), Some("G-ABC123"));
+        for bad in ["UA-1234-1", "G-", "G-abc'); alert(1)//", "G-AAAAAAAAAAAAAAAAAAAAAAAAAAAA"] {
+            assert!(with(&[("BROD_GA_ID", bad)]).is_err(), "{bad}");
+        }
     }
 }

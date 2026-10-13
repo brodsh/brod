@@ -106,13 +106,14 @@ check('HEAD /healthz answers 200, without the body', headHealth.status === 200 &
 const headSignIn = await send(`${API}/auth/signin`, { method: 'HEAD' }), headShort = await send(`${API}/signin`, { method: 'HEAD' });
 check('HEAD on the sign-in page answers 200, and HEAD on /signin redirects like GET', headSignIn.status === 200 && headSignIn.body === '' && headShort.status === 302
   && headShort.headers.location === '/auth/signin', `${headSignIn.status} ${headShort.status} ${headShort.headers.location}`);
-// Google Analytics is on the public landing page only, never on pages with private data or on apps.
-check('the landing page carries the Google tag, with consent denied by default', landing.body.includes('G-CCYYNHQKR7') && /'consent',\s*'default'/.test(landing.body));
+// Without BROD_GA_ID there is no Google tag anywhere; the landing page names this server, never brod.sh.
+check('the landing page has no Google tag unless BROD_GA_ID is set', !landing.body.includes('googletagmanager') && !landing.body.includes('gtag('));
+check('the landing page tells visitors to connect to this server', landing.body.includes(`${API}/mcp`) && !landing.body.includes('brod.sh'));
 const signInLinks = [...new Set([...landing.body.matchAll(/href="(\/[^"#]*)"/g)].map(m => m[1]))];
 check('the landing page links to the sign-in page, not a missing /signin', signInLinks.includes('/auth/signin') && !signInLinks.includes('/signin'), signInLinks.join(' '));
 const fromLanding = await visitor.open('/auth/signin');
 check('its sign-in link opens the sign-in form', fromLanding.status === 200 && fromLanding.body.includes('action="/auth/start"'));
-check('the sign-in page has no Google tag', !fromLanding.body.includes('G-CCYYNHQKR7') && !fromLanding.body.includes('googletagmanager'));
+check('the sign-in page has no Google tag', !fromLanding.body.includes('googletagmanager'));
 const withReturn = await visitor.go('/?return=/x');
 check('/?return=... still shows the sign-in form', withReturn.status === 200 && withReturn.body.includes('action="/auth/start"') && withReturn.body.includes('value="/x"'));
 const short = await visitor.go('/signin?return=/x');
@@ -327,7 +328,7 @@ check('a public app opens with no sign-in and carries a report link', pubPage.st
 const headApp = await send(url + '/', { method: 'HEAD' });
 check('HEAD on an app host answers like GET, without the body', headApp.status === 200 && headApp.body === '' && headApp.headers['content-type'] === pubPage.headers['content-type']
   && headApp.headers.etag === pubPage.headers.etag, `${headApp.status} ${JSON.stringify(headApp.headers)}`);
-check('a public app carries no Google tag', !pubPage.body.includes('G-CCYYNHQKR7') && !pubPage.body.includes('googletagmanager'));
+check('a public app carries no Google tag', !pubPage.body.includes('googletagmanager'));
 check('a visitor is anonymous to /_brod/me on a public app', (await anon.go(url + '/_brod/me')).status === 401);
 const rep = await anon.go(url + '/_brod/report', { form: { reason: 'Looks like phishing' }, headers: { origin: url } });
 const queue = await send(`${API}/v1/admin/reports`, { headers: { authorization: `Bearer ${ADMIN}` } });
