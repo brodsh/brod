@@ -32,4 +32,5 @@ The first open-source release.
 
 ### Fixed
 
-- Analytics reports could miss the last few seconds of data while a periodic flush was writing.
+- Analytics reports left out what was recorded in the same millisecond as the report was asked for, and could read
+  before a periodic flush had finished writing.
