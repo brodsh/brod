@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Node unit tests (the preview service's address guard, deploy/preview/guard.mjs).
+  # Node unit tests (the preview service's address guard, deploy/preview/guard.mjs), and the generated config docs.
   node:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -27,6 +27,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - name: docs/configuration.md matches .env.example
+        run: node scripts/config-docs.mjs --check
 
   # No secret anywhere in the history (.gitleaks.toml allows only the tests' placeholder values).
   secrets:
