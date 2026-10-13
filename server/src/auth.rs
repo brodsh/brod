@@ -134,8 +134,8 @@ async fn sign_in_page(st: &State, ret: Option<String>, app: Option<String>, sent
         _ => "<p>We email you a link. No password needed.</p>".into(),
     };
     let report = match &app {
-        Some(a) => format!("<p><small><a href=\"{}/_brod/report\">Report this app</a></small></p>", app_url(cfg, &a.wslug, &a.app.slug)),
-        None => String::new(),
+        Some(a) if st.cfg.abuse_checks => format!("<p><small><a href=\"{}/_brod/report\">Report this app</a></small></p>", app_url(cfg, &a.wslug, &a.app.slug)),
+        _ => String::new(),
     };
     let color = app.as_ref().map(|a| a.color.clone());
     if let Some((email, link)) = sent {
