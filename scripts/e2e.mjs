@@ -336,13 +336,10 @@ const queue = await send(`${API}/v1/admin/reports`, { headers: { authorization: 
 check('a report reaches the review queue', rep.status === 200 && JSON.parse(queue.body).reports.some(r => r.app === APP && r.reason === 'Looks like phishing'));
 
 const up = await tool('deploy_app', { app: APP, note: 'Second version by upload' });
-check('deploy_app without files returns an upload address', !up.isError && (up.data.finish_url ?? up.data.upload_url)?.includes('/v1/uploads/'), JSON.stringify(up.data));
-// Follow next_step: one PUT to the API, or a PUT straight to the bucket when the server asks for one, then finish.
+check('deploy_app without files returns an upload address', !up.isError && up.data.upload_url?.includes('/v1/uploads/'), JSON.stringify(up.data));
+// Follow next_step: one PUT of the tar.gz to the upload address.
 const curl = (args, input) => { const r = execSync(`${input ? `${input} | ` : ''}curl -sS -w "\\n%{http_code}" ${args}`).toString(); const i = r.lastIndexOf('\n'); return { body: r.slice(0, i), status: Number(r.slice(i + 1)) }; };
-const sendBundle = (u, source) => {
-  const put = curl(`-X PUT --data-binary @- "${u.upload_url}"`, source);
-  return u.finish_url && put.status === 200 ? curl(`-X POST "${u.finish_url}"`) : put;
-};
+const sendBundle = (u, source) => curl(`-X PUT --data-binary @- "${u.upload_url}"`, source);
 const upload = source => sendBundle(up.data, source);
 const dir = mkdtempSync(join(tmpdir(), 'sc-')); mkdirSync(join(dir, 'dist', 'about'), { recursive: true });
 writeFileSync(join(dir, 'dist', 'index.html'), '<h1>v2</h1>'); writeFileSync(join(dir, 'dist', 'about', 'index.html'), '<h1>about</h1>');

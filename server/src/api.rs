@@ -31,33 +31,6 @@ async fn deploy_upload(st: &State, id: String, archive: Vec<u8>) -> Result<Respo
     }
 }
 
-/// Where the archive was staged in the bucket (hosts with a small request limit), deploy it from there.
-async fn take_staged(st: &State, id: &str) -> Result<Vec<u8>> {
-    let valid = id.len() > 3 && id.starts_with("up_") && id[3..].bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
-    if !valid {
-        return Err(Problem::new(
-            410,
-            "upload_gone",
-            "This upload address has expired or was already used. Call deploy_app again for a new one.",
-        ));
-    }
-    let key = format!("_uploads/{id}.tar.gz");
-    let Some(obj) = st.store.get(&key).await? else {
-        return Err(Problem::new(
-            400,
-            "no_archive",
-            "Nothing has been uploaded for this address yet. PUT the tar.gz to its upload_url first, then call finish again.",
-        ));
-    };
-    let r = if obj.meta.size as usize > BUNDLE_BYTES {
-        Err(Problem::new(413, "too_large", "The bundle is larger than 25 MB."))
-    } else {
-        crate::http::read_capped(obj.body, BUNDLE_BYTES, "The bundle").await
-    };
-    st.store.delete(&key).await?;
-    r
-}
-
 /// One piece of API work over a database connection, run on the blocking pool.
 type Job = Box<dyn FnOnce(&crate::db::Connection, &crate::config::Config, &Caller) -> Result<Value> + Send>;
 
@@ -79,10 +52,6 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
             return Err(Problem::new(413, "too_large", "The bundle is larger than 25 MB."));
         }
         let archive = req.bytes(BUNDLE_BYTES, "The bundle").await?;
-        return deploy_upload(st, seg[1].clone(), archive).await;
-    }
-    if s(0) == Some("uploads") && s(1).is_some() && s(2) == Some("finish") && m == Method::POST {
-        let archive = take_staged(st, &seg[1]).await?;
         return deploy_upload(st, seg[1].clone(), archive).await;
     }
 

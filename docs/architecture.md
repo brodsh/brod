@@ -216,8 +216,7 @@ it also appends the report link. Static responses carry an ETag, `no-cache` (so 
 Agents call the MCP tool `deploy_app` (`mcp.rs`). Scripts and the dashboard use `/v1/` (`api.rs`). Both call
 `control.rs::deploy`. Small bundles (up to 1 MB, `limits::INLINE_BYTES`) come inline. For larger ones, `deploy_app`
 without files returns a one-time upload address (`control::create_upload`). The agent PUTs a `.tar.gz` to
-`/v1/uploads/<id>`, or stages it in the bucket and calls `/v1/uploads/<id>/finish`. The upload address is its own
-credential and expires after 15 minutes.
+`/v1/uploads/<id>`. The upload address is its own credential and expires after 15 minutes.
 
 Steps in `control::deploy`:
 
@@ -299,7 +298,6 @@ Key layout:
 | `<app id>/<version>/<path>` | A version's bundle files. Never changed after the deploy. |
 | `<app id>/files/<key>` | Files the app's server code stored through `env.FILES`. Shared by all versions. |
 | `<listing id>/<n>/<path>` | Marketplace releases (`market.rs`). |
-| `_uploads/<id>.tar.gz` | Staged uploads, deleted when the deploy is taken. |
 
 ### Per-app databases in the runtime
 
