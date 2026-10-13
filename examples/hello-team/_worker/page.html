@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>On-call rota</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; color: #1b1f1d; }
+  table { width: 100%; border-collapse: collapse; }
+  td, th { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid #e3e6e4; }
+  .today { font-weight: 600; }
+  input { font: inherit; width: 100%; box-sizing: border-box; padding: .2rem .4rem; }
+  .muted { color: #6a716d; font-size: .9rem; }
+</style>
+<h1>On-call rota</h1>
+<p class="muted" id="who">Loading…</p>
+<table>
+  <thead><tr><th>Day</th><th>On call</th></tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+<p class="muted">Editors can type a name and press Enter. Leave it empty to clear the day.</p>
+<script type="module">
+  const rows = document.getElementById('rows');
+  async function load() {
+    const res = await fetch('/api/rota');
+    const { me, days, shifts } = await res.json();
+    const canEdit = me.role !== 'viewer';
+    document.getElementById('who').textContent = `Signed in as ${me.name || me.email} (${me.role}).`;
+    const byDay = Object.fromEntries(shifts.map(s => [s.day, s]));
+    rows.replaceChildren(...days.map((day, i) => {
+      const tr = document.createElement('tr');
+      if (i === 0) tr.className = 'today';
+      const label = new Date(day + 'T12:00:00Z').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+      const td = document.createElement('td');
+      if (canEdit) {
+        const input = Object.assign(document.createElement('input'), { value: byDay[day]?.person ?? '', ariaLabel: `On call on ${label}` });
+        input.addEventListener('change', async () => {
+          await fetch('/api/rota', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ day, person: input.value }) });
+        });
+        td.append(input);
+      } else {
+        td.textContent = byDay[day]?.person ?? '—';
+      }
+      tr.append(Object.assign(document.createElement('td'), { textContent: label }), td);
+      return tr;
+    }));
+  }
+  load();
+</script>
+</html>

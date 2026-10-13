@@ -79,7 +79,10 @@ effect on the next request. Each app gets its own SQLite database on the sidecar
 [architecture.md](architecture.md).
 
 - **Routing.** A file that exists in the bundle is served as is. Every other request, with any method, goes to `fetch`.
-  The server code itself is never served.
+  The server code itself is never served. A path must name the file exactly: `/` and folder paths go to `fetch`, not to
+  an `index.html`. Serve the page from `fetch`, or import it from a `_worker/` folder as text
+  (`import page from './page.html'`), as [examples/hello-team](../examples/hello-team) does. Files in `_worker/` with
+  the extensions `.html`, `.css`, `.txt`, `.md`, `.sql`, `.svg` and `.csv` import as strings.
 - **Identity.** Access is decided before the request reaches the app. The person arrives as `x-brod-user-id`,
   `x-brod-user-email`, `x-brod-user-name` (URI-encoded), `x-brod-role`, `x-brod-groups` (comma-separated) and
   `x-brod-identity` (the signed token). The gateway strips any `x-brod-*` header a visitor sends, and the app's session
