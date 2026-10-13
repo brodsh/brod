@@ -62,7 +62,7 @@ impl Credentials {
             workspace: req.header("x-brod-workspace").map(String::from).or_else(|| req.param("workspace")),
         }
     }
-    /// The token in "Authorization: Bearer <token>".
+    /// The token in "Authorization: Bearer `<token>`".
     pub fn bearer(&self) -> Option<String> {
         let a = self.authorization.as_deref()?;
         let (scheme, rest) = a.split_once(|c: char| c.is_whitespace())?;

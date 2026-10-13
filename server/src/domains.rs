@@ -433,7 +433,7 @@ fn served_name(cfg: &Config, host: &str) -> Option<String> {
 pub enum Target {
     /// One app, by id.
     App(String),
-    /// <app>.<wildcard domain>: the app with this slug in the workspace with this slug.
+    /// `<app>`.`<wildcard domain>`: the app with this slug in the workspace with this slug.
     Wildcard { workspace: String, slug: String },
     /// The wildcard domain itself: the workspace home page.
     Home(String),

@@ -56,7 +56,7 @@ pub fn ip_key(ip: IpAddr) -> String {
     }
 }
 
-/// Count one more request in a fixed window ("<bucket>:<who>:<window number>" in rate_limits) and refuse with 429
+/// Count one more request in a fixed window ("`<bucket>`:`<who>`:`<window number>`" in rate_limits) and refuse with 429
 /// once there are more than `limit` in it.
 pub fn rate_limit(conn: &Connection, bucket: &str, who: &str, limit: i64, window_ms: i64, message: &str) -> Result<()> {
     let t = now();
@@ -237,10 +237,10 @@ fn text(o: &Map<String, Value>, key: &str, max: usize) -> String {
     js_slice(js_trim(&crate::model::field(o, key)), max)
 }
 
-/// /v1/admin/... with "Authorization: Bearer <ADMIN_SECRET>":
-///   GET  reports?status=open|resolved|dismissed      POST reports/<id> {status: resolved|dismissed, note}
-///   POST apps/<workspace>/<app>/takedown {reason}, /restore, /clear (the phishing check's flag)
-///   POST workspaces/<workspace>/suspend {reason}, /unsuspend, /trust (may open apps to everyone before it is a day old)
+/// /v1/admin/... with "Authorization: Bearer `<ADMIN_SECRET>`":
+///   GET  reports?status=open|resolved|dismissed      POST reports/`<id>` {status: resolved|dismissed, note}
+///   POST apps/`<workspace>`/`<app>`/takedown {reason}, /restore, /clear (the phishing check's flag)
+///   POST workspaces/`<workspace>`/suspend {reason}, /unsuspend, /trust (may open apps to everyone before it is a day old)
 pub async fn serve(st: &State, req: &mut Req, seg: &[String]) -> Result<Response> {
     let given = crate::control::Credentials::of(req).bearer().unwrap_or_default();
     if st.cfg.admin_secret.is_empty() || !safe_equal(&given, &st.cfg.admin_secret) {

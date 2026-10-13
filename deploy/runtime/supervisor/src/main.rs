@@ -15,7 +15,7 @@
 //! for a while (server/src/watchdog.rs), then kills workerd and starts it again. Apps' data is in SQLite on disk, so a
 //! restart loses only the requests in flight.
 //!
-//! Usage: brod-runtime <command...>, for example brod-runtime workerd serve config.capnp --experimental
+//! Usage: brod-runtime `<command...>`, for example brod-runtime workerd serve config.capnp --experimental
 //! Environment: BROD_RUNTIME_SECRET (required), BROD_INTERNAL_URL (default http://brod:8080), RUNTIME_PORT (the port
 //! workerd listens on, default 8081), RUNTIME_STALL_MS (default 5000), RUNTIME_MEMORY_MB (default 1536; 0 turns it off).
 use std::io::{Read, Write};
@@ -278,7 +278,7 @@ fn resident_bytes(pid: u32) -> u64 {
     std::fs::read_to_string(format!("/proc/{pid}/status")).map(|s| vm_rss(&s)).unwrap_or(0)
 }
 
-/// The VmRSS line of /proc/<pid>/status, in bytes.
+/// The VmRSS line of /proc/`<pid>`/status, in bytes.
 fn vm_rss(status: &str) -> u64 {
     status
         .lines()

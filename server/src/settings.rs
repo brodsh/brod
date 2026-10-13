@@ -307,7 +307,7 @@ pub fn for_app(conn: &Connection, app: &AppRow) -> Result<Value> {
     Ok(Value::Array(list))
 }
 
-/// GET /v1/apps/<app>/settings
+/// GET /v1/apps/`<app>`/settings
 pub fn get(conn: &Connection, c: &Caller, slug: &str) -> Result<Value> {
     require_role(c, "builder", "see app settings")?;
     let app = crate::control::get_app(conn, c, slug)?;
@@ -368,7 +368,7 @@ pub fn write(x: &Connection, app_id: &str, actor: &str, changes: &[(String, Opti
     Ok(gone)
 }
 
-/// PATCH /v1/apps/<app>/settings { key: value, ... }: change some settings; null puts one back to its default.
+/// PATCH /v1/apps/`<app>`/settings { key: value, ... }: change some settings; null puts one back to its default.
 pub async fn update(st: &State, c: &Caller, slug: &str, o: Map<String, Value>) -> Result<Value> {
     let (c2, slug2) = (c.clone(), slug.to_string());
     let (out, gone) = st
@@ -395,7 +395,7 @@ pub async fn update(st: &State, c: &Caller, slug: &str, o: Map<String, Value>) -
     Ok(out)
 }
 
-/// PUT /v1/apps/<app>/settings/<key> with the picture as the body: set an image setting, such as a logo.
+/// PUT /v1/apps/`<app>`/settings/`<key>` with the picture as the body: set an image setting, such as a logo.
 pub async fn put_image(st: &State, c: &Caller, slug: &str, key: &str, body: Vec<u8>) -> Result<Value> {
     let ct = match crate::market::sniff_media(&body) {
         Some(("image", ct)) => ct,
@@ -450,7 +450,7 @@ pub async fn put_image(st: &State, c: &Caller, slug: &str, key: &str, body: Vec<
         .await
 }
 
-/// An uploaded image setting's file, for the app's host (/_brod/settings/<key>) and the admin page.
+/// An uploaded image setting's file, for the app's host (/_brod/settings/`<key>`) and the admin page.
 pub async fn image(st: &State, app_id: &str, key: &str) -> Result<Option<(crate::storage::Object, String)>> {
     let (id, k) = (app_id.to_string(), key.to_string());
     let ct: Option<String> = st
@@ -477,7 +477,7 @@ pub fn image_response(obj: crate::storage::Object, ct: String, public: bool) -> 
     )
 }
 
-/// GET /v1/apps/<app>/settings/<key>: an uploaded image, for the admin page.
+/// GET /v1/apps/`<app>`/settings/`<key>`: an uploaded image, for the admin page.
 pub async fn serve_image(st: &State, c: &Caller, slug: &str, key: &str) -> Result<axum::response::Response> {
     let (c2, slug2) = (c.clone(), slug.to_string());
     let app = st

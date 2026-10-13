@@ -74,7 +74,7 @@ fn pbkdf2(password: &str, salt: &[u8], iterations: u32) -> [u8; 32] {
     out
 }
 
-/// Store a password as "pbkdf2$<iterations>$<salt>$<hash>" (base64url), never the password itself, like hashPassword().
+/// Store a password as "pbkdf2$`<iterations>`$`<salt>`$`<hash>`" (base64url), never the password itself, like hashPassword().
 pub fn hash_password(password: &str) -> String {
     let salt = random_bytes(16);
     format!("pbkdf2${PASSWORD_ITERATIONS}${}${}", b64url(&salt), b64url(&pbkdf2(password, &salt, PASSWORD_ITERATIONS)))
@@ -98,12 +98,12 @@ pub fn is_local(apps_domain: &str) -> bool {
     let rest = apps_domain.strip_prefix("localhost").or_else(|| apps_domain.strip_prefix("127.0.0.1"));
     matches!(rest, Some(r) if r.is_empty() || r.starts_with(':'))
 }
-/// Apps live at <app>.<workspace>.<APPS_DOMAIN>, so app names only need to be unique inside a workspace.
+/// Apps live at `<app>`.`<workspace>`.`<APPS_DOMAIN>`, so app names only need to be unique inside a workspace.
 pub fn app_url(cfg: &Config, workspace: &str, slug: &str) -> String {
     let scheme = if is_local(&cfg.apps_domain) { "http" } else { "https" };
     format!("{scheme}://{slug}.{workspace}.{}", cfg.apps_domain)
 }
-/// What ends the first label of an app's staging address: <slug>--staging.<workspace>.<APPS_DOMAIN>. Slugs never hold
+/// What ends the first label of an app's staging address: `<slug>`--staging.`<workspace>`.`<APPS_DOMAIN>`. Slugs never hold
 /// "--" (slugify folds runs of separators into one hyphen), so the staging address can never be another app's.
 pub const STAGING_SUFFIX: &str = "--staging";
 /// The address an app's staging version is served at.
@@ -281,7 +281,7 @@ pub fn content_type(path: &str) -> &'static str {
     }
 }
 
-/// HTML-escape &, <, >, " and '.
+/// HTML-escape &, `<, >`, " and '.
 pub fn esc(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {

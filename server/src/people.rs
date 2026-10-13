@@ -552,7 +552,7 @@ pub fn revoke_invite(conn: &Connection, c: &Caller, id: &str) -> Result<Value> {
 
 pub struct Accepted {
     pub user: User,
-    /// The app the invite was for, as <app>.<workspace>.
+    /// The app the invite was for, as `<app>`.`<workspace>`.
     pub app_ref: Option<String>,
     pub workspace_slug: String,
 }

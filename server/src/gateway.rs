@@ -126,7 +126,7 @@ fn password_page(app: &AppRow, ret: &str, error: &str, status: u16) -> Response 
     )
 }
 
-/// Which app a request is for: by <app>.<workspace> (or its staging address, <app>--staging.<workspace>), or by id for a
+/// Which app a request is for: by `<app>`.`<workspace>` (or its staging address, `<app>`--staging.`<workspace>`), or by id for a
 /// custom domain.
 pub enum Where {
     Slug { workspace: String, slug: String, staging: bool },
@@ -379,7 +379,7 @@ async fn file_response(st: &State, req: &Req, app: &AppRow, obj: Object, hit: &s
 }
 
 /// Add the insights script to a page, unless the page already loads it or opts out with
-/// <meta name="brod-insights" content="off">. A page with no <body> gets it at the end.
+/// `<meta name="brod-insights" content="off">`. A page with no `<body>` gets it at the end.
 pub fn with_insights(page: Vec<u8>) -> Vec<u8> {
     let has = |needle: &[u8]| page.windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle));
     if has(b"/_brod/insights.js") || has(b"name=\"brod-insights\" content=\"off\"") {
@@ -393,8 +393,8 @@ pub fn with_insights(page: Vec<u8>) -> Vec<u8> {
     out
 }
 
-/// Put a snippet at the end of <body>: before the last `</body`, whatever its case, or at the end of a document
-/// whose <body> is never closed. A page without a <body> tag is left alone, as HTMLRewriter's body selector does.
+/// Put a snippet at the end of `<body>`: before the last `</body`, whatever its case, or at the end of a document
+/// whose `<body>` is never closed. A page without a `<body>` tag is left alone, as HTMLRewriter's body selector does.
 pub fn append_to_body(page: &[u8], snippet: &str) -> Vec<u8> {
     let at = match last_index_of(page, b"</body") {
         Some(i) => i,

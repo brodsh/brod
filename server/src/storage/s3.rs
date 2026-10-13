@@ -17,7 +17,7 @@ pub struct S3Store {
     /// scheme://host[:port]
     origin: String,
     host: String,
-    /// The path before the key: "/<bucket>" (path style) or "" (virtual-hosted), plus any endpoint path.
+    /// The path before the key: "/`<bucket>`" (path style) or "" (virtual-hosted), plus any endpoint path.
     base_path: String,
     access_key_id: String,
     secret_access_key: String,

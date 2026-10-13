@@ -65,7 +65,7 @@ fn signed_in(cfg: &Config, token: &str) -> String {
 
 struct BrandedApp {
     app: AppRow,
-    /// Named by its staging address (<app>--staging.<workspace>), so a sign-in goes back there.
+    /// Named by its staging address (`<app>`--staging.`<workspace>`), so a sign-in goes back there.
     staging: bool,
     wslug: String,
     wname: String,
@@ -74,7 +74,7 @@ struct BrandedApp {
 }
 
 impl BrandedApp {
-    /// How the "app" parameter names it: <app>.<workspace>, like the first labels of its address.
+    /// How the "app" parameter names it: `<app>`.`<workspace>`, like the first labels of its address.
     fn reference(&self) -> String {
         format!("{}{}.{}", self.app.slug, if self.staging { STAGING_SUFFIX } else { "" }, self.wslug)
     }
@@ -84,7 +84,7 @@ impl BrandedApp {
     }
 }
 
-/// Find an app from an "app" parameter written <app>.<workspace>.
+/// Find an app from an "app" parameter written `<app>`.`<workspace>`.
 fn app_by_ref(conn: &Connection, reference: Option<&str>) -> Result<Option<BrandedApp>> {
     let label = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
     let Some((slug, ws)) = reference.and_then(|r| r.split_once('.')).filter(|(a, w)| label(a) && label(w)) else {
