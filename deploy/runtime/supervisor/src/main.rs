@@ -319,10 +319,10 @@ mod tests {
         assert!(config(vec!["w".into()], env(&[])).is_err());
         assert!(config(vec!["w".into()], env(&[("BROD_RUNTIME_SECRET", "short")])).is_err());
         let file = std::env::temp_dir().join(format!("brod-runtime-secret-{}", std::process::id()));
-        std::fs::write(&file, "0123456789abcdef0123\n").unwrap();
+        std::fs::write(&file, "test-runtime-secret-0123456789\n").unwrap();
         let path = file.to_string_lossy().to_string();
         let c = config(vec!["w".into()], env(&[("BROD_RUNTIME_SECRET_FILE", path.as_str())])).unwrap();
-        assert_eq!(c.secret, "0123456789abcdef0123");
+        assert_eq!(c.secret, "test-runtime-secret-0123456789");
         let _ = std::fs::remove_file(file);
         assert!(config(vec!["w".into()], env(&[("BROD_RUNTIME_SECRET_FILE", "/nonexistent/brod")])).is_err());
         assert!(config(vec!["w".into()], env(&[SECRET, ("RUNTIME_STALL_MS", "10")])).is_err());
