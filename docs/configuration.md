@@ -123,3 +123,4 @@ This page is generated from `.env.example` by `node scripts/config-docs.mjs`. Ed
 | `DEV_FREE_STORAGE_MB` |  | With DEV_MODE: a smaller free-plan storage limit in MB, so tests can fill it. |
 | `STRIPE_API_BASE` | `https://api.stripe.com` | A stand-in for Stripe's API, for tests. |
 | `BROD_TEST_DATABASE_URL` |  | A Postgres database for `cargo test` to run its database tests against. |
+| `BROD_DEV_ASSETS` | `server/src` | Debug builds only: read the admin page from this folder on every request, for editing it without a rebuild. |
