@@ -30,6 +30,14 @@ The first open-source release.
 
 - The Cloudflare Workers and Vercel builds. Brod is the Rust server.
 
+### Security
+
+- App passwords are hashed with Argon2id. Existing PBKDF2 hashes keep working.
+- REST and MCP calls are limited to 600 a minute per connection or person.
+- Hosted mode requires `SECRETS_KEY`.
+- The runtime container no longer mounts Brod's data volume, and checks its shared secret in constant time.
+- The preview browser refuses host names that resolve to private addresses.
+
 ### Fixed
 
 - Analytics reports left out what was recorded in the same millisecond as the report was asked for, and could read

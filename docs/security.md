@@ -35,7 +35,7 @@ header equal to `BROD_PUBLIC_URL`. Platform pages send `X-Frame-Options: DENY`.
 | Kept | How |
 | --- | --- |
 | Agent tokens (`brod_…`), OAuth access and refresh tokens, sessions, sign-in and invitation links | SHA-256 of a 24-byte random value; the value itself is never stored |
-| App passwords (`password` access) | PBKDF2-SHA256, 100,000 iterations, per-app salt |
+| App passwords (`password` access) | Argon2id (19 MiB, 2 passes), per-password salt. Older PBKDF2-SHA256 hashes still verify. |
 | App secrets (`set_secret`) | AES-256-GCM under a key derived from `SECRETS_KEY` with HKDF, bound to the app. Write-only through the API. |
 | User passwords | None exist. Sign-in is an emailed link (or Google). |
 
@@ -50,6 +50,7 @@ Updates to a live app go to a staging address first unless the agent is told oth
 
 | What | Limit |
 | --- | --- |
+| REST API and MCP calls | 600 a minute per agent connection or person (kept in memory) |
 | Sign-in links | 5 an hour per email address, 20 an hour per client address |
 | App passwords | 30 tries in 15 minutes per app |
 | OAuth client registration | 10 an hour per client address, 100 an hour in total |
@@ -61,8 +62,13 @@ Updates to a live app go to a staging address first unless the agent is told oth
 size (10 MB) and total size (60 MB unpacked). Files are served with a `Content-Type` from their extension and
 `X-Content-Type-Options: nosniff`.
 
-**Weak configuration.** In hosted mode Brod refuses to start with a secret shorter than 32 characters or one of the
-example values from its own docs. In self-hosted mode it generates any secret that is not set and warns about weak ones.
+**Weak configuration.** In hosted mode Brod refuses to start without `SECRETS_KEY`, or with a secret shorter than 32
+characters or one of the example values from its own docs. In self-hosted mode it generates any secret that is not set
+and warns about weak ones.
+
+**The sidecars.** The runtime sees only its own secret, from a volume that holds nothing else, and compares it in
+constant time. The marketplace's preview browser loads only its sandbox and public addresses, and checks what a host
+name resolves to before letting a page load from it.
 
 ## What Brod does not protect against
 
