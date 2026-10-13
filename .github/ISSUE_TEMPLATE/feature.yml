@@ -1,0 +1,18 @@
+name: Feature request
+description: Something Brod should do.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: Check [docs/roadmap.md](https://github.com/brodsh/brod/blob/main/docs/roadmap.md) first. If it is listed, tell us why it matters to you in a comment on an existing issue.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you or your agent trying to do, and what gets in the way?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
