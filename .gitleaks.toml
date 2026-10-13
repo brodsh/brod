@@ -1,0 +1,12 @@
+# gitleaks configuration: the default rules, plus the placeholder values tests use. Each one is a fixed, made-up
+# string ending in a counting sequence, never a real credential. Add to this list only with the same kind of value.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test placeholders"
+regexTarget = "secret"
+regexes = [
+  '''^(test|smoke|bench|dev|e2e|ci)-[a-z-]*0123456789$''',
+  '''^0123456789abcdef$''',
+]
