@@ -5,6 +5,11 @@
 [![CI](https://github.com/brodsh/brod/actions/workflows/ci.yml/badge.svg)](https://github.com/brodsh/brod/actions/workflows/ci.yml)
 [![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](LICENSE)
 
+![Start Brod with docker compose, read the sign-in link from the log, ask Claude Code to deploy an app, open it](docs/assets/demo.gif)
+
+<sub>A real run: `docker compose up`, the first-start log, Claude Code deploying `examples/hello-team` over MCP, and the
+app in a browser. The two waits are shortened; the whole run took about a minute.</sub>
+
 Agents now build many small internal tools: an on-call rota, a stock checker, a form that replaces a spreadsheet.
 Those tools need somewhere to live inside the company, behind the same sign-in, without each one having its own login,
 user table and server. Brod is that place: your agent deploys to it directly over MCP and gets back an address that
