@@ -61,11 +61,11 @@ pub async fn send(st: &State, to: &str, subject: &str, text: &str) -> Result<()>
                 Ok(r) if r.status().is_success() => Ok(()),
                 Ok(r) => {
                     let status = r.status();
-                    eprintln!("email failed {status} {}", r.text().await.unwrap_or_default());
+                    tracing::error!("email failed {status} {}", r.text().await.unwrap_or_default());
                     Err(failed())
                 }
                 Err(e) => {
-                    eprintln!("email failed {e}");
+                    tracing::error!("email failed {e}");
                     Err(failed())
                 }
             }
@@ -77,19 +77,20 @@ pub async fn send(st: &State, to: &str, subject: &str, text: &str) -> Result<()>
                 Message::builder().from(from).to(to).subject(subject).body(text.to_string()).map_err(|e| e.to_string())
             })();
             let message = message.map_err(|e| {
-                eprintln!("email failed: {e}");
+                tracing::error!("email failed: {e}");
                 failed()
             })?;
             let mailer = AsyncSmtpTransport::<Tokio1Executor>::from_url(url).map_err(|e| {
-                eprintln!("email failed: SMTP_URL: {e}");
+                tracing::error!("email failed: SMTP_URL: {e}");
                 failed()
             })?;
             mailer.build().send(message).await.map(|_| ()).map_err(|e| {
-                eprintln!("email failed: {e}");
+                tracing::error!("email failed: {e}");
                 failed()
             })
         }
         Transport::Log => {
+            // Printed as it is, not as a log event: the operator copies the link out of it.
             println!("email to {to}: {subject}\n{text}\n");
             Ok(())
         }

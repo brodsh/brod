@@ -153,7 +153,7 @@ impl Certs {
     fn load(&self, name: &str) -> Option<Entry> {
         let (crt, key) = self.paths(name);
         let (chain, key) = (std::fs::read_to_string(crt).ok()?, std::fs::read_to_string(key).ok()?);
-        entry_from_pem(&chain, &key).map_err(|e| eprintln!("tls: ignoring the stored certificate for {name}: {e}")).ok()
+        entry_from_pem(&chain, &key).map_err(|e| tracing::warn!("tls: ignoring the stored certificate for {name}: {e}")).ok()
     }
 
     /// The configuration to finish a handshake for `name`: held, stored, or newly issued when the name is one Brod
@@ -186,7 +186,7 @@ impl Certs {
             Ok(true) => {}
             Ok(false) => return None,
             Err(e) => {
-                eprintln!("tls: could not check {name}: {}", e.message);
+                tracing::warn!("tls: could not check {name}: {}", e.message);
                 return None;
             }
         }
@@ -202,14 +202,14 @@ impl Certs {
         });
         match stored {
             Ok(entry) => {
-                println!("tls: certificate for {name} until {}", crate::util::iso(entry.not_after * 1000));
+                tracing::info!("tls: certificate for {name} until {}", crate::util::iso(entry.not_after * 1000));
                 let entry = Arc::new(entry);
                 self.entries.write().unwrap().insert(name.to_string(), entry.clone());
                 self.failures.lock().unwrap().remove(name);
                 Some(entry)
             }
             Err(e) => {
-                eprintln!("tls: no certificate for {name}: {e}");
+                tracing::warn!("tls: no certificate for {name}: {e}");
                 self.failures.lock().unwrap().insert(name.to_string(), Instant::now());
                 None
             }
@@ -281,7 +281,7 @@ impl Certs {
                     .map_err(|e| format!("cannot register with {directory}: {e}"))?;
                 let stored = json!({ "directory": directory, "credentials": creds });
                 write_private(&file, &stored.to_string()).map_err(|e| format!("cannot store the ACME account: {e}"))?;
-                println!("tls: registered an ACME account with {directory}");
+                tracing::info!("tls: registered an ACME account with {directory}");
                 Ok(account)
             })
             .await
@@ -341,7 +341,7 @@ impl Certs {
         for name in names {
             let Some(entry) = self.cached(&name).or_else(|| self.load(&name).map(Arc::new)) else { continue };
             if !crate::app::may_have_certificate(st, &name).await.unwrap_or(true) {
-                println!("tls: {name} is no longer served; removing its certificate");
+                tracing::info!("tls: {name} is no longer served; removing its certificate");
                 self.entries.write().unwrap().remove(&name);
                 let (crt, key) = self.paths(&name);
                 let _ = std::fs::remove_file(crt);
@@ -372,7 +372,7 @@ pub async fn start(st: State, tls: TlsConfig) -> Result<(), String> {
         Issuer::Acme { directory, .. } => format!("certificates from {directory}"),
         Issuer::Local => format!("certificates from the local CA in {}", certs.dir.join("local-ca.crt").display()),
     };
-    println!("Brod HTTPS on {} and HTTP on {} ({what})", tls.https_listen, tls.http_listen);
+    tracing::info!("Brod HTTPS on {} and HTTP on {} ({what})", tls.https_listen, tls.http_listen);
 
     {
         let (st, certs) = (st.clone(), certs.clone());

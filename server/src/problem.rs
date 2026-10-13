@@ -53,7 +53,7 @@ impl Problem {
 
     pub fn response(&self) -> Response {
         if let Some(detail) = &self.internal {
-            eprintln!("error: {detail}");
+            tracing::error!("{detail}");
         }
         json_response(&self.body(), self.status, &[])
     }

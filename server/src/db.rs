@@ -133,7 +133,7 @@ impl Db {
                                 && (e.as_db_error().is_none() || e.code() == Some(&postgres::error::SqlState::CANNOT_CONNECT_NOW)) =>
                         {
                             if tries == 0 {
-                                eprintln!("waiting for Postgres: {e}");
+                                tracing::info!("waiting for Postgres: {e}");
                             }
                             tries += 1;
                             std::thread::sleep(Duration::from_secs(1));
@@ -848,7 +848,7 @@ pub fn migrate(conn: &Connection) -> std::result::Result<(), String> {
             }
         }
         if pending.is_empty() {
-            println!("database: schema up to date ({} migrations)", set.len());
+            tracing::info!("database: schema up to date ({} migrations)", set.len());
             return Ok(());
         }
         if !AUTO_MIGRATE.load(std::sync::atomic::Ordering::Relaxed) {
@@ -884,7 +884,7 @@ pub fn migrate(conn: &Connection) -> std::result::Result<(), String> {
         }
         let (first, last) = (pending[0].0, pending[pending.len() - 1].0);
         let range = if pending.len() == 1 { first.to_string() } else { format!("{first} to {last}") };
-        println!("database: applied {} new migrations ({range}); schema up to date", pending.len());
+        tracing::info!("database: applied {} new migrations ({range}); schema up to date", pending.len());
         Ok(())
     })();
     if pg {

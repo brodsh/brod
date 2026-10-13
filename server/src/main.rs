@@ -8,6 +8,7 @@ use brod::state::AppState;
 use tokio::net::TcpListener;
 
 fn main() {
+    init_logging();
     // `brod healthcheck`: for the container healthcheck, since the image has no shell or curl.
     if std::env::args().nth(1).as_deref() == Some("healthcheck") {
         std::process::exit(healthcheck());
@@ -35,7 +36,7 @@ fn main() {
     let cfg = match Config::from_env() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("{e}");
+            tracing::error!("{e}");
             std::process::exit(2);
         }
     };
@@ -96,15 +97,15 @@ async fn run(cfg: Config) {
         brod::config::Mode::SelfHosted => "self-hosted",
         brod::config::Mode::Hosted => "hosted",
     };
-    println!("Brod {} ({mode})", env!("CARGO_PKG_VERSION"));
+    tracing::info!("Brod {} ({mode})", env!("CARGO_PKG_VERSION"));
     if !cfg.generated_secrets.is_empty() {
-        println!("config: {} generated and kept in {}", cfg.generated_secrets.join(", "), cfg.data_dir.join("secrets.env").display());
+        tracing::info!("config: {} generated and kept in {}", cfg.generated_secrets.join(", "), cfg.data_dir.join("secrets.env").display());
     }
     for w in &cfg.warnings {
-        eprintln!("warning: {w}");
+        tracing::warn!("{w}");
     }
     if cfg.dev_mode && cfg.api_origin.starts_with("https://") {
-        eprintln!("warning: DEV_MODE=1 returns sign-in links in API responses. Do not use it on a public server.");
+        tracing::warn!("DEV_MODE=1 returns sign-in links in API responses. Do not use it on a public server.");
     }
     let db = open_db(&cfg);
     let listen = cfg.listen;
@@ -116,25 +117,26 @@ async fn run(cfg: Config) {
     let listener = match TcpListener::bind(listen).await {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("cannot listen on {listen}: {e}");
+            tracing::error!("cannot listen on {listen}: {e}");
             std::process::exit(1);
         }
     };
-    println!("email: {}", brod::email::describe(&st.cfg));
-    println!("listening on {listen}; open {} (apps at *.{})", st.cfg.api_origin, st.cfg.apps_domain);
+    tracing::info!("email: {}", brod::email::describe(&st.cfg));
+    tracing::info!("listening on {listen}; open {} (apps at *.{})", st.cfg.api_origin, st.cfg.apps_domain);
     let c2 = st.cfg.clone();
     match st.db.call(move |c| brod::setup::prepare(c, &c2, false)).await {
         Ok(setup) => {
+            // Printed as it is, not as a log event, so the link and the command can be copied straight out of the log.
             if let Some(text) = brod::setup::banner(&st.cfg, &setup) {
                 println!("\n{text}\n");
             }
         }
-        Err(e) => eprintln!("warning: first-start setup failed: {}", e.message),
+        Err(e) => tracing::warn!("first-start setup failed: {}", e.message),
     }
     if let Some(tls) = st.cfg.tls.clone()
         && let Err(e) = brod::tls::start(st.clone(), tls).await
     {
-        eprintln!("{e}");
+        tracing::error!("{e}");
         std::process::exit(1);
     }
 
@@ -149,10 +151,10 @@ async fn run(cfg: Config) {
             loop {
                 tick.tick().await;
                 if let Err(e) = brod::usage::flush(&st).await {
-                    eprintln!("could not save visit counts: {}", e.message);
+                    tracing::warn!("could not save visit counts: {}", e.message);
                 }
                 if let Err(e) = brod::analytics::flush(&st).await {
-                    eprintln!("could not save analytics: {}", e.message);
+                    tracing::warn!("could not save analytics: {}", e.message);
                 }
             }
         });
@@ -166,7 +168,7 @@ async fn run(cfg: Config) {
             loop {
                 tick.tick().await;
                 if let Err(e) = st.db.call(|c| brod::analytics::purge(c)).await {
-                    eprintln!("could not delete old analytics: {}", e.message);
+                    tracing::warn!("could not delete old analytics: {}", e.message);
                 }
             }
         });
@@ -180,7 +182,7 @@ async fn run(cfg: Config) {
             loop {
                 tick.tick().await;
                 if let Err(e) = brod::usage::sync_data_sizes(&st).await {
-                    eprintln!("could not refresh app database sizes: {}", e.message);
+                    tracing::warn!("could not refresh app database sizes: {}", e.message);
                 }
             }
         });
@@ -189,7 +191,7 @@ async fn run(cfg: Config) {
         let (stream, peer) = tokio::select! {
             r = listener.accept() => match r {
                 Ok(s) => s,
-                Err(e) => { eprintln!("accept failed: {e}"); continue; }
+                Err(e) => { tracing::warn!("accept failed: {e}"); continue; }
             },
             _ = &mut shutdown => break,
         };
@@ -201,7 +203,27 @@ async fn run(cfg: Config) {
     let _ = tokio::time::timeout(Duration::from_secs(10), tracker.wait()).await;
     let _ = brod::usage::flush(&st).await;
     let _ = brod::analytics::flush(&st).await;
-    println!("Brod stopped");
+    tracing::info!("Brod stopped");
+}
+
+/// Log events go to stdout as text lines, or as JSON lines with BROD_LOG_FORMAT=json, from BROD_LOG's level up
+/// (error, warn, info (the default), debug or trace).
+fn init_logging() {
+    use tracing_subscriber::filter::LevelFilter;
+    let level = match std::env::var("BROD_LOG").unwrap_or_default().trim().to_ascii_lowercase().as_str() {
+        "off" => LevelFilter::OFF,
+        "error" => LevelFilter::ERROR,
+        "warn" => LevelFilter::WARN,
+        "debug" => LevelFilter::DEBUG,
+        "trace" => LevelFilter::TRACE,
+        _ => LevelFilter::INFO,
+    };
+    let fmt = tracing_subscriber::fmt().with_max_level(level).with_target(false).with_writer(std::io::stdout);
+    if std::env::var("BROD_LOG_FORMAT").is_ok_and(|f| f.trim() == "json") {
+        fmt.json().init();
+    } else {
+        fmt.init();
+    }
 }
 
 /// Open the database named by the configuration, applying migrations as BROD_AUTO_MIGRATE says, or exit.
@@ -209,19 +231,19 @@ fn open_db(cfg: &Config) -> Db {
     let connections = std::env::var("BROD_DB_CONNECTIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
     let opened = match &cfg.database_url {
         Some(url) => {
-            println!("database: Postgres");
+            tracing::info!("database: Postgres");
             Db::open_pg(url, connections)
         }
         None => {
             let path = cfg.data_dir.join("brod.db");
-            println!("database: SQLite at {}", path.display());
+            tracing::info!("database: SQLite at {}", path.display());
             Db::open(&path, connections)
         }
     };
     match opened {
         Ok(db) => db,
         Err(e) => {
-            eprintln!("{e}");
+            tracing::error!("{e}");
             std::process::exit(1);
         }
     }

@@ -92,13 +92,13 @@ pub async fn check_server(st: &State, server: &ServerInfo, files: &[BundleFile])
             if let Some(reason) = ticket.stopped() {
                 return Err(stopped_at_start(server, reason));
             }
-            eprintln!("runtime check failed: {e}");
+            tracing::warn!("runtime check failed: {e}");
             return Err(unavailable());
         }
     };
     drop(ticket);
     if !res.status().is_success() {
-        eprintln!("runtime check answered {}", res.status());
+        tracing::warn!("runtime check answered {}", res.status());
         return Err(unavailable());
     }
     let v: Value = res.json().await.map_err(Problem::internal)?;
@@ -151,7 +151,7 @@ pub async fn dispatch(
         notice(502, "This app failed", "The app's server code failed on this request. Its owner can see the error in the app's logs.", "")
     };
     let Some(rt) = &st.cfg.runtime else {
-        eprintln!("server app {} has no runtime on this host", app.slug);
+        tracing::warn!(app = %app.slug, "server app has no runtime on this host");
         return Ok(failed());
     };
     if let Some(p) = st.watchdog.paused(&app.id) {
@@ -221,16 +221,16 @@ pub async fn dispatch(
         Ok(r) => r,
         Err(e) => {
             if let Some(reason) = ticket.stopped() {
-                eprintln!("server app {} was stopped: {reason:?}", app.slug);
+                tracing::warn!(app = %app.slug, "server app was stopped: {reason:?}");
                 return Ok(stopped(reason));
             }
-            eprintln!("server app {} failed: runtime unreachable: {e}", app.slug);
+            tracing::error!(app = %app.slug, "server app failed: runtime unreachable: {e}");
             ticket.dropped();
             return Ok(failed());
         }
     };
     if res.headers().contains_key("x-brod-runtime-error") {
-        eprintln!("server app {} failed: {}", app.slug, res.text().await.unwrap_or_default());
+        tracing::error!(app = %app.slug, "server app failed: {}", res.text().await.unwrap_or_default());
         return Ok(failed());
     }
     let status = res.status().as_u16();

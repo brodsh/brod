@@ -569,7 +569,7 @@ pub async fn serve(st: &State, req: &mut Req) -> Result<Option<Response>> {
         let (ok, body) = match res {
             Ok(r) => (r.status().is_success(), r.json::<Value>().await.unwrap_or(json!({}))),
             Err(e) => {
-                eprintln!("google token request failed: {e}");
+                tracing::warn!("google token request failed: {e}");
                 (false, json!({}))
             }
         };

@@ -268,7 +268,7 @@ pub fn spawn(st: &State, listing_id: &str) {
     let (st, id) = (st.clone(), listing_id.to_string());
     tokio::spawn(async move {
         if let Err(e) = generate(&st, &id, None).await {
-            eprintln!("preview of {id} failed: {}", e.message);
+            tracing::warn!("preview of {id} failed: {}", e.message);
         }
     });
 }
