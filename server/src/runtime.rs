@@ -263,7 +263,7 @@ pub async fn dispatch(
     if req.method == Method::HEAD {
         return Ok(response(status, Body::empty(), &pairs));
     }
-    if is_public && html {
+    if is_public && html && st.cfg.abuse_checks {
         let page = read_capped(Body::from_stream(res.bytes_stream()), crate::tar::FILE_BYTES * 2, "The page").await?;
         return Ok(response(status, bytes_body(crate::gateway::append_to_body(&page, crate::gateway::REPORT_LINK)), &pairs));
     }
