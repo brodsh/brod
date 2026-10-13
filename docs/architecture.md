@@ -502,6 +502,17 @@ store, files and secrets. A staging version that migrates or deletes data does i
 - That a confirmation is needed for every risky agent action. Deploys to production, secrets and rollbacks are not
   confirmed.
 
+### Errors and logs
+
+One error type covers everything a request can fail with: `Problem` (`problem.rs`), with an HTTP status, a stable
+`code` an agent can branch on (`stale_base`, `workspaces_closed`, ...), a message a person can act on, and optional
+extra fields. Anything unexpected becomes `Problem::internal`, which logs the detail and answers a 500 with no detail.
+Configuration has its own `ConfigError`, which names variables but never their values. Brod is one binary, not a set of
+libraries, so there is no `anyhow`/`thiserror` split; `?` carries a `Problem` from the database layer to the response.
+
+Logs are `tracing` events on stdout (`BROD_LOG`, `BROD_LOG_FORMAT=json`). The first-start banner and emails printed in
+log mode are plain text on purpose: people copy from them.
+
 ## 9. Code map
 
 `server/src/`:
