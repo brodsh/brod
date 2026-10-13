@@ -29,6 +29,7 @@ pub mod runtime;
 pub mod scan;
 pub mod secrets;
 pub mod settings;
+pub mod setup;
 pub mod spaces;
 pub mod state;
 pub mod storage;
