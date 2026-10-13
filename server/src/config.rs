@@ -194,6 +194,10 @@ impl Config {
             need.push("APPS_DOMAIN");
         }
         need.extend(["ADMIN_SECRET", "IDENTITY_SECRET"].into_iter().filter(|k| get(k).is_none()));
+        // Hosted, app secrets must be readable after every restart, so their key cannot be left to chance.
+        if hosted && get("SECRETS_KEY").is_none() {
+            need.push("SECRETS_KEY");
+        }
         let s3_keys = ["S3_ENDPOINT", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"];
         let s3 = s3_keys.iter().any(|k| get(k).is_some());
         if s3 {
@@ -461,7 +465,7 @@ mod tests {
     fn names_missing_variables_without_values() {
         let vars = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<HashMap<_, _>>();
         let err = Config::from_vars(&vars(&[("BROD_MODE", "hosted"), ("API_ORIGIN", "https://brod.example.test/")])).unwrap_err();
-        assert!(err.0.contains("APPS_DOMAIN, ADMIN_SECRET, IDENTITY_SECRET"), "{}", err.0);
+        assert!(err.0.contains("APPS_DOMAIN, ADMIN_SECRET, IDENTITY_SECRET, SECRETS_KEY"), "{}", err.0);
         // Self-hosted needs only the two secrets (from_env generates them), and defaults to this machine.
         let err = Config::from_vars(&vars(&[])).unwrap_err();
         assert!(err.0.contains("Set these environment variables: ADMIN_SECRET, IDENTITY_SECRET."), "{}", err.0);
@@ -487,6 +491,7 @@ mod tests {
             ("APPS_DOMAIN", "b.test"),
             ("ADMIN_SECRET", "dev-admin-secret"),
             ("IDENTITY_SECRET", &"x".repeat(40)),
+            ("SECRETS_KEY", &"y".repeat(40)),
         ]));
         assert!(weak.unwrap_err().0.starts_with("ADMIN_SECRET is short"));
         let c = Config::for_tests();
