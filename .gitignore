@@ -1,0 +1,8 @@
+node_modules
+.wrangler
+dist
+.vercel
+.env
+.env.local
+server/target/
+deploy/runtime/supervisor/target/

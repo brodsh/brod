@@ -1,0 +1,56 @@
+[package]
+name = "brod"
+version = "0.2.0"
+edition = "2024"
+description = "Brod: a cloud for small software. The self-hosted server."
+license = "ISC"
+publish = false
+
+[lib]
+name = "brod"
+path = "src/lib.rs"
+
+[[bin]]
+name = "brod"
+path = "src/main.rs"
+
+[dependencies]
+aes-gcm = "0.10"
+axum = { version = "0.8", default-features = false, features = ["tokio", "http1", "http2"] }
+base64 = "0.22"
+bytes = "1"
+dotenvy = "0.15"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+form_urlencoded = "1"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+getrandom = "0.3"
+hex = "0.4"
+hkdf = "0.12"
+hmac = "0.12"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["server", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto", "service"] }
+instant-acme = { version = "0.8", default-features = false, features = ["ring", "hyper-rustls", "rcgen"] }
+md-5 = "0.10"
+memchr = "2"
+percent-encoding = "2"
+postgres = "0.19"
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "http2", "json"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "net", "signal", "time", "io-util", "sync"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+tokio-util = { version = "0.7", features = ["io", "rt"] }
+tower = { version = "0.5", default-features = false, features = ["util"] }
+time = "0.3"
+unicode-normalization = "0.1"
+x509-parser = "0.18"
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = true

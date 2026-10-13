@@ -1,0 +1,19 @@
+# Brod serves HTTPS itself, with no Caddy: certificates from Let's Encrypt on demand (BROD_TLS=acme, see
+# "HTTPS without Caddy" in README.md). Layer it on docker-compose.yml:
+#   docker compose -f docker-compose.yml -f compose.tls.yml up -d
+# Brod listens on unprivileged ports inside the container; the host's 443 and 80 are mapped to them.
+# Certificates and the ACME account are kept in the brod-data volume (/data/certs).
+services:
+  brod:
+    environment:
+      BROD_TLS: acme
+      BROD_TRUST_PROXY: "0"
+      BROD_HTTPS_LISTEN: 0.0.0.0:8443
+      BROD_HTTP_LISTEN: 0.0.0.0:8000
+    ports:
+      - "443:8443"
+      - "80:8000"
+
+  # Not needed: Brod answers 443 and 80 itself. `docker compose --profile caddy` would start it, and clash on the ports.
+  caddy:
+    profiles: ["caddy"]

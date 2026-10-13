@@ -1,0 +1,39 @@
+//! Brod, the self-hosted server: the gateway, the MCP endpoint, the REST API and the sign-in pages in one binary.
+//! The TypeScript Worker in ../src is the specification; each module here mirrors the file of the same name.
+
+pub mod abuse;
+pub mod admin;
+pub mod analytics;
+pub mod api;
+pub mod app;
+pub mod auth;
+pub mod billing;
+pub mod config;
+pub mod connect;
+pub mod control;
+pub mod copy;
+pub mod db;
+pub mod domains;
+pub mod email;
+pub mod gateway;
+pub mod home;
+pub mod http;
+pub mod market;
+pub mod mcp;
+pub mod model;
+pub mod network;
+pub mod people;
+pub mod preview;
+pub mod problem;
+pub mod runtime;
+pub mod scan;
+pub mod secrets;
+pub mod settings;
+pub mod spaces;
+pub mod state;
+pub mod storage;
+pub mod tar;
+pub mod tls;
+pub mod usage;
+pub mod util;
+pub mod watchdog;

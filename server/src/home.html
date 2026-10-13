@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Brod: a cloud for the small software your team builds with AI</title>
+<meta name="description" content="Your agent built it. Brod puts it online for your team: one step from code to a private address, with sign-in, roles, storage and rollback already there.">
+<meta property="og:title" content="Brod: a cloud for small software">
+<meta property="og:description" content="Your agent built it. Brod puts it online for your team, with sign-in, roles and storage already there.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://brod.sh/">
+<meta property="og:image" content="https://brod.sh/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Brod: an agent puts a shift swap tool online and shares it with the warehouse team.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Brod: a cloud for small software">
+<meta name="twitter:description" content="Your agent built it. Brod puts it online for your team, with sign-in, roles and storage already there.">
+<meta name="twitter:image" content="https://brod.sh/og.png">
+<link rel="canonical" href="https://brod.sh/">
+<meta name="theme-color" content="#F1F5F2">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='13' width='22' height='13' rx='6.5' fill='%23F4B62E'/%3E%3Ccircle cx='21' cy='12' r='7' fill='%23F4B62E'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=Instrument+Sans:wght@400..700&family=JetBrains+Mono:wght@400;600&display=swap">
+<!-- Google tag (gtag.js), on this public page only. Google Consent Mode v2: every kind of storage is denied until a
+     visitor accepts in the banner at the foot of the page, and the choice is remembered in this browser. -->
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('consent', 'default', { analytics_storage: 'denied', ad_storage: 'denied', ad_user_data: 'denied', ad_personalization: 'denied' });
+  try { if (localStorage.getItem('brod-analytics') === 'granted') gtag('consent', 'update', { analytics_storage: 'granted' }); } catch (e) {}
+  gtag('js', new Date());
+
+  gtag('config', 'G-CCYYNHQKR7');
+</script>
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-CCYYNHQKR7"></script>
+<style>
+/* Layout: one left-aligned column on sage paper. The only loud things are the headline and the marigold action;
+   the hero is a transcript of the product's one moment, an agent putting an app online. */
+:root {
+  --paper: #F1F5F2; --card: #FBFCFB; --sunk: #E4EBE6; --ink: #13201A; --soft: #55655C; --line: #D3DDD6;
+  --go: #F4B62E; --go-ink: #221800; --go-edge: #C28A10; --green: #1E5B4A; --ok: #2B7A4B; --wait: #9A6208;
+  --code-bg: #14211B; --code-ink: #DCE7E0; --code-dim: #8FA398; --code-key: #F4B62E; --code-str: #9BD8B8;
+  --display: 'Bricolage Grotesque', 'Segoe UI', system-ui, sans-serif;
+  --body: 'Instrument Sans', 'Segoe UI', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #101714; --card: #17201B; --sunk: #0B110E; --ink: #E7EEE9; --soft: #94A39A; --line: #29352F;
+    --go-edge: #A87608; --green: #7FD0B0; --ok: #6CC48D; --wait: #E3AD4E;
+    --code-bg: #0B110E; color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 17px/1.55 var(--body); -webkit-font-smoothing: antialiased; }
+img, svg { max-width: 100%; }
+a { color: var(--green); text-underline-offset: 3px; }
+:focus-visible { outline: 2px solid var(--green); outline-offset: 3px; border-radius: 4px; }
+h1, h2, h3 { font-family: var(--display); margin: 0; text-wrap: balance; }
+h1 { font-size: clamp(2.5rem, 6.6vw, 4.6rem); line-height: 1.02; letter-spacing: -0.035em; font-weight: 750; }
+h2 { font-size: clamp(1.7rem, 3.6vw, 2.5rem); line-height: 1.1; letter-spacing: -0.025em; font-weight: 700; }
+h3 { font-size: 1.12rem; line-height: 1.3; letter-spacing: -0.01em; font-weight: 650; }
+p { margin: 0; }
+code, .mono { font-family: var(--mono); font-size: 0.86em; }
+.wrap { width: min(100% - 40px, 1080px); margin-inline: auto; }
+.lede { font-size: clamp(1.08rem, 1.7vw, 1.28rem); color: var(--soft); max-width: 36em; }
+.soft { color: var(--soft); }
+
+/* header */
+.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-block: 22px; }
+.brand { display: inline-flex; align-items: center; gap: 10px; font: 750 1.45rem var(--display); letter-spacing: -0.03em; color: var(--ink); text-decoration: none; }
+.mark { width: 26px; height: 16px; border-radius: 9px; background: var(--go); box-shadow: 8px -6px 0 -2px var(--go); }
+.top nav { display: flex; align-items: center; gap: clamp(12px, 3vw, 30px); font-size: 0.95rem; }
+.top nav a { color: var(--soft); text-decoration: none; }
+.top nav a:hover { color: var(--ink); }
+.top nav .navlink { display: none; }
+@media (min-width: 720px) { .top nav .navlink { display: inline; } }
+
+/* buttons */
+.btn { display: inline-flex; align-items: center; justify-content: center; font: 650 1rem var(--body); padding: 12px 22px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--ink); text-decoration: none; cursor: pointer; }
+.btn:hover { border-color: var(--soft); }
+.btn.go { background: var(--go); color: var(--go-ink); border-color: var(--go-edge); box-shadow: 0 3px 0 var(--go-edge); font-weight: 700; }
+.btn.go:hover { transform: translateY(-1px); box-shadow: 0 4px 0 var(--go-edge); }
+.btn.go:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--go-edge); }
+.btn.small { padding: 8px 16px; font-size: 0.92rem; border-radius: 10px; }
+.top nav a.btn { color: var(--ink); }
+
+/* hero */
+.hero { display: grid; gap: clamp(32px, 5vw, 64px); padding-block: clamp(28px, 6vw, 72px) clamp(48px, 8vw, 96px); align-items: center; }
+@media (min-width: 940px) { .hero { grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); } }
+.hero-copy { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
+.actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.endpoint { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: 0.95rem; color: var(--soft); }
+.endpoint code { background: var(--sunk); color: var(--ink); padding: 6px 10px; border-radius: 8px; overflow-wrap: anywhere; }
+.copy { font: 600 0.85rem var(--body); background: none; border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; color: var(--ink); cursor: pointer; }
+.copy:hover { border-color: var(--soft); }
+.setup { font-size: 0.95rem; color: var(--soft); }
+.setup summary { cursor: pointer; color: var(--green); font-weight: 600; width: fit-content; }
+.setup[open] summary { margin-bottom: 14px; }
+.setup > p { margin-top: 12px; }
+.agents { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column; gap: 18px; }
+.agent h3 { font-size: 1rem; color: var(--ink); margin-bottom: 6px; }
+.agent ol { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 6px; }
+.agent code { background: var(--sunk); color: var(--ink); padding: 1px 6px; border-radius: 6px; overflow-wrap: anywhere; }
+.agent pre { margin-top: 8px; padding: 10px 12px; border-radius: 10px; font-size: 0.8rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agents.tabbed { gap: 14px; }
+.agents.tabbed .agent h3 { display: none; }
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.tabs button { font: 600 0.85rem var(--body); padding: 5px 11px; border-radius: 99px; border: 1px solid var(--line); background: none; color: var(--soft); cursor: pointer; }
+.tabs button[aria-selected="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.demo { width: 100%; height: auto; border-radius: 20px; border: 1px solid var(--line); background: var(--sunk); box-shadow: 0 24px 60px -36px color-mix(in srgb, var(--green) 55%, transparent); }
+
+/* the transcript: the product's one moment */
+.talk { background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: clamp(16px, 2.5vw, 24px); display: flex; flex-direction: column; gap: 12px; min-width: 0; box-shadow: 0 24px 60px -36px color-mix(in srgb, var(--green) 55%, transparent); }
+.talk-head { display: flex; justify-content: space-between; font-size: 0.82rem; color: var(--soft); }
+.said { align-self: flex-end; max-width: 88%; background: var(--ink); color: var(--paper); padding: 10px 14px; border-radius: 16px 16px 4px 16px; }
+.call { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; align-items: baseline; font-size: 0.92rem; padding: 8px 12px; border-left: 2px solid var(--line); }
+.call code { color: var(--green); font-weight: 600; }
+.call span { color: var(--soft); overflow-wrap: anywhere; }
+.live { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--paper); }
+.bar { display: flex; align-items: center; gap: 8px; padding: 9px 12px; background: var(--sunk); font-family: var(--mono); font-size: 0.8rem; overflow-wrap: anywhere; }
+.bar i { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
+.live-body { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.who { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; font-size: 0.93rem; }
+.chip { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 0.82rem; padding: 3px 10px; border-radius: 99px; border: 1px solid currentColor; color: var(--wait); white-space: nowrap; }
+.chip.ok { color: var(--ok); }
+.talk [data-step] { transition: opacity .35s ease, transform .35s ease; }
+.talk.play [data-step].hide { opacity: 0; transform: translateY(6px); }
+@media (prefers-reduced-motion: reduce) { .talk [data-step] { transition: none; } .btn.go:hover, .btn.go:active { transform: none; } html { scroll-behavior: auto; } }
+
+/* sections */
+section { padding-block: clamp(48px, 8vw, 96px); border-top: 1px solid var(--line); }
+.sec-head { display: flex; flex-direction: column; gap: 14px; margin-bottom: clamp(28px, 4vw, 48px); max-width: 44em; }
+
+/* the sequence is a real order, so it is numbered */
+.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 28px; counter-reset: s; }
+@media (min-width: 760px) { .steps { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 24px; } }
+.steps li { counter-increment: s; display: flex; flex-direction: column; gap: 8px; padding-top: 16px; border-top: 3px solid var(--ink); min-width: 0; }
+.steps li::before { content: counter(s); font: 750 2.2rem/1 var(--display); letter-spacing: -0.04em; }
+.steps li:last-child { border-color: var(--go); }
+.steps p { color: var(--soft); font-size: 0.98rem; }
+
+/* what every app gets: a spec sheet, name on the left, the real handle on the right */
+.spec { margin: 0; display: grid; }
+.spec > div { display: grid; gap: 4px 28px; padding-block: 18px; border-top: 1px solid var(--line); align-items: baseline; }
+.spec > div:last-child { border-bottom: 1px solid var(--line); }
+@media (min-width: 760px) { .spec > div { grid-template-columns: 13rem minmax(0, 1fr) auto; } }
+.spec dt { font: 650 1.08rem var(--display); }
+.spec dd { margin: 0; color: var(--soft); max-width: 34em; }
+.spec .handle { color: var(--green); font-family: var(--mono); font-size: 0.82rem; overflow-wrap: anywhere; }
+
+/* access: five modes on one scale, from closed to open */
+.ladder { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+@media (min-width: 860px) { .ladder { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 16px; } }
+.ladder li { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ladder .meter { height: 10px; border-radius: 99px; background: var(--sunk); overflow: hidden; }
+.ladder .meter b { display: block; height: 100%; background: var(--green); border-radius: 99px; }
+.ladder p { color: var(--soft); font-size: 0.93rem; }
+.note { margin-top: 28px; padding: 18px 20px; border-radius: 14px; background: var(--card); border: 1px solid var(--line); max-width: 46em; }
+
+/* code */
+.two { display: grid; gap: clamp(24px, 4vw, 56px); align-items: center; }
+@media (min-width: 900px) { .two { grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr); } }
+.two .text { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+pre { margin: 0; background: var(--code-bg); color: var(--code-ink); border-radius: 16px; padding: clamp(16px, 2.4vw, 24px); overflow-x: auto; font: 0.86rem/1.7 var(--mono); min-width: 0; }
+pre .c { color: var(--code-dim); } pre .k { color: var(--code-key); } pre .s { color: var(--code-str); }
+
+/* pricing and what is next */
+.plans { display: grid; gap: 20px; }
+@media (min-width: 800px) { .plans { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+.plan { border: 1px solid var(--line); border-radius: 18px; padding: clamp(20px, 3vw, 30px); background: var(--card); display: flex; flex-direction: column; gap: 14px; }
+.plan.next { background: transparent; border-style: dashed; }
+.plan ul { margin: 0; padding-left: 1.1em; color: var(--soft); display: flex; flex-direction: column; gap: 6px; }
+.price { font: 750 2.6rem/1 var(--display); letter-spacing: -0.04em; }
+.plan .btn { align-self: flex-start; margin-top: auto; }
+
+.close { text-align: left; display: flex; flex-direction: column; gap: 22px; align-items: flex-start; }
+footer { border-top: 1px solid var(--line); padding-block: 28px 40px; display: flex; flex-wrap: wrap; gap: 12px 28px; justify-content: space-between; font-size: 0.9rem; color: var(--soft); }
+footer a { color: var(--soft); }
+footer nav { display: flex; flex-wrap: wrap; gap: 8px 22px; }
+footer .linkish { font: inherit; color: var(--soft); background: none; border: 0; padding: 0; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+
+/* analytics consent: a small card in the corner; nothing is stored until Accept */
+.consent { position: fixed; left: 16px; right: 16px; bottom: 16px; z-index: 10; max-width: 25rem; display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; font-size: 0.9rem; color: var(--soft); box-shadow: 0 18px 40px -24px color-mix(in srgb, var(--ink) 45%, transparent); }
+.consent[hidden] { display: none; }
+.consent-actions { display: flex; gap: 10px; justify-content: flex-end; }
+</style>
+</head>
+<body>
+
+<header class="wrap top">
+  <a class="brand" href="/" aria-label="Brod home"><span class="mark" aria-hidden="true"></span>Brod</a>
+  <nav aria-label="Main">
+    <a class="navlink" href="#how">How it works</a>
+    <a class="navlink" href="#apps">What apps get</a>
+    <a class="navlink" href="#teams">Teams</a>
+    <a class="navlink" href="#pricing">Pricing</a>
+    <a href="/auth/signin">Sign in</a>
+    <a class="btn go small" href="/auth/signup">Start free</a>
+  </nav>
+</header>
+
+<main>
+  <div class="wrap hero">
+    <div class="hero-copy">
+      <h1>Your agent built it. Brod puts it online for your team.</h1>
+      <p class="lede">Brod is a cloud for small software: the tools you build with an AI agent for yourself or your team. One step from code to a private address, with sign-in, roles and storage already there.</p>
+      <div class="actions">
+        <a class="btn go" href="/auth/signup">Start free</a>
+        <a class="btn" href="#how">See how it works</a>
+      </div>
+      <div class="endpoint">
+        <span>Or connect your agent now:</span>
+        <code id="mcp-url">https://brod.sh/mcp</code>
+        <button class="copy" type="button" data-copy="https://brod.sh/mcp">Copy</button>
+      </div>
+      <details class="setup" id="connect">
+        <summary>Where do I paste it? Steps for Claude, Cursor, VS Code and others</summary>
+        <div class="agents" id="agents">
+          <div class="agent" data-agent="Claude Code">
+            <h3>Claude Code</h3>
+            <ol>
+              <li>In a terminal, run <code>claude mcp add --transport http brod https://brod.sh/mcp</code></li>
+              <li>Start <code>claude</code>, type <code>/mcp</code>, choose <b>brod</b> and sign in when the browser opens.</li>
+            </ol>
+          </div>
+          <div class="agent" data-agent="Claude">
+            <h3>Claude (web and desktop app)</h3>
+            <ol>
+              <li>Open <b>Settings</b>, then <b>Connectors</b>, then <b>Add custom connector</b>.</li>
+              <li>Name it Brod, paste <code>https://brod.sh/mcp</code> as the URL, and add it.</li>
+              <li>Press <b>Connect</b> and sign in when the browser opens.</li>
+            </ol>
+          </div>
+          <div class="agent" data-agent="Cursor">
+            <h3>Cursor</h3>
+            <ol>
+              <li>Open <code>~/.cursor/mcp.json</code> (or <b>Settings</b>, then <b>MCP</b>, then <b>Add new MCP server</b>) and add:<pre>{ "mcpServers": { "brod": { "url": "https://brod.sh/mcp" } } }</pre></li>
+              <li>Brod shows up in the MCP list; press <b>Connect</b> and sign in when the browser opens.</li>
+            </ol>
+          </div>
+          <div class="agent" data-agent="VS Code">
+            <h3>VS Code</h3>
+            <ol>
+              <li>Create <code>.vscode/mcp.json</code> in your project with:<pre>{ "servers": { "brod": { "type": "http", "url": "https://brod.sh/mcp" } } }</pre></li>
+              <li>Press <b>Start</b> above the entry, sign in when the browser opens, and use Brod in Copilot's agent mode.</li>
+            </ol>
+          </div>
+          <div class="agent" data-agent="Other agents">
+            <h3>Any other agent</h3>
+            <ol>
+              <li>Add a remote MCP server over HTTP with the address <code>https://brod.sh/mcp</code>.</li>
+              <li>When the browser opens, sign in with your email and pick the workspace the agent may use.</li>
+              <li>No browser sign-in in your agent? Make a token on your workspace's <b>Connections</b> page and send it as <code>Authorization: Bearer brod_&hellip;</code></li>
+            </ol>
+          </div>
+        </div>
+        <p class="soft">Then ask: &ldquo;Put this online with Brod.&rdquo;</p>
+      </details>
+    </div>
+
+    <!-- The demo video: set data-video to its address (MP4, under 8 MB) and data-poster to a still from it. The video
+         loads after the page has, muted and looping, and replaces this example panel; until then the panel stays. -->
+    <div class="talk" id="talk" aria-label="Example: an agent deploying an app with Brod" data-video="" data-poster="">
+      <div class="talk-head"><span>Any agent that speaks MCP</span><span>Example</span></div>
+      <p class="said" data-step>Put the shift swap tool online for the warehouse team.</p>
+      <div class="call" data-step><code>get_workspace</code><span>Reads your groups and roles, so the app fits without being told.</span></div>
+      <div class="call" data-step><code>deploy_app</code><span>Shift swap, version 1. Live in seconds.</span></div>
+      <div class="live" data-step>
+        <div class="bar"><i aria-hidden="true"></i>https://shift-swap.harborops.brod.sh</div>
+        <div class="live-body">
+          <div class="who">
+            <span id="who-text">Private. Only you can open it.</span>
+            <span class="chip" id="who-chip">Sharing waits for you</span>
+          </div>
+          <div class="who">
+            <span class="soft" id="ask-text">The agent asked to share it with everyone in Harbor Ops.</span>
+            <button class="btn go small" type="button" id="confirm">Confirm sharing</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <section id="how">
+    <div class="wrap">
+      <div class="sec-head">
+        <h2>From a chat to your team in four moves</h2>
+        <p class="lede">Building small tools got easy. Putting them somewhere safe, with the right people signed in, did not. Brod is the missing step.</p>
+      </div>
+      <ol class="steps">
+        <li><h3>Connect once</h3><p>Add Brod to your agent as an MCP server. It works with any agent that speaks MCP. <a href="#connect" data-open="connect">Setup steps for your agent</a>.</p></li>
+        <li><h3>Ask</h3><p>&ldquo;Put this online for the team.&rdquo; The agent reads your workspace first, then deploys what it built.</p></li>
+        <li><h3>Get an address</h3><p>The app is live on HTTPS at its own address, and private to you until you say otherwise.</p></li>
+        <li><h3>Share with a click</h3><p>The agent proposes who gets in. You confirm. Teammates sign in once and find it on the workspace home page.</p></li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="apps">
+    <div class="wrap">
+      <div class="sec-head">
+        <h2>What every app gets without asking</h2>
+        <p class="lede">No regions, instance sizes, access policies or login code. The parts every small tool needs are already attached.</p>
+      </div>
+      <dl class="spec">
+        <div><dt>Sign-in</dt><dd>People sign in with an emailed link. Your app never sees a password and keeps no user table.</dd><span class="handle">GET /_brod/me</span></div>
+        <div><dt>Roles and groups</dt><dd>Owner, editor and viewer by default. Define groups once in the workspace and every app uses them.</dd><span class="handle">x-brod-role</span></div>
+        <div><dt>A database</dt><dd>Each app has its own SQLite database, with transactions.</dd><span class="handle">env.DB.query(sql, params)</span></div>
+        <div><dt>Key-value and files</dt><dd>Small values and uploaded files, stored per app.</dd><span class="handle">env.KV &nbsp; env.FILES</span></div>
+        <div><dt>Secrets</dt><dd>Write-only. Nobody can read one back after it is set, the agent included.</dd><span class="handle">set_secret</span></div>
+        <div><dt>Versions and rollback</dt><dd>Every deploy is kept. Rolling back takes effect on the next request and rebuilds nothing.</dd><span class="handle">rollback</span></div>
+        <div><dt>A safe deploy</dt><dd>A version whose server code does not start is refused, and the working version stays live.</dd><span class="handle">deploy_app</span></div>
+        <div><dt>Logs</dt><dd>Console output and errors for recent requests, kept seven days, searchable by the agent that is fixing the bug.</dd><span class="handle">get_logs</span></div>
+      </dl>
+    </div>
+  </section>
+
+  <section id="teams">
+    <div class="wrap">
+      <div class="sec-head">
+        <h2>One workspace, one sign-in, every app</h2>
+        <p class="lede">A workspace holds your team's people, groups and apps. Add a colleague to a group and they have the right access everywhere. Remove them and it ends everywhere.</p>
+      </div>
+      <ol class="ladder" aria-label="Access modes, from most closed to most open">
+        <li><div class="meter"><b style="width:20%"></b></div><h3>Private</h3><p>Only the app's owner and workspace admins.</p></li>
+        <li><div class="meter"><b style="width:40%"></b></div><h3>People</h3><p>Only the people and groups you give a role.</p></li>
+        <li><div class="meter"><b style="width:60%"></b></div><h3>Workspace</h3><p>Everyone in your workspace.</p></li>
+        <li><div class="meter"><b style="width:80%"></b></div><h3>Signed in</h3><p>Anyone who signs in.</p></li>
+        <li><div class="meter"><b style="width:100%"></b></div><h3>Public</h3><p>Anyone, with no sign-in.</p></li>
+      </ol>
+      <p class="note"><strong>An agent cannot open an app up by itself.</strong> Narrowing access applies at once. Widening it, or inviting someone, waits for a person to confirm.</p>
+    </div>
+  </section>
+
+  <section id="code">
+    <div class="wrap two">
+      <div class="text">
+        <h2>An app is a folder. Server code is one file.</h2>
+        <p class="lede">Static files are served as they are. Add a <code>_worker.js</code> and it answers every other request, with the signed-in person in the headers and the app's storage on <code>env</code>.</p>
+        <p class="soft">Your agent already knows this. Brod tells it when it connects.</p>
+      </div>
+<pre aria-label="Example server code for a Brod app"><span class="c">// _worker.js</span>
+<span class="k">export default</span> {
+  <span class="k">async</span> fetch(request, env) {
+    <span class="k">const</span> role = request.headers.get(<span class="s">'x-brod-role'</span>);
+    <span class="k">if</span> (role !== <span class="s">'editor'</span> &amp;&amp; role !== <span class="s">'owner'</span>)
+      <span class="k">return new</span> Response(<span class="s">'Ask an editor'</span>, { status: 403 });
+
+    <span class="k">const</span> open = <span class="k">await</span> env.DB.query(
+      <span class="s">'SELECT * FROM swaps WHERE status = ?'</span>, [<span class="s">'open'</span>]);
+    <span class="k">return</span> Response.json(open);
+  }
+};</pre>
+    </div>
+  </section>
+
+  <section id="pricing">
+    <div class="wrap">
+      <div class="sec-head">
+        <h2>Free to start. A plan, never a bill per app.</h2>
+        <p class="lede">Brod is priced as a plan for a workspace, with room for a number of apps and people. Deploying inside it never adds a charge.</p>
+      </div>
+      <div class="plans">
+        <div class="plan">
+          <div class="price">Free</div>
+          <ul>
+            <li>10 running apps. Paused apps do not count.</li>
+            <li>10 people in the workspace</li>
+            <li>250 MB of storage</li>
+            <li>Sign-in, roles, database, secrets, rollback and logs</li>
+          </ul>
+          <a class="btn go" href="/auth/signup">Start free</a>
+        </div>
+        <div class="plan next">
+          <h3>On the way</h3>
+          <ul>
+            <li>Larger plans for bigger teams, with more apps and people.</li>
+            <li>A marketplace: list an app you built, and other teams install a private copy into their own workspace, with their own data and sign-in.</li>
+          </ul>
+          <p class="soft">Neither is available yet.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap close">
+      <h2>The next tool your agent builds can be in front of your team today.</h2>
+      <div class="actions">
+        <a class="btn go" href="/auth/signup">Start free</a>
+        <button class="copy" type="button" data-copy="https://brod.sh/mcp">Copy the MCP address</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="wrap">
+  <span>© 2026 Brod</span>
+  <nav aria-label="Footer">
+    <a href="/auth/signin">Sign in</a>
+    <a href="#how">How it works</a>
+    <a href="#pricing">Pricing</a>
+    <button class="linkish" type="button" id="consent-open">Cookie settings</button>
+  </nav>
+</footer>
+
+<div class="consent" id="consent" role="region" aria-label="Analytics cookies" hidden>
+  <p>May we use Google Analytics cookies to count visits and see how people find Brod? Nothing is stored unless you accept.</p>
+  <div class="consent-actions">
+    <button class="btn small" type="button" data-consent="denied">Decline</button>
+    <button class="btn small" type="button" data-consent="granted">Accept</button>
+  </div>
+</div>
+
+<script>
+// Copy buttons: say what happened, and fall back to selecting the text.
+document.querySelectorAll('[data-copy]').forEach(function (b) {
+  var label = b.textContent;
+  b.addEventListener('click', function () {
+    var done = function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = label; }, 1600); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(b.dataset.copy).then(done, select);
+    else select();
+    function select() { var el = document.getElementById('mcp-url'); if (!el) return; var r = document.createRange(); r.selectNodeContents(el); var s = getSelection(); s.removeAllRanges(); s.addRange(r); }
+  });
+});
+
+// Setup steps: one agent at a time once script runs; without it every agent's steps are listed under its own heading.
+(function () {
+  var box = document.getElementById('agents'), agents = box.querySelectorAll('.agent'), tabs = document.createElement('div');
+  tabs.className = 'tabs'; tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', 'Your agent');
+  agents.forEach(function (a, i) {
+    var b = document.createElement('button');
+    b.type = 'button'; b.textContent = a.dataset.agent; b.setAttribute('role', 'tab'); b.id = 'agent-tab-' + i;
+    a.setAttribute('role', 'tabpanel'); a.setAttribute('aria-labelledby', b.id);
+    b.addEventListener('click', function () { show(i); });
+    tabs.appendChild(b);
+  });
+  function show(n) {
+    agents.forEach(function (a, i) { a.hidden = i !== n; tabs.children[i].setAttribute('aria-selected', String(i === n)); });
+  }
+  box.prepend(tabs); box.classList.add('tabbed'); show(0);
+  document.querySelectorAll('[data-open]').forEach(function (l) {
+    l.addEventListener('click', function () { document.getElementById(l.dataset.open).open = true; });
+  });
+})();
+
+// The demo video, once it has an address: it loads after everything else, so the text is never kept waiting.
+(function () {
+  var talk = document.getElementById('talk'), src = talk.dataset.video;
+  if (!src) return;
+  addEventListener('load', function () {
+    var v = document.createElement('video'), still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    v.className = 'demo'; v.muted = true; v.loop = true; v.playsInline = true; v.preload = 'auto';
+    v.setAttribute('muted', ''); v.setAttribute('playsinline', '');
+    v.setAttribute('aria-label', 'Demo: an agent puts an app online with Brod and shares it with a team');
+    if (talk.dataset.poster) v.poster = talk.dataset.poster;
+    if (still) v.controls = true; else v.autoplay = true;
+    v.src = src;
+    talk.replaceWith(v);
+  });
+})();
+
+// The transcript plays once on load. Everything is already in the page, so nothing is lost without script or motion.
+(function () {
+  var talk = document.getElementById('talk'), steps = talk.querySelectorAll('[data-step]');
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    steps.forEach(function (s) { s.classList.add('hide'); });
+    talk.classList.add('play');
+    steps.forEach(function (s, i) { setTimeout(function () { s.classList.remove('hide'); }, 350 + i * 650); });
+  }
+  var btn = document.getElementById('confirm');
+  btn.addEventListener('click', function () {
+    document.getElementById('who-text').textContent = 'Everyone in Harbor Ops, after signing in.';
+    var chip = document.getElementById('who-chip'); chip.textContent = 'Shared'; chip.classList.add('ok');
+    document.getElementById('ask-text').textContent = 'Confirmed by you. Teammates see it on the workspace home page.';
+    btn.remove();
+  });
+})();
+
+// Analytics consent: ask once, remember the answer in this browser, and let "Cookie settings" ask again.
+(function () {
+  var box = document.getElementById('consent'), KEY = 'brod-analytics', saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  if (saved !== 'granted' && saved !== 'denied') box.hidden = false;
+  box.querySelectorAll('[data-consent]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var choice = b.dataset.consent;
+      gtag('consent', 'update', { analytics_storage: choice });
+      try { localStorage.setItem(KEY, choice); } catch (e) {}
+      var hadFocus = box.contains(document.activeElement);
+      box.hidden = true;
+      if (hadFocus) document.getElementById('consent-open').focus({ preventScroll: true });
+    });
+  });
+  document.getElementById('consent-open').addEventListener('click', function () {
+    box.hidden = false;
+    box.querySelector('[data-consent]').focus();
+  });
+})();
+</script>
+</body>
+</html>

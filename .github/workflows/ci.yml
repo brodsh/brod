@@ -1,0 +1,175 @@
+# Every push and pull request: type check, tests in the Workers runtime, a production build, and the end-to-end suite.
+# A second job checks the Vercel build: Node tests, the Vercel bundle, and the same end-to-end suite served by Node.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Type check
+        run: npm run check
+      - name: Unit and integration tests
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: End-to-end tests
+        run: npm run e2e:local
+      - uses: actions/upload-artifact@v4
+        with:
+          name: worker-bundle
+          path: dist/
+          retention-days: 14
+
+  vercel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Type check
+        run: npm run check
+      - name: Adapter tests in Node.js (libSQL, S3, file store)
+        run: npm run test:node
+      - name: Build the Vercel function
+        run: npm run build:vercel
+      - name: End-to-end tests on Node, files in a folder
+        run: npm run e2e:node
+      - name: End-to-end tests on Node, files in S3 with presigned uploads
+        run: npm run e2e:node:s3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vercel-output
+          path: .vercel/output/
+          include-hidden-files: true
+          retention-days: 14
+
+  # The Rust server (server/) for self-hosting: format, lints, unit tests, the end-to-end suite with server apps on
+  # the workerd runtime and without it, and the Docker images (built only, never pushed).
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install Rust
+        run: rustup toolchain install 1.97 --profile minimal --component rustfmt,clippy && rustup default 1.97
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            server/target
+            deploy/runtime/supervisor/target
+          key: rust-${{ runner.os }}-${{ hashFiles('server/Cargo.lock', 'deploy/runtime/supervisor/Cargo.lock') }}
+      - name: Format
+        run: |
+          cargo fmt --manifest-path server/Cargo.toml --check
+          cargo fmt --manifest-path deploy/runtime/supervisor/Cargo.toml --check
+      - name: Lints
+        run: |
+          cargo clippy --manifest-path server/Cargo.toml --all-targets --locked -- -D warnings
+          cargo clippy --manifest-path deploy/runtime/supervisor/Cargo.toml --all-targets --locked -- -D warnings
+      - name: Unit tests
+        run: |
+          cargo test --manifest-path server/Cargo.toml --locked
+          cargo test --manifest-path deploy/runtime/supervisor/Cargo.toml --locked
+      - name: Chromium for marketplace previews (deploy/preview/)
+        run: npx playwright install --with-deps chromium
+      - name: End-to-end tests, server apps on workerd
+        run: npm run e2e:rust
+      - name: End-to-end tests, static apps only (server apps refused)
+        run: npm run e2e:rust:static
+        env:
+          BROD_BIN: server/target/release/brod
+      - name: End-to-end tests, app files in S3
+        run: npm run e2e:rust:s3
+        env:
+          BROD_BIN: server/target/release/brod
+      - name: End-to-end tests, Brod's own HTTPS against Pebble (Let's Encrypt's test CA)
+        run: npm run e2e:tls
+        env:
+          BROD_BIN: server/target/release/brod
+      - name: Build the Docker images (not pushed)
+        run: |
+          docker build -f deploy/Dockerfile -t brod:ci .
+          docker build -f deploy/runtime/Dockerfile -t brod-runtime:ci .
+          docker build -f deploy/preview/Dockerfile -t brod-preview:ci .
+      - name: Check the Compose file
+        run: |
+          cp deploy/.env.example deploy/.env
+          sed -i 's/^BROD_RUNTIME_SECRET=$/BROD_RUNTIME_SECRET=ci-runtime-secret-0123456789/' deploy/.env
+          docker compose -f deploy/docker-compose.yml config --quiet
+          docker compose -f deploy/docker-compose.yml --profile postgres config --quiet
+          docker compose -f deploy/docker-compose.yml --profile previews config --quiet
+          docker compose -f deploy/docker-compose.yml -f deploy/compose.tls.yml config --quiet
+
+  # The Rust server with its database in Postgres (BROD_DATABASE_URL): the unit tests, the SQLite-to-Postgres copy,
+  # and the same end-to-end suite.
+  rust-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: pg
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      BROD_TEST_DATABASE_URL: postgres://postgres:pg@127.0.0.1:55432/postgres
+      E2E_DATABASE_URL: postgres://postgres:pg@127.0.0.1:55432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install Rust
+        run: rustup toolchain install 1.97 --profile minimal && rustup default 1.97
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            server/target
+            deploy/runtime/supervisor/target
+          key: rust-pg-${{ runner.os }}-${{ hashFiles('server/Cargo.lock', 'deploy/runtime/supervisor/Cargo.lock') }}
+      - name: Unit tests on Postgres
+        run: cargo test --manifest-path server/Cargo.toml --locked
+      - name: Chromium for marketplace previews (deploy/preview/)
+        run: npx playwright install --with-deps chromium
+      - name: End-to-end tests on Postgres, server apps on workerd
+        run: npm run e2e:rust:pg
+      - name: End-to-end tests on Postgres, app files in S3, static apps only
+        run: node scripts/e2e-rust.mjs pg s3 static
+        env:
+          BROD_BIN: server/target/release/brod

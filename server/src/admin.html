@@ -1,0 +1,1637 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>{{TITLE}}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=Instrument+Sans:wght@400..700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* A quiet rail on the left, one readable column on the right, and a single marigold button that always means "deploy". */
+:root{--brand:{{ACCENT}};
+  --bg:#F1F5F2;--surface:#FBFCFB;--sunk:#E7EDE8;--ink:#15201B;--muted:#5A6860;--line:#D7E0D9;
+  --deploy:#F4B62E;--deploy-ink:#221800;--deploy-edge:#C98F12;--green:#1E5B4A;
+  --ok:#2B7A4B;--warn:#9A6208;--bad:#B2372E;--bad-bg:#FBECEA;--warn-bg:#FBF2DC;
+  --display:'Bricolage Grotesque','Segoe UI',system-ui,sans-serif;
+  --body:'Instrument Sans','Segoe UI',system-ui,sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace;
+  --r:10px;color-scheme:light}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){
+  --bg:#111815;--surface:#182019;--sunk:#0C120F;--ink:#E6EDE8;--muted:#93A199;--line:#2A3630;
+  --deploy-edge:#A87608;--green:#7FD0B0;--ok:#6CC48D;--warn:#E3AD4E;--bad:#F0857A;--bad-bg:#2E1A18;--warn-bg:#2C2412;color-scheme:dark}}
+:root[data-theme=dark]{
+  --bg:#111815;--surface:#182019;--sunk:#0C120F;--ink:#E6EDE8;--muted:#93A199;--line:#2A3630;
+  --deploy-edge:#A87608;--green:#7FD0B0;--ok:#6CC48D;--warn:#E3AD4E;--bad:#F0857A;--bad-bg:#2E1A18;--warn-bg:#2C2412;color-scheme:dark}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--body);-webkit-font-smoothing:antialiased}
+button,input,select{font:inherit;color:inherit}
+h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance;letter-spacing:-.01em}
+h1{font-size:clamp(1.6rem,4vw,2.1rem);font-weight:650;line-height:1.15;display:flex;flex-wrap:wrap;align-items:center;gap:12px}
+h2{font-size:1.1rem;font-weight:600}
+h3{font-size:1.02rem;font-weight:600}
+p{margin:0}
+ul,ol{list-style:none;margin:0;padding:0}
+.mono{font-family:var(--mono);font-size:.86em;overflow-wrap:anywhere}
+.muted{color:var(--muted)}.small{font-size:.85rem}.num{font-variant-numeric:tabular-nums}
+.nowrap{white-space:nowrap}.grow{flex:1 1 200px;min-width:0}.right{text-align:right}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.sub{color:var(--muted);max-width:62ch}
+:focus-visible{outline:2px solid var(--green);outline-offset:2px;border-radius:4px}
+
+.shell{display:grid;grid-template-columns:232px minmax(0,1fr);min-height:100vh}
+.side{display:flex;flex-direction:column;gap:22px;padding:24px 16px;position:sticky;top:0;align-self:start;height:100vh;overflow-y:auto}
+.brand{all:unset;cursor:pointer;display:flex;align-items:center;gap:9px;font:650 1.15rem var(--display);padding:0 8px;min-width:0}
+.brand span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.logo{flex:none;width:22px;height:14px;border-radius:8px;background:var(--deploy);box-shadow:7px -5px 0 -2px var(--deploy)}
+.wsicon{flex:none;font-size:1.2rem;line-height:1}
+.nav{display:flex;flex-direction:column;gap:14px}
+.navgroup{display:flex;flex-direction:column;gap:2px}
+.navlabel{padding:0 10px 4px;font-size:.72rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.nav button{all:unset;cursor:pointer;padding:7px 10px;border-radius:8px;color:var(--muted);display:flex;justify-content:space-between;align-items:center;gap:8px}
+.nav button:hover{color:var(--ink);background:var(--sunk)}
+.nav button.on{color:var(--ink);background:var(--sunk);font-weight:600}
+.sidefoot{margin-top:auto;display:flex;flex-direction:column;gap:8px;align-items:flex-start;font-size:.8rem;color:var(--muted);padding:0 8px;min-width:0;max-width:100%}
+.sidefoot .who{overflow-wrap:anywhere}
+.sidefoot form{margin:0}
+.main{border-left:1px solid var(--line);padding:36px clamp(16px,4vw,48px) 80px;max-width:1040px;width:100%;display:flex;flex-direction:column;gap:32px;min-width:0}
+.main section{display:flex;flex-direction:column;gap:12px}
+.head{display:flex;flex-wrap:wrap;gap:16px 24px;justify-content:space-between;align-items:flex-start}
+.head>div{display:flex;flex-direction:column;gap:6px;min-width:0;flex:1 1 320px}
+.sechead{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.crumbs{font-size:.85rem;color:var(--muted)}
+
+.btn{border:1px solid var(--line);background:var(--surface);padding:7px 14px;border-radius:9px;cursor:pointer;font-weight:550;white-space:nowrap;text-decoration:none;display:inline-block;color:var(--ink)}
+.btn:hover{border-color:var(--muted)}
+.btn.quiet{background:transparent;border-color:transparent;color:var(--muted)}
+.btn.quiet:hover{color:var(--ink);background:var(--sunk)}
+.btn.deploy{background:var(--deploy);color:var(--deploy-ink);border-color:var(--deploy-edge);font-weight:700;box-shadow:0 2px 0 var(--deploy-edge)}
+.btn.deploy:hover{transform:translateY(-1px);box-shadow:0 3px 0 var(--deploy-edge)}
+.btn.deploy:active{transform:translateY(1px);box-shadow:0 1px 0 var(--deploy-edge)}
+.btn.deploy.big{font-size:1.15rem;padding:12px 34px;border-radius:12px}
+.btn[disabled]{opacity:.5;cursor:default;transform:none}
+.btn.dangerbtn{color:var(--bad)}
+.link{all:unset;cursor:pointer;color:var(--green);text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--green) 35%,transparent);text-underline-offset:3px}
+.link:hover{text-decoration-color:currentColor}
+.link:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.link.name{color:var(--ink);font-weight:650;font-family:var(--display);font-size:1.02rem;text-decoration:none}
+.link.name:hover{text-decoration:underline}
+.link.danger{color:var(--bad);text-decoration-color:color-mix(in srgb,var(--bad) 35%,transparent)}
+.acts{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+
+.pill{display:inline-flex;align-items:center;gap:6px;font:600 .78rem var(--body);letter-spacing:0;padding:2px 10px 2px 8px;border-radius:99px;border:1px solid var(--line);white-space:nowrap;background:var(--surface)}
+.pill i{width:7px;height:7px;border-radius:50%;background:var(--muted)}
+.pill.ok{color:var(--ok)}.pill.ok i{background:var(--ok)}
+.pill.warn{color:var(--warn)}.pill.warn i{background:var(--warn)}
+.pill.bad{color:var(--bad);border-color:var(--bad)}.pill.bad i{background:var(--bad)}
+.pill.idle{color:var(--muted)}
+.tag{font-size:.74rem;font-weight:600;padding:1px 8px;border-radius:6px;background:var(--sunk);color:var(--muted);white-space:nowrap}
+
+.stats{display:grid!important;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0!important;border-block:1px solid var(--line)}
+.stat{all:unset;cursor:pointer;display:flex;flex-direction:column;padding:16px 16px 16px 0}
+.stat b{font:650 1.7rem var(--display)}
+.stat span{color:var(--muted);font-size:.88rem}
+.stat:hover span{color:var(--ink);text-decoration:underline}
+.stat:focus-visible{outline:2px solid var(--green);outline-offset:-2px}
+
+.list{border-top:1px solid var(--line)}
+.list>li{display:flex;flex-wrap:wrap;align-items:center;gap:10px 20px;padding:14px 0;border-bottom:1px solid var(--line)}
+.list.tight>li{padding:9px 0}
+.alert{background:var(--bad-bg);border:1px solid color-mix(in srgb,var(--bad) 35%,transparent)!important;border-radius:var(--r);padding:14px 16px!important;margin-top:8px}
+.alert.access{background:var(--warn-bg);border-color:color-mix(in srgb,var(--warn) 40%,transparent)!important}
+.list:has(.alert){border-top:0}
+.audit .mark{width:8px;height:8px;border-radius:50%;background:var(--ok);flex:none}
+.audit.denied .mark{background:transparent;border:2px solid var(--bad)}
+
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr));gap:14px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:18px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.cardtop{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.cardfoot{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:auto;padding-top:8px;border-top:1px solid var(--line)}
+.cardfoot .link{margin-left:auto}
+.url{color:var(--muted)}
+.search input{width:min(100%,320px)}
+.empty{border:1px dashed var(--line);border-radius:var(--r);padding:32px;display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+
+.field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.field>span{font-size:.8rem;font-weight:600;color:var(--muted)}
+input:not([type=checkbox]):not([type=radio]):not([type=file]),select,textarea{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:8px 10px;min-width:0;width:100%}
+input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--green);outline-offset:0;border-radius:8px}
+select.mini{width:auto;padding:3px 6px;font-size:.85rem}
+.fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr));gap:14px}
+.inline{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}
+.stack{display:flex;flex-direction:column;gap:12px}
+.check{display:flex;align-items:center;gap:6px;padding-bottom:8px}
+.deployform{gap:20px;padding:24px}
+.deployline{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px}
+.choices{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:10px}
+.choice{display:flex;align-items:flex-start;gap:10px;border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;cursor:pointer;background:var(--surface)}
+.choice input{accent-color:var(--green);margin-top:.3em}
+.choice.on{border-color:var(--green);box-shadow:0 0 0 1px var(--green)}
+.choice span{display:flex;flex-direction:column}.choice small{color:var(--muted)}
+.sharebar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;background:var(--sunk);border-radius:var(--r);padding:8px 8px 8px 14px}
+.sharebar .mono{flex:1 1 200px;min-width:0}
+.note.stage{border-left-color:var(--warn)}
+.note{border-left:3px solid var(--green);background:var(--surface);padding:12px 14px;border-radius:0 var(--r) var(--r) 0;display:flex;flex-direction:column;gap:10px}
+.warnnote{border-left-color:var(--bad);background:var(--bad-bg)}
+.drop{display:flex;flex-direction:column;align-items:flex-start;gap:4px;border:1px dashed var(--line);border-radius:var(--r);padding:18px;cursor:pointer;background:var(--bg)}
+.drop:hover,.drop.over{border-color:var(--green);background:color-mix(in srgb,var(--green) 6%,var(--bg))}
+.drop.has{border-style:solid}
+.drop b{font-weight:600;color:var(--ink)}
+.drop input{display:none}
+
+.tabs{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid var(--line)}
+.tabs button{all:unset;cursor:pointer;padding:8px 12px;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
+.tabs button.on{color:var(--ink);border-color:var(--ink);font-weight:600}
+.tabs button:focus-visible,.nav button:focus-visible,.brand:focus-visible{outline:2px solid var(--green);outline-offset:-2px}
+.tabbody{display:flex;flex-direction:column;gap:28px}
+.kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr));gap:16px 24px;margin:0}
+.kv dt{font-size:.8rem;color:var(--muted);font-weight:600}.kv dd{margin:0;overflow-wrap:anywhere}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%}
+th{text-align:left;font-size:.78rem;color:var(--muted);font-weight:600;padding:6px 12px 6px 0;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:10px 12px 10px 0;border-bottom:1px solid var(--line);vertical-align:middle}
+th.right,td.right{padding-right:0}
+.logs{margin:0;background:var(--sunk);border-radius:var(--r);padding:14px;font:.8rem/1.7 var(--mono);min-width:520px;white-space:pre-wrap}
+.lg.error{color:var(--bad)}
+.split{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:24px;align-items:start}
+
+.steps{display:flex;flex-direction:column;gap:10px;font-size:1.05rem}
+.step{display:flex;align-items:center;gap:12px;color:var(--muted)}
+.tick{width:18px;height:18px;border-radius:50%;border:2px solid var(--line);flex:none}
+.step.done{color:var(--ink)}.step.done .tick{background:var(--ok);border-color:var(--ok)}
+.step.now{color:var(--ink);font-weight:600}.step.now .tick{border-color:var(--deploy-edge);background:var(--deploy);animation:pulse .9s ease-in-out infinite}
+.step.fail{color:var(--bad)}.step.fail .tick{border-color:var(--bad)}
+@keyframes pulse{50%{transform:scale(.7)}}
+@media(prefers-reduced-motion:reduce){.step.now .tick{animation:none}.btn.deploy:hover,.btn.deploy:active{transform:none}}
+.livebox{border:1px solid var(--ok);border-radius:var(--r);background:var(--surface);padding:20px;display:flex;flex-direction:column;gap:12px}
+.failbox{border-color:var(--bad)}
+.bigurl{font-size:clamp(1rem,3.4vw,1.4rem);font-weight:600}
+.err{color:var(--bad);font-size:.9rem;flex-basis:100%}
+
+.gate{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:20px;display:flex;flex-direction:column;gap:14px;overflow:hidden}
+.gatebar{height:6px;background:var(--brand);margin:-20px -20px 4px}
+.fakeinput{border:1px solid var(--line);border-radius:8px;padding:8px 10px;color:var(--muted)}
+.fakebtn{background:var(--brand);color:#fff;border-radius:9px;padding:8px 14px;text-align:center;font-weight:600}
+.usage{display:flex;align-items:center;gap:10px}
+.spark{max-width:100%;height:auto;overflow:visible;display:block}
+.spark-line{fill:none;stroke:var(--green);stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
+.spark-fill{fill:color-mix(in srgb,var(--green) 13%,transparent)}
+.spark-dot{fill:var(--green)}
+.chart{border:1px solid var(--line);border-radius:var(--r);padding:12px;background:var(--surface)}
+.chart .spark{width:100%;height:96px}
+.meters{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr));gap:16px 24px}
+.meterbox{display:flex;flex-direction:column;gap:6px}
+.meterbox .row{display:flex;justify-content:space-between;gap:8px;font-size:.88rem}
+.meter{height:6px;border-radius:99px;background:var(--sunk);overflow:hidden}
+.meter>i{display:block;height:100%;background:var(--green);border-radius:inherit}
+.meter.full>i{background:var(--bad)}
+.eyebrow{font-size:.72rem;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.bill .total{font:650 2.6rem/1.1 var(--display);text-transform:capitalize}
+.plan.current{border-color:var(--green);box-shadow:0 0 0 1px var(--green)}
+.price{font:650 1.6rem/1.2 var(--display)}.price small{font:500 .85rem var(--body);color:var(--muted)}
+.plan ul{display:flex;flex-direction:column;gap:4px;font-size:.9rem}
+.plan ul li::before{content:"✓";color:var(--ok);font-weight:700;margin-right:8px}
+.plan .btn{align-self:flex-start;margin-top:auto}
+#toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:99px;font-weight:600;font-size:.9rem;max-width:calc(100% - 32px);z-index:5}
+.loading{color:var(--muted)}
+textarea{resize:vertical;min-height:4.5em}
+.tags{display:flex;flex-wrap:wrap;gap:6px}
+.preview{display:flex;flex-direction:column;gap:6px;margin:-4px -4px 2px}
+.shot{border-radius:8px;overflow:hidden;background:var(--sunk);aspect-ratio:16/10;border:1px solid var(--line)}
+.shot img,.shot video{width:100%;height:100%;object-fit:cover;display:block}
+.shot video{object-fit:contain;background:#000}
+.thumbs{display:flex;flex-wrap:wrap;gap:6px}
+.thumbs button{all:unset;cursor:pointer;width:52px;height:32px;border-radius:5px;overflow:hidden;border:1px solid var(--line);background:var(--sunk);position:relative}
+.thumbs button.on{border-color:var(--green);box-shadow:0 0 0 1px var(--green)}
+.thumbs button:focus-visible{outline:2px solid var(--green);outline-offset:1px}
+.thumbs img,.thumbs video{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
+.thumbs .play{position:absolute;inset:0;display:grid;place-items:center;color:#fff;font-size:.8rem;text-shadow:0 1px 2px #000}
+.medialist{display:flex;flex-wrap:wrap;gap:12px}
+.medialist li{display:flex;flex-direction:column;gap:4px;width:150px}
+.medialist .shot{aspect-ratio:16/10}
+[hidden]{display:none!important}
+
+/* ---------- analytics ---------- */
+/* Two validated categorical slots (views, visitors) and one sequential hue for bars and the heatmap. */
+:root{--s1:#2a78d6;--s2:#eb6834;--good:#2B7A4B;--ni:#9A6208;--poor:#B2372E}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--s1:#3987e5;--s2:#d95926;--good:#6CC48D;--ni:#E3AD4E;--poor:#F0857A}}
+:root[data-theme=dark]{--s1:#3987e5;--s2:#d95926;--good:#6CC48D;--ni:#E3AD4E;--poor:#F0857A}
+.anbar{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center}
+.anbar select{width:auto;max-width:100%}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:var(--surface);max-width:100%;overflow-x:auto}
+.seg button{all:unset;cursor:pointer;padding:6px 11px;font-size:.88rem;color:var(--muted);white-space:nowrap}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button.on{background:var(--sunk);color:var(--ink);font-weight:600}
+.seg button[aria-disabled=true]{opacity:.45;cursor:not-allowed}
+.seg button:focus-visible{outline:2px solid var(--green);outline-offset:-2px}
+.livedot{display:inline-flex;align-items:center;gap:7px;font-size:.88rem;color:var(--muted)}
+.livedot i{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 25%,transparent)}
+.kpis{display:grid!important;grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr));gap:0;border-block:1px solid var(--line)}
+.kpi{display:flex;flex-direction:column;gap:2px;padding:14px 14px 14px 0;min-width:0}
+.kpi b{font:650 1.55rem/1.2 var(--display);font-variant-numeric:tabular-nums}
+.kpi span{color:var(--muted);font-size:.84rem}
+.delta{font-size:.78rem;font-weight:600;font-variant-numeric:tabular-nums}
+.delta.up{color:var(--good)}.delta.down{color:var(--poor)}.delta.flat{color:var(--muted)}
+.plot{position:relative;border:1px solid var(--line);border-radius:var(--r);background:var(--surface);padding:12px 12px 6px}
+.plot svg{display:block;width:100%;height:auto;overflow:visible}
+.plot .grid{stroke:var(--line);stroke-width:1}
+.plot .axis{fill:var(--muted);font:11px var(--body)}
+.plot .l1{fill:none;stroke:var(--s1);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.plot .a1{fill:color-mix(in srgb,var(--s1) 12%,transparent)}
+.plot .l2{fill:none;stroke:var(--s2);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.plot .cross{stroke:var(--muted);stroke-width:1;stroke-dasharray:3 3}
+.plot .dot1{fill:var(--s1);stroke:var(--surface);stroke-width:2}.plot .dot2{fill:var(--s2);stroke:var(--surface);stroke-width:2}
+.plot .bar{fill:var(--s1)}
+.tip{position:absolute;pointer-events:none;background:var(--ink);color:var(--bg);border-radius:8px;padding:7px 10px;font-size:.8rem;line-height:1.45;white-space:nowrap;z-index:2;transform:translate(-50%,-100%);margin-top:-8px}
+.tip b{font-weight:650}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.84rem;color:var(--muted);padding:4px 2px 0}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:14px;height:3px;border-radius:2px;display:inline-block}
+.panels{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:18px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.panel .tabs{margin:-4px 0 0}
+.panel th.right,.panel td.right{padding-left:14px}
+.bars{display:flex;flex-direction:column;gap:3px}
+.brow{position:relative;display:flex;justify-content:space-between;gap:12px;padding:5px 8px;border-radius:6px;font-size:.88rem;min-width:0}
+.brow>i{position:absolute;inset:0 auto 0 0;background:color-mix(in srgb,var(--s1) 16%,transparent);border-radius:6px}
+.brow>span{position:relative;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.brow>em{position:relative;font-style:normal;font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap}
+.brow>em b{color:var(--ink);font-weight:600}
+.bhead{display:flex;justify-content:space-between;font-size:.74rem;color:var(--muted);font-weight:600;padding:0 8px;text-transform:uppercase;letter-spacing:.05em}
+.more{align-self:flex-start}
+.heat{display:grid;grid-template-columns:34px repeat(24,minmax(0,1fr));gap:2px;font-size:.7rem;color:var(--muted)}
+.heat i{aspect-ratio:1;border-radius:3px;background:var(--sunk);min-height:10px}
+.heat span{display:flex;align-items:center}
+.heat .hl{justify-content:center}
+.vitals{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr));gap:12px}
+.vital{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px;display:flex;flex-direction:column;gap:6px}
+.vital b{font:650 1.4rem var(--display);font-variant-numeric:tabular-nums}
+.vital .st{font-size:.8rem;font-weight:600;display:inline-flex;gap:5px;align-items:center}
+.st.good{color:var(--good)}.st.ni{color:var(--ni)}.st.poor{color:var(--poor)}
+.dist{display:flex;height:6px;border-radius:99px;overflow:hidden;gap:2px;background:var(--surface)}
+.dist i{display:block;height:100%}
+.dist .g{background:var(--good)}.dist .n{background:var(--ni)}.dist .p{background:var(--poor)}
+.sbar{display:flex;height:12px;border-radius:6px;overflow:hidden;gap:2px}
+.sbar i{display:block;height:100%}
+pre.snippet{margin:0;background:var(--sunk);border-radius:8px;padding:10px 12px;font:.8rem/1.6 var(--mono);overflow-x:auto;white-space:pre}
+details.tableview summary{cursor:pointer;color:var(--muted);font-size:.85rem}
+
+@media(max-width:780px){
+  .shell{display:block}
+  .side{position:static;height:auto;overflow:visible;flex-direction:row;flex-wrap:wrap;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line)}
+  .sidedeploy{margin-left:auto}
+  .nav{flex-direction:row;order:3;width:100%;overflow-x:auto;gap:2px}
+  .navgroup{display:contents}
+  .navlabel{display:none}
+  .nav button{white-space:nowrap}
+  .sidefoot{order:4;flex-direction:row;flex-wrap:wrap;margin:0;padding:0;align-items:center;gap:6px 14px}
+  .sidefoot .who{display:none}
+  .main{padding-top:24px;border-left:0}
+}
+</style>
+<script type="application/json" id="boot">{{BOOT}}</script>
+<div id="app" class="shell">
+  <aside class="side">
+    <button class="brand" id="brand" aria-label="Workspace overview"></button>
+    <nav class="nav" id="nav" aria-label="Main"></nav>
+    <button class="btn deploy sidedeploy" id="sidedeploy">Deploy an app</button>
+    <div class="sidefoot">
+      <span class="who" id="who"></span>
+      <span class="tag" id="role"></span>
+      <a class="link" id="home">App launcher</a>
+      <button class="link" id="theme" type="button"></button>
+      <form method="post" action="/auth/signout"><button class="link">Sign out</button></form>
+    </div>
+  </aside>
+  <main class="main" id="main"></main>
+</div>
+<div id="toast" role="status" hidden></div>
+<script>
+'use strict';
+const B = JSON.parse(document.getElementById('boot').textContent);
+const ADMIN = B.role === 'admin';
+const $main = document.getElementById('main');
+
+// ---------- small helpers ----------
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (k === 'value') el.value = v;
+    else el.setAttribute(k, v === true ? '' : v);
+  }
+  for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid instanceof Node ? kid : String(kid));
+  return el;
+}
+async function api(path, { method = 'GET', body } = {}) {
+  const r = await fetch('/v1' + path, {
+    method, credentials: 'same-origin',
+    headers: { 'x-brod-workspace': B.workspace, ...(body ? { 'content-type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error?.message || `${r.status} ${r.statusText}`);
+  return data;
+}
+const enc = encodeURIComponent;
+/** BROD_NETWORK on this server: "enforce" refuses outside requests an app does not declare, "log" only records them. */
+let NETWORK_POLICY = 'log';
+const notePolicy = (r) => { if (r?.network_policy) NETWORK_POLICY = r.network_policy; return r; };
+let toastTimer;
+function toast(text) {
+  const t = document.getElementById('toast');
+  t.textContent = text; t.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), 2600);
+}
+const err = (text) => h('p', { class: 'err', role: 'alert' }, text);
+/** Run an action from a button or form: disable it while it runs, show any error next to it, then redraw. */
+function act(fn, { redraw = true, done } = {}) {
+  return async (e) => {
+    e?.preventDefault?.();
+    const btn = e?.submitter || e?.currentTarget;
+    const spot = (btn?.closest?.('form, li, tr, section, .card')) || $main;
+    const where = spot.tagName === 'TR' ? spot.lastElementChild : spot;
+    where.querySelectorAll(':scope > .err').forEach(m => m.remove());
+    if (btn?.tagName === 'BUTTON') btn.disabled = true;
+    try {
+      const r = await fn();
+      if (r !== undefined && done) toast(typeof done === 'function' ? done(r) : done);
+      if (redraw) await render();
+      return r;
+    } catch (x) { where.append(err(x.message)); }
+    finally { if (btn?.tagName === 'BUTTON') btn.disabled = false; }
+  };
+}
+async function copy(text) {
+  try { await navigator.clipboard.writeText(text); toast('Copied'); } catch { prompt('Copy this:', text); }
+}
+const when = (iso) => iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '';
+function ago(iso) {
+  if (!iso) return '';
+  const s = (Date.now() - new Date(iso)) / 1000;
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  if (s < 86400 * 7) return `${Math.floor(s / 86400)} d ago`;
+  return new Date(iso).toLocaleDateString(undefined, { dateStyle: 'medium' });
+}
+const size = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n > 1024 ? Math.round(n / 1024) + ' KB' : n + ' B';
+const host = (url) => url.replace(/^https?:\/\//, '');
+const bytes = (n) => n >= 1073741824 ? +(n / 1073741824).toFixed(1) + ' GB' : n >= 10485760 ? Math.round(n / 1048576) + ' MB' : size(n);
+const cap = (s) => s ? s[0].toUpperCase() + s.slice(1) : s;
+function money(amount, currency) {
+  try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: currency.toUpperCase() }).format(amount / 100); }
+  catch { return `${(amount / 100).toFixed(2)} ${String(currency).toUpperCase()}`; }
+}
+/** A small line chart of daily counts, oldest first. */
+function spark(vals, w = 120, ht = 32) {
+  const max = Math.max(1, ...vals), n = vals.length;
+  const x = (i) => (n === 1 ? w : (i * w) / (n - 1)), y = (v) => ht - 2 - (v / max) * (ht - 4);
+  const pts = vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  const box = document.createElement('div');
+  box.innerHTML = `<svg class="spark" viewBox="0 0 ${w} ${ht}" width="${w}" height="${ht}" preserveAspectRatio="none" role="img" aria-label="${vals.reduce((a, b) => a + b, 0)} in ${n} days">
+    <polygon class="spark-fill" points="0,${ht} ${pts} ${w},${ht}"/><polyline class="spark-line" points="${pts}"/>
+    <circle class="spark-dot" cx="${x(n - 1).toFixed(1)}" cy="${y(vals[n - 1] || 0).toFixed(1)}" r="2.5"/></svg>`;
+  return box.firstElementChild;
+}
+function meter(label, used, limit, fmt = String) {
+  const pct = limit ? Math.min(100, Math.round((100 * used) / limit)) : 0;
+  return h('div', { class: 'meterbox' }, h('div', { class: 'row' }, h('span', {}, label), h('span', { class: 'muted num' }, `${fmt(used)} of ${fmt(limit)}`)),
+    h('div', { class: 'meter' + (pct >= 100 ? ' full' : ''), role: 'meter', 'aria-valuenow': used, 'aria-valuemax': limit, 'aria-label': label }, h('i', { style: `width:${pct}%` })));
+}
+const ACCESS = {
+  private: ['Private', 'Only builders and admins of the workspace.'],
+  people: ['Named people and groups', 'Only the people and groups listed below.'],
+  workspace: [`Everyone in ${B.name}`, 'Every member of the workspace.'],
+  password: ['Anyone with the password', 'No account needed: share the link and the password.'],
+  signed_in: ['Anyone who signs in', 'Any email address, after a sign-in link.'],
+  public: ['Public', 'Anyone with the link, no sign-in.'],
+};
+function select(name, options, value, attrs = {}) {
+  return h('select', { name, id: attrs.id, 'aria-label': attrs.label || name, class: attrs.class },
+    Object.entries(options).map(([v, label]) => h('option', { value: v, selected: v === value }, label)));
+}
+const field = (label, input, cls = '') => h('label', { class: 'field ' + cls }, h('span', {}, label), input);
+function grantLabel(g) {
+  return g.email || (g.group && 'group ' + g.group) || (g.domain && 'anyone @' + g.domain)
+    || (g.everyone === 'workspace' ? 'everyone in the workspace' : g.everyone === 'signed_in' ? 'anyone signed in' : g.everyone);
+}
+function pill(a) {
+  if (a.status === 'paused') return h('span', { class: 'pill idle' }, h('i'), 'Paused');
+  if (!a.live_version) return h('span', { class: 'pill warn' }, h('i'), 'Not deployed');
+  return h('span', { class: 'pill ok' }, h('i'), 'Live');
+}
+/** The version waiting on staging, as a small marker next to an app. */
+const stageTag = (a) => a.staging ? h('span', { class: 'pill warn', title: `v${a.staging.version} is on staging, not live yet` }, h('i'), `v${a.staging.version} on staging`) : null;
+/** The version waiting on staging: where to try it, and the buttons that make it live or take it off staging. */
+function stagingNote(s, slug) {
+  const st = s.staging;
+  if (!st) return null;
+  const v = (s.versions || []).find(x => x.version === st.version);
+  return h('div', { class: 'note stage' },
+    h('div', {}, h('b', {}, `v${st.version} is on staging, not live yet.`), ' ', v?.note ? `${v.note}. ` : '',
+      s.live_version ? `Visitors still get v${s.live_version}. ` : 'Nothing is live yet. ',
+      'Try it at the staging address below (only the app\'s builders can open it), then publish it when it is ready.'),
+    h('div', { class: 'sharebar' }, h('span', { class: 'mono' }, st.url),
+      h('a', { class: 'btn', href: st.url + '/', target: '_blank', rel: 'noopener' }, 'Open staging'),
+      h('button', { class: 'btn', type: 'button', onclick: () => copy(st.url + '/') }, 'Copy link')),
+    h('div', { class: 'acts' },
+      h('button', { class: 'btn deploy', onclick: act(() => api(`/apps/${slug}/publish`, { method: 'POST', body: {} }), { done: r => `v${r.published} is live` }) }, `Publish v${st.version} to live`),
+      h('button', { class: 'btn quiet', onclick: act(async () => {
+        if (!confirm(`Take v${st.version} off staging without publishing it? The version is kept under Versions.`)) return;
+        return api(`/apps/${slug}/staging`, { method: 'DELETE' });
+      }, { done: 'Taken off staging' }) }, 'Discard')),
+    h('p', { class: 'muted small' }, 'Staging and live share the app\'s data and secrets, so what you change while testing is real.'));
+}
+const head = (title, sub, action) => h('header', { class: 'head' }, h('div', {}, h('h1', {}, title), sub ? h('p', { class: 'sub' }, sub) : null), action || null);
+const sechead = (title, extra) => h('div', { class: 'sechead' }, h('h2', {}, title), extra || null);
+const empty = (title, text, action) => h('div', { class: 'empty' }, h('h3', {}, title), text ? h('p', { class: 'muted' }, text) : null, action || null);
+const deployBtn = (label = 'Deploy an app') => h('button', { class: 'btn deploy', onclick: () => go('new') }, label);
+const appLink = (slug, label) => h('button', { class: 'link', onclick: () => go('app', slug) }, label || slug);
+
+// ---------- deploying a zip ----------
+const MAX_BUNDLE = 25 * 1024 * 1024;
+async function upload(target, file) {
+  if (!file) throw new Error('Choose a .zip (or .tar.gz) of the built app first.');
+  if (file.size > MAX_BUNDLE) throw new Error(`${file.name} is ${size(file.size)}. A bundle can be at most 25 MB.`);
+  const addr = await api('/deploys', { method: 'POST', body: target });
+  // The upload address is on this same server; keep the request same-origin whatever host the page was opened on.
+  const r = await fetch(new URL(addr.upload_url).pathname, { method: 'PUT', body: file, credentials: 'same-origin' });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error?.message || `${r.status} ${r.statusText}`);
+  return data;
+}
+function dropZone(onFile) {
+  const input = h('input', { type: 'file', accept: '.zip,.tar,.tgz,.tar.gz,application/zip,application/gzip' });
+  const label = h('b', {}, 'Drop a .zip of the built app here');
+  const hint = h('span', { class: 'muted small' }, 'or click to choose one. Zip the folder with index.html, or _worker.js for server code. Up to 25 MB.');
+  const zone = h('label', { class: 'drop' }, input, label, hint);
+  const pick = (f) => { if (!f) return; zone.file = f; zone.classList.add('has'); label.textContent = f.name; hint.textContent = `${size(f.size)} · click to choose another`; onFile?.(f); };
+  input.addEventListener('change', () => pick(input.files[0]));
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('over'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('over'));
+  zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('over'); pick(e.dataTransfer.files[0]); });
+  return zone;
+}
+/** The deploy steps, shown while a bundle uploads and goes live. */
+function progress(into, target, file, after) {
+  const steps = ['Uploading the bundle', 'Unpacking and checking the files', target.environment === 'staging' ? 'On its staging address' : 'Live at its address'];
+  const draw = (i, failed) => into.replaceChildren(h('ol', { class: 'steps' }, steps.map((s, n) =>
+    h('li', { class: 'step ' + (failed && n === i ? 'fail' : n < i ? 'done' : n === i ? 'now' : '') }, h('span', { class: 'tick', 'aria-hidden': 'true' }), s))));
+  if (!file) { into.replaceChildren(err('Choose a .zip (or .tar.gz) of the built app first.')); return Promise.resolve(); }
+  draw(0);
+  const t = setTimeout(() => draw(1), 700);
+  return upload(target, file).then(d => {
+    clearTimeout(t); draw(3);
+    if (d.environment === 'staging') into.append(h('div', { class: 'livebox' },
+      h('p', {}, `Deployed ${d.name} version ${d.version} to staging (${d.kind === 'server' ? 'server code' : 'static site'}, ${d.files} files). `,
+        d.live_version ? `Visitors still get v${d.live_version} until you publish it.` : 'Nothing is live until you publish it.'),
+      h('div', { class: 'bigurl mono' }, host(d.staging_url)),
+      h('div', { class: 'acts' }, h('a', { class: 'btn', href: d.staging_url + '/', target: '_blank', rel: 'noopener' }, 'Try it on staging'),
+        h('button', { class: 'btn', type: 'button', onclick: () => copy(d.staging_url + '/') }, 'Copy link'),
+        h('button', { class: 'btn deploy', type: 'button', onclick: act(() => api(`/apps/${enc(d.app)}/publish`, { method: 'POST', body: {} }), { done: r => `v${r.published} is live` }) }, `Publish v${d.version} to live`))));
+    else into.append(h('div', { class: 'livebox' },
+      h('p', {}, `${d.created ? 'Created' : 'Deployed'} ${d.name}, version ${d.version} (${d.kind === 'server' ? 'server code' : 'static site'}, ${d.files} files).`),
+      h('div', { class: 'bigurl mono' }, host(d.url)),
+      h('div', { class: 'acts' }, h('a', { class: 'btn', href: d.url + '/', target: '_blank', rel: 'noopener' }, 'Open it'),
+        h('button', { class: 'btn', type: 'button', onclick: () => copy(d.url + '/') }, 'Copy link'),
+        h('button', { class: 'btn quiet', type: 'button', onclick: () => go('app', d.app, 'access') }, 'Share it'))));
+    after?.(d);
+  }, x => {
+    clearTimeout(t); draw(1, true);
+    into.append(h('div', { class: 'livebox failbox' }, h('b', {}, 'The deploy did not go through.'), h('p', {}, x.message)));
+  });
+}
+
+// ---------- routing ----------
+// #overview, #apps, #analytics[/<app>], #new, #app/<slug>/<tab>, #domains, #market, #spaces, #people, #groups, #log[/<app>[/refused]], #agents, #billing[/done]
+// The sidebar in groups, so it stays readable as pages are added. A group with no label sits at the top.
+const NAV = [
+  [null, [['overview', 'Overview']]],
+  ['Build', [['apps', 'Apps'], ['market', 'Marketplace'], ['domains', 'Domains']]],
+  ['Insights', [['analytics', 'Analytics'], ['log', 'Activity']]],
+  ['Team', [['people', 'People'], ['groups', 'Groups'], ['spaces', 'Spaces']]],
+  ['Workspace', [['agents', 'Agents'], ...(ADMIN ? [['billing', 'Billing']] : [])]],
+];
+const PAGES = { overview, apps: directory, new: newApp, app: appPage, analytics, domains, market, spaces, people, groups, log: activity, agents, billing };
+let R = route();
+function route() {
+  const [page, slug, tab] = location.hash.slice(1).split('/').map(decodeURIComponent);
+  if (page === 'activity') return { page: 'log' };
+  return page in PAGES ? { page, slug, tab } : { page: 'overview' };
+}
+function go(page, slug, tab) {
+  const hash = '#' + [page, slug ?? (tab ? '' : null), tab].filter(x => x != null).map(enc).join('/');
+  if (location.hash !== hash) history.pushState(null, '', hash);
+  R = { page, slug: slug || undefined, tab };
+  render(true);
+  scrollTo(0, 0);
+}
+addEventListener('popstate', () => { R = route(); render(true); });
+let seq = 0;
+async function render(fresh) {
+  const n = ++seq;
+  const cur = R.page === 'app' || R.page === 'new' ? 'apps' : R.page;
+  document.getElementById('nav').replaceChildren(...NAV.map(([group, items]) =>
+    h('div', { class: 'navgroup', role: group ? 'group' : null, 'aria-label': group }, group ? h('span', { class: 'navlabel', 'aria-hidden': 'true' }, group) : null,
+      items.map(([k, label]) => h('button', { class: cur === k ? 'on' : '', 'aria-current': cur === k ? 'page' : null, onclick: () => go(k) }, label)))));
+  if (fresh) $main.replaceChildren(h('p', { class: 'loading' }, 'Loading…'));
+  try {
+    const view = await PAGES[R.page]();
+    if (n !== seq) return;
+    $main.replaceChildren(...[view].flat(2).filter(Boolean));
+  } catch (x) { if (n === seq) $main.replaceChildren(head('Something went wrong'), err(x.message)); }
+}
+
+// ---------- overview ----------
+const DENIED = new Set(['refused', 'password_failed', 'deploy_failed']);
+// Refusals the viewer dismissed from "Needs you", remembered in this browser only: they stay in the activity log.
+const SEEN_KEY = `brod.refused-seen.${B.workspace}`;
+const seenRefusals = () => { try { return Number(localStorage.getItem(SEEN_KEY)) || 0; } catch { return 0; } };
+const dismissRefusals = (at) => { try { localStorage.setItem(SEEN_KEY, String(at)); } catch { /* private window: shows again next time */ } render(); };
+async function overview() {
+  const [data, ppl, ev, refused, usage] = await Promise.all([api('/apps'), api('/people'), api('/events?limit=6'),
+    api('/events?action=refused&limit=5').catch(() => ({ events: [] })), api('/usage?days=14').catch(() => null)]);
+  const byApp = Object.fromEntries((usage?.apps || []).map(u => [u.app, u]));
+  const live = data.apps.filter(a => a.live_version && a.status !== 'paused');
+  const needs = [
+    ...data.apps.filter(a => a.marketplace?.update_available).map(a => h('li', { class: 'alert access' },
+      h('div', { class: 'grow' }, h('strong', {}, 'An update is waiting'), ' ', h('span', { class: 'muted' }, '· ', appLink(a.app, a.name)),
+        h('p', {}, `${a.marketplace.name} release ${a.marketplace.latest_release} is out; this copy runs release ${a.marketplace.release}. Nothing changes until you deploy it.`)),
+      h('div', { class: 'acts' }, h('button', { class: 'btn', onclick: () => go('app', a.app) }, 'Review update')))),
+    ...data.apps.filter(a => a.staging).map(a => h('li', { class: 'alert access' },
+      h('div', { class: 'grow' }, h('strong', {}, 'Waiting on staging'), ' ', h('span', { class: 'muted' }, '· ', appLink(a.app, a.name)),
+        h('p', {}, `v${a.staging.version} is on its staging address for testing. ${a.live_version ? `Visitors still get v${a.live_version}` : 'Nothing is live'} until it is published.`)),
+      h('div', { class: 'acts' }, h('a', { class: 'btn quiet', href: a.staging.url + '/', target: '_blank', rel: 'noopener' }, 'Try it'),
+        h('button', { class: 'btn', onclick: () => go('app', a.app) }, 'Review')))),
+    ...data.apps.filter(a => !a.live_version && !a.staging).map(a => h('li', { class: 'alert access' },
+      h('div', { class: 'grow' }, h('strong', {}, 'Nothing deployed yet'), ' ', h('span', { class: 'muted' }, '· ', appLink(a.app, a.name)),
+        h('p', {}, 'The app has an address but no live version, so visitors find nothing there.')),
+      h('div', { class: 'acts' }, h('button', { class: 'btn', onclick: () => go('app', a.app, 'versions') }, 'Deploy it')))),
+    ...refused.events.filter(e => Date.now() - new Date(e.at) < 3 * 86400e3 && new Date(e.at) > seenRefusals()).map(e => h('li', { class: 'alert' },
+      h('div', { class: 'grow' }, h('strong', {}, 'Someone without access tried to get in'), ' ',
+        h('span', { class: 'muted' }, e.app ? ['· ', appLink(e.app)] : null, ' · ', ago(e.at)), h('p', {}, e.detail, ' ', h('span', { class: 'muted' }, 'They were shown "App not found".'))),
+      h('div', { class: 'acts' }, e.app ? h('button', { class: 'btn', onclick: () => go('app', e.app, 'access') }, 'Review access') : null,
+        h('button', { class: 'btn quiet', type: 'button', title: 'Hide refusals up to this one. They stay in the activity log.', onclick: () => dismissRefusals(+new Date(e.at)) }, 'Dismiss')))),
+  ];
+  const stat = (n, label, page) => h('button', { class: 'stat', onclick: () => go(page) }, h('b', { class: 'num' }, String(n)), h('span', {}, label));
+  return [
+    head(B.name, `${data.apps.length} ${data.apps.length === 1 ? 'app' : 'apps'}, ${live.length} running. Each one has its own address, sign-in and guest list.`, deployBtn()),
+    needs.length ? h('section', {}, h('h2', {}, 'Needs you'), h('ul', { class: 'list' }, needs)) : null,
+    h('section', { class: 'stats' },
+      stat(`${data.running_apps} of ${data.app_limit}`, 'apps running', 'apps'),
+      stat(ppl.people.length, ppl.people.length === 1 ? 'person in the workspace' : 'people in the workspace', 'people'),
+      usage ? stat(usage.total_views, 'visits in 14 days', 'analytics') : null,
+      usage ? stat(bytes(usage.storage.total), `of ${bytes(usage.storage.limit)} storage`, ADMIN ? 'billing' : 'apps') : null),
+    h('section', {}, sechead('Apps', h('button', { class: 'link', onclick: () => go('apps') }, 'All apps')),
+      data.apps.length ? h('ul', { class: 'list' }, data.apps.map(a => appRow(a, byApp[a.app])))
+        : empty('Nothing deployed yet', 'Drop in a zip of a built app, pick a ready-made one from the marketplace, or connect an agent and ask it to deploy. It gets an address and sign-in in one step.',
+          h('div', { class: 'acts' }, deployBtn(), h('button', { class: 'btn', onclick: () => go('new', undefined, 'market') }, 'Pick from the marketplace')))),
+    h('section', {}, sechead('Recent activity', h('button', { class: 'link', onclick: () => go('log') }, 'Full log')),
+      ev.events.length ? h('ul', { class: 'list tight' }, ev.events.map(auditRow)) : h('p', { class: 'muted' }, 'Nothing yet.')),
+  ];
+}
+function appRow(a, u) {
+  return h('li', {},
+    h('div', { class: 'grow' }, h('button', { class: 'link name', onclick: () => go('app', a.app) }, a.name),
+      h('div', { class: 'muted small' }, a.space ? a.space + ' · ' : '', a.live_version ? 'v' + a.live_version : 'not deployed', ' · ', h('span', { class: 'mono' }, host(a.url)))),
+    a.marketplace?.update_available ? h('span', { class: 'tag' }, 'update available') : null,
+    stageTag(a),
+    u ? h('div', { class: 'usage' }, spark(u.views), h('span', { class: 'muted small num' }, `${u.total_views} ${u.total_views === 1 ? 'visit' : 'visits'}`)) : null,
+    pill(a));
+}
+function auditRow(e) {
+  return h('li', { class: 'audit' + (DENIED.has(e.action) ? ' denied' : '') }, h('span', { class: 'mark', 'aria-hidden': 'true' }),
+    h('span', { class: 'grow' }, h('span', { class: 'mono' }, e.by), ' ', e.action.replace(/_/g, ' '), e.detail ? h('span', { class: 'muted' }, ': ', e.detail) : null,
+      e.app ? [' · ', appLink(e.app)] : null),
+    h('span', { class: 'muted small nowrap', title: when(e.at) }, ago(e.at)));
+}
+
+// ---------- apps directory ----------
+async function directory() {
+  const data = await api('/apps');
+  const filter = h('input', { id: 'app-filter', type: 'search', placeholder: 'Filter by name', autocomplete: 'off' });
+  const cards = data.apps.map(a => h('li', { class: 'card', 'data-name': a.name.toLowerCase() + ' ' + a.app },
+    h('div', { class: 'cardtop' }, h('button', { class: 'link name', onclick: () => go('app', a.app) }, a.name), pill(a)),
+    a.staging ? h('div', {}, stageTag(a)) : null,
+    h('p', { class: 'muted' }, a.who_can_open),
+    h('div', { class: 'mono small url' }, host(a.url)),
+    a.space ? h('div', {}, h('span', { class: 'tag' }, a.space)) : null,
+    h('div', { class: 'cardfoot muted small' }, h('span', {}, a.live_version ? 'v' + a.live_version : 'no live version'),
+      h('span', {}, `shared with ${a.shared_with.length}`), h('a', { class: 'link', href: a.url + '/', target: '_blank', rel: 'noopener' }, 'Open'))));
+  filter.addEventListener('input', () => { const q = filter.value.toLowerCase(); for (const c of cards) c.hidden = !c.dataset.name.includes(q); });
+  return [
+    head('Apps', `${data.running_apps} of ${data.app_limit} running on the ${data.plan} plan.`, deployBtn()),
+    data.apps.length ? [h('label', { class: 'search' }, h('span', { class: 'sr' }, 'Filter apps'), filter), h('ul', { class: 'cards' }, cards)]
+      : empty('Nothing deployed yet', 'Drop in a zip of a built app, or connect an agent and ask it to deploy.', deployBtn()),
+  ];
+}
+
+// ---------- deploy a new app ----------
+async function newApp() {
+  const name = h('input', { id: 'new-name', name: 'name', required: true, maxlength: 60, placeholder: 'Team calendar' });
+  const zone = dropZone(f => { if (!name.value) name.value = f.name.replace(/\.(zip|tgz|tar\.gz|tar)$/i, '').replace(/[-_]+/g, ' '); });
+  const out = h('section');
+  const form = h('form', { class: 'card deployform', onsubmit: (e) => {
+    e.preventDefault();
+    const btn = form.querySelector('button[type=submit]'); btn.disabled = true;
+    progress(out, { name: name.value }, zone.file).finally(() => (btn.disabled = false));
+  } },
+    h('div', { class: 'fields' }, field('Name', name)), field('Bundle', zone),
+    h('div', { class: 'deployline' }, h('button', { class: 'btn deploy big', type: 'submit' }, 'Deploy'),
+      h('span', { class: 'muted small' }, 'Starts private. Only builders and admins can open it until you share it.')));
+  const shared = notePolicy(await api('/marketplace').catch(() => ({ listings: [] }))).listings.filter(l => !l.yours);
+  const tab = R.tab === 'market' ? 'market' : 'upload';
+  const ways = [['upload', 'Upload your own'], ['market', `From the marketplace${shared.length ? ` (${shared.length})` : ''}`]];
+  const body = tab === 'market'
+    ? [h('p', { class: 'sub' }, 'Apps other workspaces on this server share, free for now. Deploying one gives you your own copy, with its own address, sign-in, access, secrets and data. When its maker publishes an update, you choose when to deploy it.'),
+      ...(shared.length ? browser(shared, 'new-mk') : [empty('Nothing in the marketplace yet', 'When a workspace on this server lists an app, it shows up here, ready to deploy.')])]
+    : [form, out];
+  return [
+    head('Deploy an app', tab === 'market' ? 'Pick a ready-made app and deploy your own copy in one step.' : 'Name it, drop in the built folder as a zip and press the button. Hosting, HTTPS, sign-in and a guest list come with it.'),
+    h('nav', { class: 'tabs', 'aria-label': 'Ways to deploy' }, ways.map(([k, label]) =>
+      h('button', { class: tab === k ? 'on' : '', 'aria-current': tab === k ? 'page' : null, onclick: () => go('new', undefined, k) }, label))),
+    h('div', { class: 'tabbody' }, body),
+    h('section', {}, h('h2', {}, 'Or let an agent do it'), h('p', { class: 'sub' }, 'Connect Claude Code or another MCP client and ask it to deploy. It builds, zips and ships for you.'),
+      h('div', {}, h('button', { class: 'btn', onclick: () => go('agents') }, 'Connect an agent'))),
+  ];
+}
+
+// ---------- one app ----------
+const TABS = [['overview', 'Overview'], ['access', 'Access'], ['versions', 'Versions'], ['domains', 'Domains'], ['customize', 'Customize'], ['network', 'Network'], ['secrets', 'Secrets'], ['logs', 'Logs'], ['settings', 'Settings']];
+async function appPage() {
+  const slug = enc(R.slug), tab = TABS.some(([k]) => k === R.tab) ? R.tab : 'overview';
+  const s = await api(`/apps/${slug}`);
+  const body = await ({ overview: appOverview, access: appAccess, versions: appVersions, domains: appDomains, customize: appCustomize, network: appNetwork, secrets: appSecrets, logs: appLogs, settings: appSettings })[tab](s, slug);
+  return [
+    h('header', { class: 'head' }, h('div', {},
+      h('div', { class: 'crumbs' }, h('button', { class: 'link', onclick: () => go('apps') }, 'Apps'), ' / ', B.name),
+      h('h1', {}, s.title || s.name, pill(s), stageTag(s)),
+      h('p', { class: 'sub' }, h('span', { class: 'mono' }, s.url), ' ', h('button', { class: 'link', onclick: () => copy(s.url + '/') }, 'Copy'), ' · ',
+        h('a', { class: 'link', href: s.url + '/', target: '_blank', rel: 'noopener' }, 'Open')),
+      s.staging ? h('p', { class: 'sub' }, 'Staging: ', h('span', { class: 'mono' }, s.staging.url), ' ', h('button', { class: 'link', onclick: () => copy(s.staging.url + '/') }, 'Copy'), ' · ',
+        h('a', { class: 'link', href: s.staging.url + '/', target: '_blank', rel: 'noopener' }, 'Open')) : null),
+      h('button', { class: 'btn deploy', onclick: () => go('app', s.app, 'versions') }, 'Deploy update')),
+    h('nav', { class: 'tabs', 'aria-label': 'App sections' }, TABS.map(([k, label]) =>
+      h('button', { class: tab === k ? 'on' : '', 'aria-current': tab === k ? 'page' : null, onclick: () => go('app', s.app, k) }, label))),
+    h('div', { class: 'tabbody' }, body),
+  ];
+}
+async function appOverview(s, slug) {
+  const [ev, u] = await Promise.all([api(`/events?app=${slug}&limit=6`).catch(() => ({ events: [] })), api(`/apps/${slug}/usage?days=30`).catch(() => null)]);
+  const v = s.versions.find(x => x.live), last = s.versions[0];
+  const kv = (k, val) => h('div', {}, h('dt', {}, k), h('dd', {}, val));
+  return [
+    stagingNote(s, slug),
+    s.marketplace ? linked(s, slug) : null,
+    h('dl', { class: 'kv' },
+      kv('Health', s.status === 'paused' ? 'Paused, not serving' : v ? 'Serving' : 'Nothing deployed yet'),
+      kv('Serving', v ? `v${v.version}${v.note ? ' · ' + v.note : ''}` : 'Nothing yet'),
+      kv('Kind', v ? (v.kind === 'server' ? 'Server code' : 'Static site') : '—'),
+      kv('Staging', s.staging ? `v${s.staging.version}, waiting to be published` : 'Nothing waiting'),
+      kv('Who can open it', s.who_can_open),
+      kv('Last deploy', last ? `${ago(last.at)} by ${last.by}` : 'Never'),
+      kv('Versions kept', String(s.versions.length)),
+      u ? kv('Storage', [bytes(u.storage.total), [u.storage.data ? `${bytes(u.storage.data)} in its database` : '', u.storage.files ? `${bytes(u.storage.files)} in files` : '']
+        .filter(Boolean).join(', ').replace(/^(.+)$/, ' ($1)')].join('')) : null,
+      s.space ? kv('Space', s.space) : null),
+    u ? h('section', {}, sechead('Visits, last 30 days', h('button', { class: 'link', onclick: () => go('analytics', s.app) }, 'Full analytics')), h('div', { class: 'chart' }, spark(u.views, 640, 96)),
+      h('p', { class: 'muted small num' }, `${u.total_views} page views · ${u.total_visitors} visitors · ${u.views[u.views.length - 1]} today`)) : null,
+    h('section', {}, sechead('Recent activity', h('button', { class: 'link', onclick: () => go('log', s.app) }, 'Full log')),
+      ev.events.length ? h('ul', { class: 'list tight' }, ev.events.map(auditRow)) : h('p', { class: 'muted' }, 'Nothing yet.')),
+  ];
+}
+/** Where an installed app came from, and the update waiting for it. Updates are only ever deployed from here, by hand. */
+function linked(s, slug) {
+  const m = s.marketplace;
+  const accept = h('input', { type: 'checkbox', id: 'net-accept-update' });
+  const unlink = h('button', { class: 'link', onclick: act(async () => {
+    if (!confirm(`Stop following ${m.name}? ${s.name} keeps running as it is, and is no longer offered its updates.`)) return;
+    return api(`/apps/${slug}/marketplace`, { method: 'DELETE' });
+  }, { done: 'No longer linked' }) }, 'Stop following');
+  const from = [`Installed from the marketplace: `, h('b', {}, m.name), ` by ${m.publisher}. This copy runs release ${m.release}`, m.listed ? '.' : ', and the listing is no longer in the marketplace.'];
+  if (!m.update_available) return h('div', { class: 'note' }, h('div', {}, ...from, ' It is up to date.'), h('div', { class: 'acts' }, unlink));
+  return h('div', { class: 'note' },
+    h('div', {}, h('b', {}, `Release ${m.latest_release} of ${m.name} is available.`), ' ', ...from),
+    h('ul', { class: 'list tight' }, m.newer.map(r => h('li', {}, h('b', { class: 'num' }, 'Release ' + r.release), ' ', r.note || h('span', { class: 'muted' }, 'No note'),
+      h('span', { class: 'muted small' }, ` · ${ago(r.at)}`, r.kind === 'server' ? ' · server code' : '')))),
+    h('p', { class: 'muted small' }, 'Updates are never deployed on their own. Deploying makes the release the next version of this app; its access, secrets and data stay, and you can roll back from Versions.'),
+    (m.network_added || []).length ? h('div', { class: 'note warnnote' }, h('b', {}, `This update also sends data to ${m.network_added.length === 1 ? 'a new address' : 'new addresses'}:`), hostList(m.network_added),
+      h('label', { class: 'small' }, accept, ' I have checked these and want to allow them'), h('p', { class: 'muted small' }, policyLine())) : null,
+    h('div', { class: 'acts' }, h('button', { class: 'btn deploy', onclick: act(() => {
+      if ((m.network_added || []).length && !accept.checked) throw new Error('Tick the box to allow the new addresses, or keep the release you have.');
+      return api(`/apps/${slug}/marketplace/update`, { method: 'POST', body: { accept_network: accept.checked } });
+    }, { done: r => `Release ${r.marketplace.release} is live as v${r.version}` }) }, `Deploy release ${m.latest_release}`), unlink));
+}
+function appAccess(s, slug) {
+  const save = (body, done = 'Access saved') => act(() => api(`/apps/${slug}/access`, { method: 'POST', body: typeof body === 'function' ? body() : body }), { done });
+  // The password mode needs a password first, so picking it opens the password form instead of saving.
+  const set = (mode) => mode === 'password' && s.access !== 'password'
+    ? () => { pwBox.hidden = false; pw.focus(); }
+    : save({ access: mode });
+  const pw = h('input', { id: 'share-password', name: 'password', type: 'text', required: true, minlength: 6, maxlength: 128, autocomplete: 'off', spellcheck: 'false', placeholder: 'At least 6 characters' });
+  const pwBox = h('section', { hidden: s.access !== 'password' }, h('h2', {}, s.access === 'password' ? 'Password' : 'Choose a password'),
+    h('form', { class: 'inline', onsubmit: save(() => ({ access: 'password', password: pw.value }), s.access === 'password' ? 'Password changed' : 'Shared with a password') },
+      field(s.access === 'password' ? 'New password' : 'Password', pw, 'grow'), h('button', { class: 'btn' }, s.access === 'password' ? 'Change password' : 'Set password')),
+    h('p', { class: 'muted small' }, s.access === 'password'
+      ? 'Brod keeps only a hash, so it cannot show the password again. A new password signs out everyone who used the old one.'
+      : 'Anyone with the link and this password can open the app, without an account. Send them separately.'));
+  const roles = Object.fromEntries((s.roles || []).map(r => [r, r]));
+  const who = h('input', { id: 'share-who', name: 'email', required: true, placeholder: 'name@example.com, group:sales or @example.com' });
+  const role = select('role', roles, s.roles?.[s.roles.length - 1], { id: 'share-role', label: 'Role' });
+  const subject = (v) => v.startsWith('group:') ? { group: v.slice(6) } : v.startsWith('@') ? { domain: v.slice(1) } : { email: v };
+  return [
+    h('section', {}, h('h2', {}, 'Who can open it'),
+      h('div', { class: 'choices' }, Object.entries(ACCESS).map(([m, [title, text]]) => h('label', { class: 'choice' + (s.access === m ? ' on' : '') },
+        h('input', { type: 'radio', name: 'mode', value: m, checked: s.access === m, onchange: set(m) }), h('span', {}, h('b', {}, title), h('small', {}, text))))),
+      h('div', { class: 'sharebar' }, h('span', { class: 'mono' }, s.url), h('button', { class: 'btn', onclick: () => copy(s.url + '/') }, 'Copy link'))),
+    pwBox,
+    h('section', {}, h('h2', {}, 'Share with someone'),
+      h('form', { class: 'inline', onsubmit: act(() => api(`/apps/${slug}/access`, { method: 'POST', body: { add: [{ ...subject(who.value.trim()), role: role.value }] } }), { done: 'Shared' }) },
+        field('Person, group or domain', who, 'grow'), field('Role', role), h('button', { class: 'btn' }, 'Share')),
+      h('p', { class: 'muted small' }, 'To share with someone outside the workspace, invite them as a guest from People.')),
+    h('section', {}, h('h2', {}, 'Shared with'), s.shared_with.length ? h('div', { class: 'scroll' }, h('table', {},
+      h('thead', {}, h('tr', {}, h('th', {}, 'Who'), h('th', {}, 'Role'), h('th', { class: 'right' }, ''))),
+      h('tbody', {}, s.shared_with.map(g => h('tr', {}, h('td', {}, h('b', {}, grantLabel(g))), h('td', {}, h('span', { class: 'tag' }, g.role)),
+        h('td', { class: 'right' }, h('button', { class: 'link danger', onclick: act(() => { const { role, ...rest } = g; return api(`/apps/${slug}/access`, { method: 'POST', body: { remove: [rest] } }); }, { done: 'Removed' }) }, 'Remove'))))))) :
+      h('p', { class: 'muted' }, 'Nobody yet. The setting above decides who gets in.')),
+  ];
+}
+function appVersions(s, slug) {
+  const note = h('input', { id: 'ver-note', name: 'note', maxlength: 200, placeholder: 'Fix the export button' });
+  const zone = dropZone();
+  const out = h('div');
+  // Once an app is live, an update goes to staging first unless the builder picks otherwise.
+  const ENVS = { staging: ['Staging first', 'Try it at the staging address. Visitors keep the live version until you publish.'], production: ['Live now', 'Visitors get it on their next request.'] };
+  const pick = s.live_version ? 'staging' : 'production';
+  const envs = h('div', { class: 'choices', role: 'radiogroup', 'aria-label': 'Where it goes' }, Object.entries(ENVS).map(([k, [title, text]]) => {
+    const input = h('input', { type: 'radio', name: 'environment', value: k, checked: k === pick });
+    const box = h('label', { class: 'choice' + (k === pick ? ' on' : '') }, input, h('span', {}, h('b', {}, title), h('small', {}, text)));
+    input.addEventListener('change', () => envs.querySelectorAll('.choice').forEach(c => c.classList.toggle('on', c.contains(envs.querySelector('input:checked')))));
+    return box;
+  }));
+  const form = h('form', { class: 'card deployform', onsubmit: (e) => {
+    e.preventDefault();
+    const btn = form.querySelector('button[type=submit]'); btn.disabled = true;
+    const environment = form.querySelector('input[name=environment]:checked')?.value || pick;
+    progress(out, { app: s.app, note: note.value, environment }, zone.file, () => setTimeout(render, 2500)).finally(() => (btn.disabled = false));
+  } }, field('Bundle', zone), envs, h('div', { class: 'inline' }, field('What changed', note, 'grow'), h('button', { class: 'btn deploy', type: 'submit' }, 'Deploy update')));
+  return [
+    stagingNote(s, slug),
+    h('section', {}, h('h2', {}, 'Deploy an update'), form, out),
+    h('section', {}, h('h2', {}, 'Versions'), s.versions.length ? [h('ul', { class: 'list' }, s.versions.map(v => h('li', {},
+      h('div', { class: 'grow' }, h('b', { class: 'num' }, 'v' + v.version), ' ', v.note || h('span', { class: 'muted' }, 'No note'),
+        h('div', { class: 'muted small' }, `${v.by} · ${when(v.at)} · ${v.files} files, ${size(v.bytes)}`, v.kind === 'server' ? ' · server code' : '')),
+      v.live ? h('span', { class: 'pill ok' }, h('i'), 'Serving') : v.staging ? h('span', { class: 'pill warn' }, h('i'), 'On staging') : h('span', { class: 'pill idle' }, h('i'), 'Kept'),
+      v.live || v.staging ? null : h('button', { class: 'btn', onclick: act(() => api(`/apps/${slug}/rollback`, { method: 'POST', body: { version: v.version } }), { done: `v${v.version} is live` }) }, `Roll back to v${v.version}`),
+      v.live || v.staging ? null : h('button', { class: 'link danger', onclick: act(async () => {
+        if (!confirm(`Delete v${v.version} of ${s.name}? You can no longer roll back to it.`)) return;
+        return api(`/apps/${slug}/versions/${v.version}`, { method: 'DELETE' });
+      }, { done: r => `Deleted v${r.deleted}, freed ${bytes(r.freed_bytes)}` }) }, 'Delete')))),
+      h('p', { class: 'muted small' }, `Every version is kept until you delete it, and counts toward storage (${bytes(s.versions.reduce((t, v) => t + v.bytes, 0))} here). Rolling back swaps what visitors get right away and builds nothing.`)] : h('p', { class: 'muted' }, 'No versions yet.')),
+  ];
+}
+// ---------- settings: what an app lets its workspace customise ----------
+/** One input for a setting the app declares in its brod.json, filled with its current value. */
+function settingInput(x, id) {
+  const v = x.value ?? x.default;
+  const t = x.type;
+  if (t === 'textarea') return h('textarea', { id, name: x.key, rows: 3, maxlength: 4000, value: v ?? '' });
+  if (t === 'boolean') return h('input', { id, name: x.key, type: 'checkbox', checked: Boolean(v) });
+  if (t === 'select') return select(x.key, Object.fromEntries(x.options.map(o => [o, o])), v ?? '', { id });
+  if (t === 'number') return h('input', { id, name: x.key, type: 'number', step: 'any', min: x.min, max: x.max, value: v ?? '' });
+  return h('input', { id, name: x.key, type: { color: 'color', url: 'url', email: 'email' }[t] || 'text', maxlength: t === 'text' ? 200 : null, value: v ?? '' });
+}
+/** The value an input holds, in the form the API takes. An empty field means "back to the default". */
+function settingValue(x, input) {
+  if (x.type === 'boolean') return input.checked;
+  const v = input.value.trim();
+  return v === '' ? null : x.type === 'number' ? Number(v) : v;
+}
+/** The changed fields of a settings form, as { key: value }. */
+function settingChanges(list, inputs) {
+  const out = {};
+  for (const x of list) {
+    if (x.type === 'image') continue;
+    const v = settingValue(x, inputs[x.key]);
+    if (v !== (x.value ?? x.default ?? (x.type === 'boolean' ? false : null))) out[x.key] = v;
+  }
+  return out;
+}
+function appCustomize(s, slug) {
+  const list = s.settings || [];
+  const intro = h('p', { class: 'sub' }, 'What the maker of this app lets you change without touching its code, such as its name, logo or colours. Changes show on the next page load; nothing is redeployed.');
+  if (!list.length) return h('section', {}, h('h2', {}, 'Customize'), intro,
+    empty('Nothing to customise', ['This app declares no settings. Whoever builds it can add some in a ', h('span', { class: 'mono' }, 'brod.json'), ' file at the top of its bundle; the app then reads the values with ', h('span', { class: 'mono' }, 'Brod.settings()'), '.']));
+  const inputs = {};
+  const rows = list.filter(x => x.type !== 'image').map(x => {
+    const id = 'set-' + x.key;
+    inputs[x.key] = settingInput(x, id);
+    return h('div', {}, field(x.label, inputs[x.key]),
+      h('p', { class: 'muted small' }, [x.help, x.customised ? `Set ${ago(x.updated)} by ${x.by}.` : 'Default.'].filter(Boolean).join(' '), ' ',
+        x.customised ? h('button', { class: 'link', type: 'button', onclick: act(() => api(`/apps/${slug}/settings`, { method: 'PATCH', body: { [x.key]: null } }), { done: 'Back to the default' }) }, 'Use the default') : null));
+  });
+  const images = list.filter(x => x.type === 'image').map(x => {
+    const file = h('input', { id: 'set-' + x.key, type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif' });
+    const src = x.customised ? `/v1/apps/${slug}/settings/${enc(x.key)}?workspace=${enc(B.workspace)}&v=${enc(x.value)}` : null;
+    return h('li', {},
+      src ? h('img', { src, alt: x.label, style: 'max-height:48px;max-width:96px;border-radius:4px' }) : h('span', { class: 'tag' }, x.value ? 'App default' : 'None'),
+      h('span', { class: 'grow' }, h('b', {}, x.label), x.help ? h('div', { class: 'muted small' }, x.help) : null),
+      field('Upload', file),
+      h('button', { class: 'btn', onclick: act(async () => {
+        const f = file.files[0];
+        if (!f) throw new Error('Choose a picture first.');
+        const r = await fetch(`/v1/apps/${slug}/settings/${enc(x.key)}`, { method: 'PUT', credentials: 'same-origin', headers: { 'x-brod-workspace': B.workspace, 'content-type': f.type || 'application/octet-stream' }, body: f });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.error?.message || `${r.status} ${r.statusText}`);
+        return data;
+      }, { done: `${x.label} saved` }) }, 'Save'),
+      x.customised ? h('button', { class: 'link', onclick: act(() => api(`/apps/${slug}/settings/${enc(x.key)}`, { method: 'DELETE' }), { done: 'Back to the default' }) }, 'Use the default') : null);
+  });
+  return h('section', {}, h('h2', {}, 'Customize'), intro,
+    rows.length ? h('form', { class: 'stack', onsubmit: act(async () => {
+      const body = settingChanges(list, inputs);
+      if (!Object.keys(body).length) throw new Error('Nothing changed.');
+      return api(`/apps/${slug}/settings`, { method: 'PATCH', body });
+    }, { done: 'Settings saved' }) }, rows, h('div', {}, h('button', { class: 'btn' }, 'Save'))) : null,
+    images.length ? [h('h3', {}, 'Pictures'), h('ul', { class: 'list tight' }, images), h('p', { class: 'muted small' }, 'PNG, JPEG, WebP or GIF, up to 1 MB each. They count toward your storage.')] : null);
+}
+// ---------- network: where an app may send data ----------
+/** What a policy means, in a sentence, for someone deciding whether to trust an app. */
+function policyLine(policy = NETWORK_POLICY) {
+  return policy === 'enforce' ? 'Brod blocks every other address, in the browser and in server code.'
+    : policy === 'off' ? 'This server does not check where apps send data.'
+    : 'Brod records requests to any other address and shows them to the app\'s owners. It does not block them yet.';
+}
+/** The outside hosts an app declares, as a short list people can read before trusting it. */
+function hostList(hosts) {
+  return hosts.length ? h('ul', { class: 'list tight' }, hosts.map(x => h('li', {}, h('span', { class: 'mono' }, x)))) : null;
+}
+function appNetwork(s) {
+  const n = s.network || { policy: NETWORK_POLICY, declared: [], undeclared: [] };
+  NETWORK_POLICY = n.policy;
+  const example = JSON.stringify({ network: n.declared.length ? n.declared : ['api.example.com'] }, null, 2);
+  return [
+    h('section', {}, h('h2', {}, 'Where this app sends data'),
+      h('p', { class: 'sub' }, 'An app may only talk to its own address and the outside hosts it declares in the ', h('span', { class: 'mono' }, 'network'), ' list of its ', h('span', { class: 'mono' }, 'brod.json'), '. ', policyLine(n.policy)),
+      n.declared.length ? [h('p', {}, 'It declares:'), hostList(n.declared)] : h('p', {}, h('b', {}, 'No outside services.'), ' It may only talk to its own address.')),
+    h('section', {}, h('h2', {}, 'Undeclared requests'),
+      h('p', { class: 'sub' }, n.policy === 'enforce' ? 'Requests Brod refused because the app does not declare the host.' : 'Requests to hosts the app does not declare. They still work for now. Declare the ones it needs, and find out why it makes the others.'),
+      n.undeclared.length ? h('div', { class: 'scroll' }, h('table', {},
+        h('thead', {}, h('tr', {}, ['Host', 'From', 'Requests', 'Last seen', ''].map(x => h('th', {}, x)))),
+        h('tbody', {}, n.undeclared.map(r => h('tr', {},
+          h('td', { class: 'mono' }, r.host), h('td', {}, r.source === 'server' ? 'Server code' : 'Browser'),
+          h('td', { class: 'num' }, String(r.count)), h('td', {}, ago(r.last)),
+          h('td', {}, h('span', { class: 'tag' }, r.blocked ? 'Blocked' : 'Allowed, recorded')))))))
+        : h('p', { class: 'muted' }, 'None recorded.'),
+      h('p', { class: 'muted small' }, 'To declare hosts, add them to brod.json at the top of the app\'s bundle and deploy a new version:'),
+      h('pre', { class: 'mono small' }, example)),
+  ];
+}
+function appSecrets(s, slug) {
+  const name = h('input', { id: 'env-key', name: 'name', required: true, placeholder: 'STRIPE_KEY', pattern: '[A-Z][A-Z0-9_]*', autocomplete: 'off' });
+  const val = h('input', { id: 'env-val', name: 'value', type: 'password', required: true, autocomplete: 'new-password' });
+  return h('section', {}, h('h2', {}, 'Secrets'), h('p', { class: 'sub' }, 'Server code reads these as environment variables. Values can be replaced but never read back, here or anywhere else.'),
+    (s.secrets || []).length ? h('ul', { class: 'list tight' }, s.secrets.map(x => h('li', {},
+      h('span', { class: 'grow' }, h('span', { class: 'mono' }, h('b', {}, x.name), ' = ••••••••'), h('div', { class: 'muted small' }, `set ${ago(x.updated)} by ${x.by}`)),
+      h('span', { class: 'tag' }, 'secret'),
+      h('button', { class: 'link danger', onclick: act(() => api(`/apps/${slug}/secrets/${enc(x.name)}`, { method: 'DELETE' }), { done: 'Secret removed' }) }, 'Remove')))) : null,
+    h('form', { class: 'inline', onsubmit: act(() => api(`/apps/${slug}/secrets/${enc(name.value.trim())}`, { method: 'PUT', body: { value: val.value } }), { done: 'Secret saved' }) },
+      field('Name', name), field('Value', val, 'grow'), h('button', { class: 'btn' }, 'Save')));
+}
+// ---------- custom domains ----------
+/** One domain: its status, the DNS records to create, and verify and remove buttons. */
+function domainCard(d) {
+  const name = d.domain.replace(/^\*\./, '');
+  const live = d.status === 'verified';
+  const verify = act(() => api(`/domains/${enc(name)}/verify`, { method: 'POST' }),
+    { done: r => r.status === 'verified' ? `${d.domain} is verified` : 'The TXT record is not there yet. DNS changes can take a few minutes.' });
+  const remove = act(async () => {
+    if (!confirm(`Stop serving ${d.domain}? Visitors there get nothing until it is added and verified again.`)) return;
+    return api(`/domains/${enc(name)}`, { method: 'DELETE' });
+  }, { done: 'Domain removed' });
+  return h('section', { class: 'card' },
+    h('div', { class: 'cardtop' }, h('div', {},
+      h('h3', { class: 'mono' }, d.domain),
+      h('p', { class: 'muted small' }, d.kind === 'workspace' ? 'Every app in the workspace, at <app>.' + name : ['Serves ', d.app ? appLink(d.app) : 'an app'])),
+      live ? h('span', { class: 'pill ok' }, h('i'), 'Verified') : h('span', { class: 'pill warn' }, h('i'), 'Waiting for DNS')),
+    live ? h('p', { class: 'small' }, d.kind === 'workspace' ? h('span', { class: 'mono' }, d.url) :
+      h('a', { class: 'link mono', href: d.url + '/', target: '_blank', rel: 'noopener' }, d.url)) :
+      h('p', { class: 'small' }, 'Create these records at your DNS provider, then verify. Nothing is served here until then.'),
+    h('div', { class: 'scroll' }, h('table', {},
+      h('thead', {}, h('tr', {}, h('th', {}, 'Type'), h('th', {}, 'Name'), h('th', {}, 'Value'), h('th', { class: 'right' }, ''))),
+      h('tbody', {}, d.dns.map(r => h('tr', {}, h('td', {}, h('span', { class: 'tag' }, r.type)), h('td', { class: 'mono' }, r.name), h('td', { class: 'mono' }, r.value),
+        h('td', { class: 'right' }, h('button', { class: 'link', onclick: () => copy(r.value) }, 'Copy'))))))),
+    live ? null : h('p', { class: 'muted small' }, 'A bare domain such as example.com cannot have a CNAME: use your DNS provider\'s ALIAS or CNAME flattening instead.'),
+    h('div', { class: 'cardfoot' }, live ? null : h('button', { class: 'btn', onclick: verify }, 'Verify'),
+      h('button', { class: 'link danger', onclick: remove }, 'Remove')));
+}
+async function appDomains(s, slug) {
+  const { domains } = await api('/domains');
+  const own = domains.filter(d => d.app === s.app);
+  const viaWorkspace = (s.domains || []).filter(d => !own.some(o => o.domain === d.domain));
+  const input = h('input', { id: 'dom-name', name: 'domain', required: true, placeholder: 'shop.example.com', autocomplete: 'off' });
+  return [
+    h('section', {}, h('h2', {}, 'Custom domains'), h('p', { class: 'sub' }, 'Serve this app at a domain you own. Sign-in and access work the same as on its own address.'),
+      own.length ? h('div', { class: 'stack' }, own.map(domainCard)) : null,
+      h('form', { class: 'inline', onsubmit: act(() => api('/domains', { method: 'POST', body: { domain: input.value.trim(), app: s.app } }), { done: 'Domain added. Now create the DNS records.' }) },
+        field('Domain', input, 'grow'), h('button', { class: 'btn' }, 'Add domain'))),
+    viaWorkspace.length ? h('section', {}, h('h2', {}, 'From workspace domains'), h('ul', { class: 'list tight' }, viaWorkspace.map(d => h('li', {},
+      h('span', { class: 'grow mono' }, d.domain), d.status === 'verified' ? h('span', { class: 'pill ok' }, h('i'), 'Verified') : h('span', { class: 'pill warn' }, h('i'), 'Waiting for DNS'))))) : null,
+  ];
+}
+async function domains() {
+  const [{ domains }, apps] = await Promise.all([api('/domains'), api('/apps')]);
+  const input = h('input', { id: 'dom-new', name: 'domain', required: true, placeholder: 'shop.example.com', autocomplete: 'off' });
+  const target = select('app', { ...Object.fromEntries(apps.apps.map(a => [a.app, a.name])), ...(ADMIN ? { '*': 'Every app (*.domain)' } : {}) }, apps.apps[0]?.app ?? '*', { id: 'dom-app', label: 'Serves' });
+  const add = act(() => {
+    const d = input.value.trim().replace(/^\*\./, '');
+    return api('/domains', { method: 'POST', body: target.value === '*' ? { domain: '*.' + d } : { domain: d, app: target.value } });
+  }, { done: 'Domain added. Now create the DNS records.' });
+  return [
+    head('Domains', 'Serve apps at domains you own: one domain for one app, or ' + (ADMIN ? '' : 'as an admin ') + 'a whole domain for every app, as <app>.apps.example.com.'),
+    domains.length ? h('div', { class: 'stack' }, domains.map(domainCard)) : empty('No custom domains yet', 'Add one below, then create the two DNS records it shows.'),
+    h('section', {}, h('h2', {}, 'Add a domain'), h('form', { class: 'inline', onsubmit: add },
+      field('Domain', input, 'grow'), field('Serves', target), h('button', { class: 'btn' }, 'Add domain'))),
+  ];
+}
+
+async function appLogs(s, slug) {
+  const logs = await api(`/apps/${slug}/logs`).catch(() => null);
+  const reqs = logs?.requests || [];
+  if (!reqs.length) return empty('No requests logged', 'Server apps log each request here, with anything the code printed. Static sites have no logs.');
+  return h('div', { class: 'scroll' }, h('pre', { class: 'logs' }, reqs.slice(0, 80).map(r => {
+    const bad = Number(r.status) >= 500 || r.exceptions.length || r.outcome === 'exception';
+    const lines = [...r.logs, ...r.exceptions.map(x => `${x.name}: ${x.message}`)].map(l => '\n      ' + l).join('');
+    return h('span', { class: 'lg' + (bad ? ' error' : '') }, h('span', { class: 'muted' }, when(r.at)), `  ${String(r.status ?? r.outcome).padEnd(4)} ${r.request}${lines}\n`);
+  })));
+}
+async function appSettings(s, slug) {
+  const { spaces } = await api('/spaces').catch(() => ({ spaces: [] }));
+  const spaceSel = select('space', { '': 'No space', ...Object.fromEntries(spaces.map(x => [x.name, x.name])) }, s.space || '', { id: 'app-space', label: 'Space' });
+  const title = h('input', { id: 'br-title', name: 'title', maxlength: 60, value: s.title || s.name });
+  const welcome = h('input', { id: 'br-welcome', name: 'welcome', maxlength: 200, value: s.welcome || '', placeholder: 'We email you a link. No password needed.' });
+  const pt = h('h3', {}, title.value), pw = h('p', { class: 'muted' }, welcome.value || welcome.placeholder);
+  title.addEventListener('input', () => (pt.textContent = title.value || s.name));
+  welcome.addEventListener('input', () => (pw.textContent = welcome.value || welcome.placeholder));
+  const paused = s.status === 'paused';
+  const confirmBox = h('input', { id: 'del-confirm', autocomplete: 'off', placeholder: s.app });
+  const asking = R.ask === 'delete:' + s.app;
+  return [
+    h('section', {}, h('h2', {}, 'Sign-in page'), h('p', { class: 'sub' }, 'Shown to visitors before they get in. Saving does not redeploy.'),
+      h('div', { class: 'split' },
+        h('form', { class: 'stack', onsubmit: act(() => api(`/apps/${slug}`, { method: 'PATCH', body: { title: title.value, welcome: welcome.value } }), { done: 'Saved' }) },
+          field('Title', title), field('Welcome line', welcome), h('div', {}, h('button', { class: 'btn' }, 'Save'))),
+        h('div', { class: 'gate', 'aria-hidden': 'true' }, h('div', { class: 'gatebar' }), pt, pw, h('div', { class: 'fakeinput' }, 'name@example.com'), h('div', { class: 'fakebtn' }, 'Email me a link')))),
+    h('section', {}, h('h2', {}, 'Space'), h('p', { class: 'sub' }, 'Everyone in the space can open the app, with their space role, unless the app is private.'),
+      spaces.length ? h('form', { class: 'inline', onsubmit: act(() => api(`/apps/${slug}/space`, { method: 'POST', body: { space: spaceSel.value } }), { done: 'Space saved' }) },
+        field('Space', spaceSel), h('button', { class: 'btn' }, 'Save'))
+        : h('p', { class: 'muted' }, ADMIN ? 'No spaces yet. ' : 'No spaces yet. An admin can create them. ', ADMIN ? h('button', { class: 'link', onclick: () => go('spaces') }, 'Create one') : null)),
+    h('section', {}, h('h2', {}, 'Running'),
+      h('div', { class: 'acts' },
+        h('button', { class: 'btn', onclick: act(() => api(`/apps/${slug}/${paused ? 'resume' : 'pause'}`, { method: 'POST', body: {} }), { done: paused ? 'Resumed' : 'Paused' }) }, paused ? 'Resume' : 'Pause'),
+        asking ? null : h('button', { class: 'btn dangerbtn', onclick: () => { R.ask = 'delete:' + s.app; render(); } }, 'Delete app')),
+      asking ? h('form', { class: 'note warnnote', onsubmit: act(async () => {
+        if (confirmBox.value.trim() !== s.app) throw new Error(`Type ${s.app} to confirm.`);
+        await api(`/apps/${slug}`, { method: 'DELETE' });
+        toast(`${s.name} deleted`); go('apps');
+      }, { redraw: false }) }, h('b', {}, `This deletes ${s.name}, every version and all of its data.`),
+        h('div', { class: 'inline' }, field(`Type ${s.app} to confirm`, confirmBox, 'grow'), h('button', { class: 'btn dangerbtn' }, `Delete ${s.name} for everyone`),
+          h('button', { class: 'btn quiet', type: 'button', onclick: () => { R.ask = null; render(); } }, 'Keep it'))) : null,
+      h('p', { class: 'muted small' }, 'Paused apps refuse visitors and do not count toward your plan. Deleting removes the address, versions, secrets and guest list.')),
+  ];
+}
+
+// ---------- people ----------
+async function people() {
+  const [ppl, invites, apps] = await Promise.all([api('/people'), api('/invites'), api('/apps')]);
+  const roles = ADMIN ? { member: 'member', builder: 'builder', admin: 'admin', guest: 'guest (one app)' } : { guest: 'guest (one app)' };
+  const email = h('input', { id: 'inv-email', name: 'email', type: 'email', required: true, placeholder: 'name@example.com' });
+  const role = select('role', roles, ADMIN ? 'member' : 'guest', { id: 'inv-role', label: 'Role' });
+  const appSel = select('app', { '': 'No app', ...Object.fromEntries(apps.apps.map(a => [a.app, a.name])) }, '', { id: 'inv-app', label: 'App' });
+  const appRole = h('select', { id: 'inv-app-role', name: 'app_role' });
+  const appRoleField = field('App role', appRole);
+  const fillRoles = () => { const a = apps.apps.find(x => x.app === appSel.value); appRole.replaceChildren(...(a?.roles || []).map(r => h('option', { value: r }, r))); appRoleField.hidden = !a; };
+  appSel.addEventListener('change', fillRoles); fillRoles();
+  const invite = h('form', { class: 'inline', onsubmit: act(async () => {
+    const body = { email: email.value, role: role.value };
+    if (appSel.value) { body.app = appSel.value; body.app_role = appRole.value; }
+    return api('/invites', { method: 'POST', body });
+  }, { done: r => r.granted ? `${r.email} can now open ${r.granted.app}` : `Invitation sent to ${r.email || email.value}` }) },
+    field('Email', email, 'grow'), field('Role', role), field('Give access to', appSel), appRoleField, h('button', { class: 'btn deploy' }, 'Send invite'));
+
+  const rows = ppl.people.map(p => {
+    const you = p.email === B.email;
+    const rs = select('role', { admin: 'admin', builder: 'builder', member: 'member', guest: 'guest' }, p.role, { class: 'mini', label: `Role of ${p.email}` });
+    if (ADMIN && !you) rs.addEventListener('change', act(() => api(`/people/${enc(p.email)}`, { method: 'PATCH', body: { role: rs.value } }), { done: 'Role changed' }));
+    else rs.disabled = true;
+    return h('tr', {},
+      h('td', {}, h('b', {}, p.name || p.email.replace(/@.*/, '')), you ? [' ', h('span', { class: 'tag' }, 'you')] : null, h('div', { class: 'mono small muted' }, p.email)),
+      h('td', {}, p.groups?.length ? p.groups.map(g => h('span', { class: 'tag', style: 'margin-right:4px' }, g)) : h('span', { class: 'muted' }, '—')),
+      h('td', {}, rs),
+      h('td', { class: 'right' }, ADMIN && !you ? h('button', { class: 'link danger', onclick: act(async () => {
+        if (!confirm(`Remove ${p.email} from ${B.name}? They lose access to every app here.`)) return;
+        return api(`/people/${enc(p.email)}`, { method: 'DELETE' });
+      }, { done: 'Removed' }) }, 'Remove') : null));
+  });
+  return [
+    head('People', 'Everyone in the workspace and what they can do. Members open its apps, builders deploy them, admins run the workspace.'),
+    h('section', {}, h('h2', {}, ADMIN ? 'Invite someone' : 'Invite a guest to an app'), h('p', { class: 'sub' }, 'They get an email with a sign-in link. Pick an app to give them access to it straight away.'), invite),
+    h('section', {}, sechead('Members', h('span', { class: 'muted small' }, `${ppl.people.length} ${ppl.people.length === 1 ? 'person' : 'people'}`)),
+      h('div', { class: 'scroll' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Person'), h('th', {}, 'Groups'), h('th', {}, 'Role'), h('th', { class: 'right' }, ''))), h('tbody', {}, rows)))),
+    h('section', {}, h('h2', {}, 'Pending invites'), invites.pending.length ? h('ul', { class: 'list tight' }, invites.pending.map(i => h('li', {},
+      h('span', { class: 'grow' }, h('span', { class: 'mono' }, i.email), ' ', h('span', { class: 'tag' }, i.app ? `${i.app} (${i.app_role})` : i.role),
+        h('div', { class: 'muted small' }, `invited by ${i.invited_by} · expires ${when(i.expires_at)}`)),
+      h('button', { class: 'link danger', onclick: act(() => api(`/invites/${enc(i.id)}`, { method: 'DELETE' }), { done: 'Invite revoked' }) }, 'Revoke')))) :
+      h('p', { class: 'muted' }, 'None. Everyone you invited has joined.')),
+  ];
+}
+
+// ---------- groups ----------
+async function groups() {
+  const { groups } = await api('/groups');
+  const name = h('input', { id: 'grp-name', name: 'name', required: true, placeholder: 'sales' });
+  return [
+    head('Groups', 'Share an app with a group instead of person by person. Add someone once and they get every app shared with the group.'),
+    groups.length ? h('div', { class: 'stack' }, groups.map(g => {
+      const add = h('input', { name: 'email', type: 'email', required: true, placeholder: 'name@example.com', id: 'grp-add-' + g.name });
+      const members = g.people || [];
+      return h('section', { class: 'card' }, sechead(g.name, h('span', { class: 'muted small' }, `${members.length} ${members.length === 1 ? 'person' : 'people'}`)),
+        members.length ? h('ul', { class: 'list tight' }, members.map(m => h('li', {}, h('span', { class: 'grow mono' }, m),
+          ADMIN ? h('button', { class: 'link danger', onclick: act(() => api(`/groups/${enc(g.name)}/members/${enc(m)}`, { method: 'DELETE' }), { done: 'Removed' }) }, 'Remove') : null))) :
+          h('p', { class: 'muted' }, 'Nobody in this group yet.'),
+        ADMIN ? h('form', { class: 'inline', onsubmit: act(() => api(`/groups/${enc(g.name)}/members`, { method: 'POST', body: { email: add.value } }), { done: 'Added' }) },
+          field('Add by email', add, 'grow'), h('button', { class: 'btn' }, 'Add to group'),
+          h('button', { class: 'btn quiet', type: 'button', onclick: act(async () => { if (confirm(`Delete the group ${g.name}?`)) return api(`/groups/${enc(g.name)}`, { method: 'DELETE' }); }, { done: 'Group deleted' }) }, 'Delete group')) : null);
+    })) : empty('No groups yet', ADMIN ? 'Create one below to share apps with a team at once.' : 'An admin can create groups.'),
+    ADMIN ? h('section', {}, h('h2', {}, 'New group'), h('form', { class: 'inline', onsubmit: act(() => api('/groups', { method: 'POST', body: { name: name.value } }), { done: 'Group created' }) },
+      field('Name', name), h('button', { class: 'btn' }, 'Create group'))) : null,
+  ];
+}
+
+// ---------- activity ----------
+async function activity() {
+  const [{ events }, apps] = await Promise.all([api('/events?limit=200' + (R.slug ? '&app=' + enc(R.slug) : '')), api('/apps')]);
+  const appSel = select('app', { '': 'All apps', ...Object.fromEntries(apps.apps.map(a => [a.app, a.name])) }, R.slug || '', { id: 'f-app', label: 'App' });
+  const only = h('input', { type: 'checkbox', id: 'f-denied', checked: R.tab === 'refused' });
+  const refilter = () => go('log', appSel.value || undefined, only.checked ? 'refused' : undefined);
+  appSel.addEventListener('change', refilter); only.addEventListener('change', refilter);
+  const rows = events.filter(e => R.tab !== 'refused' || DENIED.has(e.action));
+  return [
+    head('Activity', 'Every deploy, share, invite and refused visitor, newest first.'),
+    h('div', { class: 'inline' }, field('App', appSel), h('label', { class: 'check' }, only, 'Only refusals and failures')),
+    rows.length ? h('ul', { class: 'list tight' }, rows.map(auditRow)) : h('p', { class: 'muted' }, 'Nothing matches.'),
+  ];
+}
+
+// ---------- marketplace ----------
+const mediaSrc = (m) => `${m.url}?workspace=${enc(B.workspace)}`;
+/** A preview as an image or a video; a video shows `poster` (a screenshot of the same listing) until it plays. */
+function mediaEl(m, thumb, poster) {
+  if (m.kind === 'video') return h('video', { src: mediaSrc(m), poster: poster ? mediaSrc(poster) : null, muted: true, playsinline: true, preload: thumb ? 'none' : 'metadata', controls: !thumb, 'aria-label': m.caption || 'Screencast' });
+  return h('img', { src: mediaSrc(m), alt: thumb ? '' : (m.caption || 'Screenshot'), loading: 'lazy' });
+}
+/** Screenshots and screencasts of a listing: the first one large, the rest as thumbnails that swap in. */
+function preview(l) {
+  if (!l.media?.length) return null;
+  const poster = l.media.find(m => m.kind === 'image');
+  const big = h('div', { class: 'shot' }, mediaEl(l.media[0], false, poster));
+  const cap = h('p', { class: 'muted small' }, l.media[0].caption || '');
+  const thumbs = l.media.length > 1 ? h('div', { class: 'thumbs' }, l.media.map((m, i) => h('button', {
+    type: 'button', class: i ? '' : 'on', 'aria-label': `Show ${m.kind === 'video' ? 'screencast' : 'screenshot'} ${i + 1}`,
+    onclick: (e) => { big.replaceChildren(mediaEl(m, false, poster)); cap.textContent = m.caption || ''; thumbs.querySelectorAll('button').forEach(b => b.classList.toggle('on', b === e.currentTarget)); },
+  }, mediaEl(m, true, poster), m.kind === 'video' ? h('span', { class: 'play', 'aria-hidden': 'true' }, '▶') : null))) : null;
+  return h('div', { class: 'preview' }, big, thumbs, l.media.some(m => m.caption) ? cap : null);
+}
+/** Add and remove a listing's screenshots and screencasts. */
+function mediaManager(l, auto) {
+  const file = h('input', { id: 'mk-media-' + l.listing, type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm,video/quicktime' });
+  const caption = h('input', { id: 'mk-cap-' + l.listing, name: 'caption', maxlength: 140, placeholder: 'A quick tour of the main screen' });
+  const add = act(async () => {
+    const f = file.files[0];
+    if (!f) throw new Error('Choose a screenshot or screencast first.');
+    if (f.size > 10 * 1048576) throw new Error('A preview can be at most 10 MB. Trim the screencast or lower its resolution.');
+    const r = await fetch(`/v1/listings/${enc(l.listing)}/media?caption=${enc(caption.value)}`, { method: 'POST', credentials: 'same-origin',
+      headers: { 'x-brod-workspace': B.workspace, 'content-type': f.type || 'application/octet-stream' }, body: f });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error?.message || `${r.status} ${r.statusText}`);
+    return data;
+  }, { done: r => r.kind === 'video' ? 'Screencast added' : 'Screenshot added' });
+  const made = l.media.some(m => m.source === 'auto');
+  const retake = auto ? h('button', { class: 'btn', onclick: act(() => api(`/listings/${enc(l.listing)}/previews`, { method: 'POST' }), { done: 'New previews taken' }) },
+    made ? 'Take them again' : 'Take previews now') : null;
+  return h('div', { class: 'stack' },
+    h('div', { class: 'sechead' }, h('h3', {}, 'Screenshots and screencasts'), retake),
+    auto ? h('p', { class: 'muted small' }, made
+      ? `Brod ran release ${l.previews_release} in an empty sandbox and took these itself: none of your data or secrets are in them. It takes new ones each time you publish a release.`
+      : 'Brod runs each release you publish in an empty sandbox and takes a screenshot, a phone screenshot and a short screencast itself, in a minute or so.') : null,
+    l.media.length ? h('ul', { class: 'medialist' }, l.media.map(m => h('li', {}, h('div', { class: 'shot' }, mediaEl(m, false, l.media.find(x => x.kind === 'image'))),
+      h('span', { class: 'small' }, m.caption || h('span', { class: 'muted' }, m.kind === 'video' ? 'Screencast' : 'Screenshot'), h('span', { class: 'muted' }, ` · ${m.source === 'auto' ? 'taken by Brod' : size(m.bytes)}`)),
+      h('button', { class: 'link danger', onclick: act(() => api(`/listings/${enc(l.listing)}/media/${enc(m.id)}`, { method: 'DELETE' }), { done: 'Removed' }) }, 'Remove'))))
+      : h('p', { class: 'muted small' }, auto ? 'None yet.' : 'None yet. A screenshot or a short screencast shows people what they get before they deploy it.'),
+    l.media.length < 6 ? h('form', { class: 'inline', onsubmit: add }, field('Screenshot or screencast', file), field('Caption', caption, 'grow'), h('button', { class: 'btn' }, 'Add')) : null,
+    h('p', { class: 'muted small' }, `${auto ? 'Add your own too: up' : 'Up'} to 6 in all, 10 MB each: PNG, JPEG, WebP or GIF screenshots, MP4, MOV or WebM screencasts. The first one is shown on the card.`));
+}
+/** A listing as a card. Deploying asks for the new app's name in place, then installs a private, linked copy here. */
+function listingCard(l) {
+  const foot = h('div', { class: 'cardfoot' });
+  const idle = () => foot.replaceChildren(...[
+    l.installed.length ? h('span', { class: 'small' }, 'In use as ', l.installed.flatMap((a, i) => [i ? ', ' : '', appLink(a)])) : null,
+    h('button', { class: 'btn' + (l.installed.length ? '' : ' deploy'), onclick: asking }, l.installed.length ? 'Deploy another copy' : 'Deploy')].filter(Boolean));
+  function asking() {
+    const name = h('input', { id: 'mk-name-' + l.listing, name: 'name', required: true, maxlength: 60, value: l.name });
+    // The settings its maker lets you change: filled with their defaults, so leaving them alone installs it as shipped.
+    const decl = l.settings || [], inputs = {};
+    const fields = decl.filter(x => x.type !== 'image').map(x => field(x.label, inputs[x.key] = settingInput(x, `mk-${l.listing}-${x.key}`)));
+    const pics = decl.filter(x => x.type === 'image').map(x => x.label);
+    // Where it sends data, said before anything is installed; a person ticks the box to allow it.
+    const hosts = l.network || [];
+    const accept = h('input', { type: 'checkbox', id: 'mk-net-' + l.listing });
+    foot.replaceChildren(h('form', { class: 'stack grow', onsubmit: act(async () => {
+      if (hosts.length && !accept.checked) throw new Error('Tick the box to allow where this app sends data, or leave it.');
+      const r = await api(`/marketplace/${enc(l.listing)}/install`, { method: 'POST', body: { name: name.value, settings: settingChanges(decl, inputs), accept_network: accept.checked } });
+      toast(`${r.name} is deployed, private for now`); go('app', r.app, pics.length ? 'customize' : undefined);
+    }, { redraw: false }) }, field('Name in ' + B.name, name),
+      fields.length ? [h('p', { class: 'muted small' }, 'Make it yours. You can change these later under the app\'s Customize tab.'), ...fields] : null,
+      pics.length ? h('p', { class: 'muted small' }, `Upload your own ${pics.join(', ').toLowerCase()} under Customize afterwards.`) : null,
+      hosts.length ? h('div', { class: 'note warnnote' }, h('b', {}, `${l.name} sends data to these outside services:`), hostList(hosts),
+        h('label', { class: 'small' }, accept, ' I have checked these and want to allow them'), h('p', { class: 'muted small' }, policyLine()))
+        : h('p', { class: 'muted small' }, `${l.name} declares no outside services: it may only talk to its own address in ${B.name}. ${policyLine()}`),
+      h('div', { class: 'acts' }, h('button', { class: 'btn deploy' }, `Deploy to ${B.name}`), h('button', { class: 'btn quiet', type: 'button', onclick: idle }, 'Cancel')),
+      (l.needs_secrets || []).length ? h('p', { class: 'muted small' }, `Afterwards, set ${l.needs_secrets.join(', ')} under the app's Secrets.`) : null));
+    name.focus(); name.select();
+  }
+  idle();
+  return h('li', { class: 'card', 'data-name': `${l.name} ${l.summary} ${l.description} ${l.publisher}`.toLowerCase() },
+    preview(l),
+    h('div', { class: 'cardtop' }, h('h3', {}, l.name), h('span', { class: 'tag' }, l.free ? 'Free' : money(l.price.amount, l.price.currency))),
+    h('div', { class: 'muted small' }, `by ${l.publisher} · release ${l.latest_release} · ${l.installs} ${l.installs === 1 ? 'install' : 'installs'}`),
+    l.summary ? h('p', {}, l.summary) : null,
+    l.description ? h('p', { class: 'muted small' }, l.description) : null,
+    h('div', { class: 'tags' }, h('span', { class: 'tag' }, l.kind === 'server' ? 'Server code' : 'Static site'),
+      (l.needs_secrets || []).length ? h('span', { class: 'tag', title: 'Set these on the app after deploying it' }, 'needs ' + l.needs_secrets.join(', ')) : null,
+      (l.settings || []).length ? h('span', { class: 'tag', title: 'Its maker lets you change these on your copy' }, 'customise ' + l.settings.map(x => x.label.toLowerCase()).join(', ')) : null,
+      h('span', { class: 'tag', title: policyLine() }, (l.network || []).length ? 'sends data to ' + l.network.join(', ') : 'no outside services')),
+    foot);
+}
+/** A search box over listing cards, filtering as you type. */
+function browser(listings, id) {
+  const q = h('input', { id: id + '-search', type: 'search', placeholder: 'Search by name, what it does or who made it', autocomplete: 'off' });
+  const cards = listings.map(listingCard);
+  const none = h('p', { class: 'muted', hidden: true }, 'Nothing matches. Try another word.');
+  q.addEventListener('input', () => {
+    const words = q.value.toLowerCase().split(/\s+/).filter(Boolean);
+    let shown = 0;
+    for (const c of cards) { c.hidden = !words.every(w => c.dataset.name.includes(w)); shown += !c.hidden; }
+    none.hidden = shown > 0;
+  });
+  return [h('label', { class: 'search' }, h('span', { class: 'sr' }, 'Search the marketplace'), q), h('ul', { class: 'cards' }, cards), none];
+}
+async function market() {
+  const [all, mine, apps] = await Promise.all([api('/marketplace').then(notePolicy), api('/listings'), api('/apps')]);
+  const others = all.listings.filter(l => !l.yours);
+  const waiting = apps.apps.filter(a => a.marketplace?.update_available);
+  const listedIds = new Set(mine.listings.map(l => l.app).filter(Boolean));
+  const listable = apps.apps.filter(a => a.live_version && !listedIds.has(a.app) && !a.marketplace);
+  const appSel = select('app', Object.fromEntries(listable.map(a => [a.app, `${a.name} (v${a.live_version})`])), listable[0]?.app, { id: 'mk-app', label: 'App' });
+  const summary = h('input', { id: 'mk-summary', name: 'summary', maxlength: 140, placeholder: 'Shared notes for a small team' });
+  const desc = h('textarea', { id: 'mk-desc', name: 'description', maxlength: 4000, rows: 3, placeholder: 'What it does, who it is for, and anything to set up after installing.' });
+
+  const own = mine.listings.map(l => {
+    const note = h('input', { id: 'mk-note-' + l.listing, name: 'note', maxlength: 200, placeholder: 'What changed' });
+    const src = apps.apps.find(a => a.app === l.app);
+    const behind = src && l.releases[0] && src.live_version !== l.releases[0].from_version;
+    return h('section', { class: 'card' },
+      h('div', { class: 'sechead' }, h('div', {}, h('h2', {}, l.name), h('p', { class: 'muted small' }, l.summary || 'No summary')),
+        h('span', { class: 'pill ' + (l.status === 'listed' ? 'ok' : 'idle') }, h('i'), l.status === 'listed' ? 'Listed' : 'Unlisted')),
+      h('p', { class: 'small muted' }, l.app ? ['From ', appLink(l.app), src ? ` (live v${src.live_version})` : ''] : 'The app it came from was deleted; its releases stay installable.',
+        ` · ${l.installs} ${l.installs === 1 ? 'install' : 'installs'} · Free`),
+      h('ul', { class: 'list tight' }, l.releases.slice(0, 5).map(r => h('li', {},
+        h('span', { class: 'grow' }, h('b', { class: 'num' }, 'Release ' + r.release), ' ', r.note, h('span', { class: 'muted small' }, ` · from v${r.from_version} · ${ago(r.at)} · ${size(r.bytes)}`))))),
+      l.app ? h('form', { class: 'inline', onsubmit: act(() => api(`/listings/${enc(l.listing)}/releases`, { method: 'POST', body: { note: note.value } }), { done: r => `Release ${r.published} published` }) },
+        field(behind ? `Publish live v${src.live_version} as release ${l.latest_release + 1}` : 'New release', note, 'grow'),
+        h('button', { class: 'btn' + (behind ? ' deploy' : '') }, 'Publish release')) : null,
+      h('p', { class: 'muted small' }, 'Installed copies are offered each new release. They only change when their own workspace deploys it.'),
+      h('p', { class: 'muted small' }, (l.network || []).length ? `Installers see and approve that it sends data to ${l.network.join(', ')}. A release that adds a host needs their approval again.` : 'It declares no outside services, so installers are told it only talks to its own address.'),
+      mediaManager(l, mine.auto_previews),
+      h('div', { class: 'acts' },
+        h('button', { class: 'btn', onclick: act(() => api(`/listings/${enc(l.listing)}`, { method: 'PATCH', body: { status: l.status === 'listed' ? 'unlisted' : 'listed' } }), { done: l.status === 'listed' ? 'Unlisted' : 'Listed' }) },
+          l.status === 'listed' ? 'Unlist' : 'List again'),
+        h('button', { class: 'btn quiet dangerbtn', onclick: act(async () => {
+          if (!confirm(`Delete ${l.name} from the marketplace? Its ${l.installs} installed ${l.installs === 1 ? 'copy keeps' : 'copies keep'} running, but get no more updates.`)) return;
+          return api(`/listings/${enc(l.listing)}`, { method: 'DELETE' });
+        }, { done: 'Listing deleted' }) }, 'Delete listing')));
+  });
+
+  return [
+    head('Marketplace', 'Apps that workspaces on this server share. Install a copy and it runs here, with your own address, sign-in, access, secrets and data. Every app is free for now.'),
+    waiting.length ? h('section', {}, h('h2', {}, 'Updates waiting'), h('ul', { class: 'list' }, waiting.map(a => h('li', {},
+      h('div', { class: 'grow' }, appLink(a.app, a.name), h('div', { class: 'muted small' }, `${a.marketplace.name}: release ${a.marketplace.release} → ${a.marketplace.latest_release}`)),
+      h('button', { class: 'btn', onclick: () => go('app', a.app) }, 'Review'))))) : null,
+    h('section', {}, h('h2', {}, 'Browse'),
+      others.length ? browser(others, 'mk') : empty('Nothing here yet', 'When another workspace lists an app, it shows up here.')),
+    h('section', {}, h('h2', {}, 'Your listings'), own.length ? h('div', { class: 'stack' }, own) : h('p', { class: 'muted' }, 'You have not listed anything yet.')),
+    h('section', {}, h('h2', {}, 'List an app'),
+      h('p', { class: 'sub' }, 'Its live version becomes release 1. Every workspace on this server can install a copy, server code included. Secrets, data, guests and access settings are never copied.'),
+      listable.length ? h('form', { class: 'stack', onsubmit: act(() => api('/listings', { method: 'POST', body: { app: appSel.value, summary: summary.value, description: desc.value } }), { done: r => `${r.name} is in the marketplace` }) },
+        h('div', { class: 'fields' }, field('App', appSel), field('One line about it', summary)), field('Description', desc),
+        h('div', {}, h('button', { class: 'btn deploy' }, 'List for free')))
+        : h('p', { class: 'muted' }, 'Every deployed app is already listed, or there is nothing deployed yet.')),
+  ];
+}
+
+// ---------- spaces ----------
+async function spaces() {
+  const [{ spaces }, apps] = await Promise.all([api('/spaces'), api('/apps')]);
+  const name = h('input', { id: 'sp-name', name: 'name', required: true, maxlength: 40, placeholder: 'Front desk' });
+  const note = h('input', { id: 'sp-note', name: 'note', maxlength: 120, placeholder: 'Tools for the front desk' });
+  const roleSel = (id, value) => select('role', { editor: 'editor', viewer: 'viewer' }, value, { id, label: 'Role' });
+  return [
+    head('Spaces', 'A space groups related apps and the people who use them. Add someone once and they get every app in the space.'),
+    spaces.length ? h('div', { class: 'stack' }, spaces.map(sp => {
+      const add = h('input', { id: 'sp-add-' + sp.id, name: 'email', type: 'email', required: true, placeholder: 'name@example.com' });
+      const role = roleSel('sp-role-' + sp.id, 'viewer');
+      const appSel = select('app', { '': 'Pick an app', ...Object.fromEntries(apps.apps.filter(a => a.space !== sp.name).map(a => [a.app, a.name])) }, '', { id: 'sp-app-' + sp.id, label: 'App' });
+      const path = enc(sp.name);
+      return h('section', { class: 'card' },
+        h('div', { class: 'sechead' }, h('div', {}, h('h2', {}, sp.name), sp.note ? h('p', { class: 'muted small' }, sp.note) : null),
+          h('span', { class: 'muted small' }, `${sp.apps.length} ${sp.apps.length === 1 ? 'app' : 'apps'} · ${sp.people.length} ${sp.people.length === 1 ? 'person' : 'people'}`)),
+        h('p', { class: 'small' }, sp.apps.length ? sp.apps.flatMap((a, i) => [i ? ' · ' : '', appLink(a.app, a.name)]) : h('span', { class: 'muted' }, 'No apps here yet.')),
+        h('form', { class: 'inline', onsubmit: act(() => api(`/apps/${enc(appSel.value)}/space`, { method: 'POST', body: { space: sp.name } }), { done: 'App moved' }) },
+          field('Add an app', appSel, 'grow'), h('button', { class: 'btn' }, 'Add app')),
+        sp.people.length ? h('ul', { class: 'list tight' }, sp.people.map(p => {
+          const rs = roleSel('sp-r-' + sp.id + p.email, p.role);
+          rs.classList.add('mini');
+          if (ADMIN) rs.addEventListener('change', act(() => api(`/spaces/${path}/members`, { method: 'POST', body: { email: p.email, role: rs.value } }), { done: 'Role changed' }));
+          else rs.disabled = true;
+          return h('li', {}, h('span', { class: 'grow' }, h('b', {}, p.name || p.email.replace(/@.*/, '')), ' ', h('span', { class: 'mono small muted' }, p.email)), rs,
+            ADMIN ? h('button', { class: 'link danger', onclick: act(() => api(`/spaces/${path}/members/${enc(p.email)}`, { method: 'DELETE' }), { done: 'Removed' }) }, 'Remove') : null);
+        })) : h('p', { class: 'muted' }, 'Nobody in this space yet.'),
+        ADMIN ? h('form', { class: 'inline', onsubmit: act(() => api(`/spaces/${path}/members`, { method: 'POST', body: { email: add.value, role: role.value } }), { done: 'Added to the space' }) },
+          field('Add by email', add, 'grow'), field('Role', role), h('button', { class: 'btn' }, 'Add to space'),
+          h('button', { class: 'btn quiet', type: 'button', onclick: act(async () => {
+            if (!confirm(`Delete the space ${sp.name}? Its apps stay, but its people lose the access the space gave them.`)) return;
+            return api(`/spaces/${path}`, { method: 'DELETE' });
+          }, { done: 'Space deleted' }) }, 'Delete space')) : null);
+    })) : empty('No spaces yet', ADMIN ? 'Create one below, then add its apps and people.' : 'An admin can create spaces.'),
+    ADMIN ? h('section', {}, h('h2', {}, 'New space'), h('form', { class: 'inline', onsubmit: act(() => api('/spaces', { method: 'POST', body: { name: name.value, note: note.value } }), { done: 'Space created' }) },
+      field('Name', name), field('What it is for', note, 'grow'), h('button', { class: 'btn' }, 'Create space'))) : null,
+  ];
+}
+
+// ---------- billing ----------
+const PLAN_NOTES = { free: 'To try things out.', solo: 'For one builder with many tools.', team: 'For a team that shares its tools.' };
+async function billing() {
+  const b = await api('/billing');
+  const day = (ms) => new Date(ms).toLocaleDateString(undefined, { dateStyle: 'medium' });
+  const current = b.plans.find(p => p.current) || b.plans[0];
+  const priceText = (p) => p.price ? [money(p.price.amount, p.price.currency), h('small', {}, ` / ${p.price.interval_count > 1 ? p.price.interval_count + ' ' : ''}${p.price.interval}`)] : p.id === 'free' ? 'No charge' : '—';
+  const choose = (p) => act(async () => {
+    if (p.id === 'free' && !confirm('Move to Free at the end of the paid period? Apps over the free allowance keep running, but no more can start.')) return;
+    const r = await api('/billing/checkout', { method: 'POST', body: { plan: p.id } });
+    if (r.url) { location.href = r.url; return; }
+    return r;
+  }, { done: p.id === 'free' ? 'The plan ends at the end of the period' : `Moved to ${cap(p.id)}` });
+  let status = null;
+  if (b.status === 'past_due') status = h('div', { class: 'note warnnote' }, h('b', {}, 'The last payment did not go through.'), 'Update the card in Manage billing to keep the plan.');
+  else if (b.cancel_at) status = h('p', { class: 'muted' }, `Ends ${day(b.cancel_at)}, then the workspace moves to Free.`);
+  else if (b.renews_at) status = h('p', { class: 'muted' }, `Renews ${day(b.renews_at)}.`);
+  if (R.slug === 'done') {
+    status = h('div', { class: 'note' }, h('b', {}, 'Thanks. Stripe is confirming the payment.'), 'The plan changes here as soon as it does, usually within a few seconds.');
+    setTimeout(() => { if (R.page === 'billing') go('billing'); }, 4000);
+  }
+  return [
+    head('Billing', b.enabled ? 'Your plan, what it allows, and your invoices. Payments are handled by Stripe.' : 'Your plan and what it allows.',
+      b.has_customer && b.enabled ? h('button', { class: 'btn', onclick: act(async () => { location.href = (await api('/billing/portal', { method: 'POST' })).url; }, { redraw: false }) }, 'Manage billing') : null),
+    b.enabled ? null : h('div', { class: 'note' }, h('b', {}, 'Paid plans are coming soon.'), 'Until then every workspace is on the plan shown here, at no charge.'),
+    h('section', { class: 'card bill' }, h('div', { class: 'eyebrow' }, 'Current plan'), h('div', { class: 'total' }, current.id),
+      h('p', { class: 'price' }, priceText(current)), status,
+      h('div', { class: 'meters' },
+        meter('Apps running', b.usage.running_apps, b.usage.app_limit),
+        meter('People', b.usage.members, b.usage.member_limit),
+        meter('Storage', b.usage.storage, b.usage.storage_limit, bytes))),
+    h('section', {}, h('h2', {}, 'Plans'), h('ul', { class: 'cards' }, b.plans.map(p => h('li', { class: 'card plan' + (p.current ? ' current' : '') },
+      h('div', { class: 'cardtop' }, h('h3', {}, cap(p.id)), p.current ? h('span', { class: 'pill ok' }, h('i'), 'Current') : null),
+      h('p', { class: 'muted' }, PLAN_NOTES[p.id] || ''),
+      h('div', { class: 'price' }, priceText(p)),
+      h('ul', {}, h('li', {}, `${p.apps} running apps`), h('li', {}, p.members === 1 ? 'Just you' : `${p.members} people`), h('li', {}, `${bytes(p.storage)} storage`), p.analytics_days ? h('li', {}, `${retention(p.analytics_days)} of analytics`) : null,
+        h('li', {}, 'Guests, sign-ins and spaces included')),
+      p.current ? h('button', { class: 'btn', disabled: true }, 'Your plan')
+        : !b.enabled ? h('button', { class: 'btn', disabled: true }, 'Coming soon')
+        : !p.available ? h('button', { class: 'btn', disabled: true }, 'Not available')
+        : h('button', { class: 'btn' + (p.id !== 'free' ? ' deploy' : ''), onclick: choose(p) },
+          p.id === 'free' ? 'Move to Free' : b.plans.findIndex(x => x.id === p.id) > b.plans.findIndex(x => x.current) ? `Upgrade to ${cap(p.id)}` : `Switch to ${cap(p.id)}`))))),
+    !b.enabled ? null : h('section', {}, h('h2', {}, 'Invoices'), b.invoices.length ? h('div', { class: 'scroll' }, h('table', {},
+      h('thead', {}, h('tr', {}, h('th', {}, 'Date'), h('th', {}, 'Invoice'), h('th', {}, 'Amount'), h('th', {}, 'Status'), h('th', { class: 'right' }, ''))),
+      h('tbody', {}, b.invoices.map(i => h('tr', {}, h('td', { class: 'nowrap' }, day(i.created * 1000)), h('td', { class: 'mono small' }, i.number || i.id),
+        h('td', { class: 'num' }, money(i.amount, i.currency)),
+        h('td', {}, h('span', { class: 'pill ' + (i.status === 'paid' ? 'ok' : i.status === 'open' ? 'warn' : 'idle') }, h('i'), cap(i.status))),
+        h('td', { class: 'right' }, i.url ? h('a', { class: 'link', href: i.url, target: '_blank', rel: 'noopener' }, 'View') : null, i.pdf ? [' · ', h('a', { class: 'link', href: i.pdf, target: '_blank', rel: 'noopener' }, 'PDF')] : null)))))) :
+      h('p', { class: 'muted' }, 'No invoices yet.')),
+  ];
+}
+
+// ---------- analytics ----------
+// #analytics (every app) or #analytics/<app>. The range is remembered in this browser.
+const RANGES = [[1, '24 hours'], [7, '7 days'], [30, '30 days'], [90, '90 days'], [180, '6 months'], [365, '1 year'], [730, '2 years']];
+let anDays = Number(store('brod-analytics-days')) || 30;
+const fmtN = (n) => n == null ? '—' : n >= 10000 ? new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n) : Math.round(n).toLocaleString();
+const pct = (x) => x == null ? '—' : (x * 100 >= 10 || x === 0 ? Math.round(x * 100) : (x * 100).toFixed(1)) + '%';
+function dur(ms) {
+  if (ms == null) return '—';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+  return `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`;
+}
+const msText = (ms) => ms == null ? '—' : ms >= 2500 ? '> 2.5 s' : ms >= 1000 ? (ms / 1000).toFixed(2) + ' s' : Math.round(ms) + ' ms';
+const retention = (d) => d >= 365 ? (d % 365 ? `${d} days` : d === 365 ? '1 year' : `${d / 365} years`) : `${d} days`;
+function names(type) { try { return new Intl.DisplayNames(undefined, { type }); } catch { return null; } }
+const REGION = names('region'), LANG = names('language');
+const flag = (cc) => /^[A-Z]{2}$/.test(cc) ? String.fromCodePoint(...[...cc].map(c => 0x1F1A5 + c.charCodeAt(0))) : '';
+const LABELS = {
+  referrer: (k) => k || 'Direct / none',
+  utm: (k) => k || '(none)',
+  country: (k) => k ? `${flag(k)} ${REGION?.of(k) || k}` : 'Unknown',
+  lang: (k) => k ? (LANG?.of(k) || k) : 'Unknown',
+  plain: (k) => k || 'Unknown',
+};
+/** Change from the period before, coloured by whether that is good news. */
+function delta(now, before, { lowerIsBetter = false } = {}) {
+  if (before == null || now == null) return null;
+  if (!before) return now ? h('span', { class: 'delta up' }, 'new') : null;
+  const d = (now - before) / before;
+  if (Math.abs(d) < 0.005) return h('span', { class: 'delta flat' }, '±0%');
+  const good = lowerIsBetter ? d < 0 : d > 0;
+  return h('span', { class: 'delta ' + (good ? 'up' : 'down'), title: 'Compared with the period before' }, (d > 0 ? '↑ ' : '↓ ') + pct(Math.abs(d)));
+}
+const kpi = (value, label, d) => h('div', { class: 'kpi' }, h('b', {}, value), h('span', {}, label), d || h('span', { class: 'delta flat' }, ' '));
+function tickLabel(iso, hourly, long) {
+  const d = new Date(iso);
+  if (hourly) return d.toLocaleTimeString(undefined, { hour: 'numeric' });
+  return d.toLocaleDateString(undefined, long ? { month: 'short', year: '2-digit' } : { month: 'short', day: 'numeric' });
+}
+/** A line chart of one or two series over the report's buckets, with a crosshair and tooltip. */
+function lineChart(series, keys, hourly, opts = {}) {
+  const W = 880, H = 230, L = 44, Rt = 8, T = 10, Bm = 26, n = series.length;
+  const max = Math.max(1, ...series.flatMap(p => keys.map(k => p[k.key])));
+  const nice = (() => { const m = 10 ** Math.floor(Math.log10(max)); return Math.ceil(max / m / (max / m > 5 ? 2 : 1)) * m * (max / m > 5 ? 2 : 1); })();
+  const x = (i) => L + (n === 1 ? (W - L - Rt) / 2 : (i * (W - L - Rt)) / (n - 1));
+  const y = (v) => T + (H - T - Bm) * (1 - v / nice);
+  const ns = 'http://www.w3.org/2000/svg';
+  const el = (tag, attrs) => { const e = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); return e; };
+  const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': opts.label || keys.map(k => k.label).join(' and ') + ' over time' });
+  for (const f of [0, 0.5, 1]) {
+    svg.append(el('line', { class: 'grid', x1: L, x2: W - Rt, y1: y(nice * f), y2: y(nice * f) }));
+    const t = el('text', { class: 'axis', x: L - 8, y: y(nice * f) + 4, 'text-anchor': 'end' }); t.textContent = fmtN(nice * f); svg.append(t);
+  }
+  const long = !hourly && n > 120;
+  const ticks = n <= 8 ? series.map((_, i) => i) : [0, Math.round((n - 1) / 4), Math.round((n - 1) / 2), Math.round((3 * (n - 1)) / 4), n - 1];
+  for (const i of ticks) {
+    const t = el('text', { class: 'axis', x: x(i), y: H - 6, 'text-anchor': i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle' });
+    t.textContent = tickLabel(series[i].t, hourly, long); svg.append(t);
+  }
+  keys.forEach((k, j) => {
+    const pts = series.map((p, i) => `${x(i).toFixed(1)},${y(p[k.key]).toFixed(1)}`).join(' ');
+    if (j === 0) svg.append(el('polygon', { class: 'a1', points: `${x(0)},${y(0)} ${pts} ${x(n - 1)},${y(0)}` }));
+    svg.append(el('polyline', { class: j ? 'l2' : 'l1', points: pts }));
+  });
+  const cross = el('line', { class: 'cross', y1: T, y2: H - Bm, visibility: 'hidden' });
+  const dots = keys.map((_, j) => el('circle', { class: j ? 'dot2' : 'dot1', r: 4.5, visibility: 'hidden' }));
+  svg.append(cross, ...dots);
+  const hit = el('rect', { x: L, y: T, width: W - L - Rt, height: H - T - Bm, fill: 'transparent' });
+  svg.append(hit);
+  const tip = h('div', { class: 'tip', hidden: true });
+  const box = h('div', { class: 'plot' }, svg, tip,
+    keys.length > 1 ? h('div', { class: 'legend' }, keys.map((k, j) => h('span', {}, h('i', { style: `background:var(--s${j + 1})` }), k.label))) : null);
+  const show = (evt) => {
+    const r = svg.getBoundingClientRect();
+    const px = ((evt.clientX - r.left) / r.width) * W;
+    const i = Math.max(0, Math.min(n - 1, Math.round(n === 1 ? 0 : ((px - L) / (W - L - Rt)) * (n - 1))));
+    const p = series[i];
+    cross.setAttribute('x1', x(i)); cross.setAttribute('x2', x(i)); cross.setAttribute('visibility', 'visible');
+    dots.forEach((d, j) => { d.setAttribute('cx', x(i)); d.setAttribute('cy', y(p[keys[j].key])); d.setAttribute('visibility', 'visible'); });
+    const when = new Date(p.t).toLocaleString(undefined, hourly ? { weekday: 'short', hour: 'numeric', minute: '2-digit' } : { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+    tip.replaceChildren(h('div', {}, when), ...keys.map(k => h('div', {}, h('b', {}, (k.fmt || fmtN)(p[k.key])), ' ', k.label.toLowerCase())));
+    tip.hidden = false;
+    const br = box.getBoundingClientRect();
+    tip.style.left = Math.max(70, Math.min(br.width - 70, (x(i) / W) * r.width + (r.left - br.left))) + 'px';
+    tip.style.top = (Math.min(...keys.map(k => y(p[k.key]))) / H) * r.height + (r.top - br.top) + 'px';
+  };
+  const hide = () => { tip.hidden = true; cross.setAttribute('visibility', 'hidden'); dots.forEach(d => d.setAttribute('visibility', 'hidden')); };
+  hit.addEventListener('pointermove', show); hit.addEventListener('pointerdown', show); hit.addEventListener('pointerleave', hide);
+  const table = h('details', { class: 'tableview' }, h('summary', {}, 'Show as a table'), h('div', { class: 'scroll' }, h('table', {},
+    h('thead', {}, h('tr', {}, h('th', {}, hourly ? 'Hour' : 'Day'), keys.map(k => h('th', { class: 'right' }, k.label)))),
+    h('tbody', {}, series.map(p => h('tr', {}, h('td', {}, new Date(p.t).toLocaleString(undefined, hourly ? { hour: 'numeric', weekday: 'short' } : { dateStyle: 'medium' })),
+      keys.map(k => h('td', { class: 'right num' }, (k.fmt || fmtN)(p[k.key])))))))));
+  return h('div', { class: 'stack' }, box, table);
+}
+/** A ranked list with a bar behind each row, sized against the largest. */
+function barList(rows, { label = LABELS.plain, value = 'views', second = 'visitors', head = ['', 'Views'], fmt = fmtN, fmt2 = fmtN, limit = 10 } = {}) {
+  if (!rows?.length) return h('p', { class: 'muted small' }, 'Nothing in this period yet.');
+  const max = Math.max(1, ...rows.map(r => r[value] || 0));
+  const list = h('div', { class: 'bars' });
+  const draw = (k) => list.replaceChildren(h('div', { class: 'bhead' }, h('span', {}, head[0]), h('span', {}, head[1])),
+    ...rows.slice(0, k).map(r => h('div', { class: 'brow', title: `${label(r.key)}: ${fmt(r[value])}${second && r[second] != null ? ` · ${fmt2(r[second])} ${second.replace(/_/g, ' ')}` : ''}` },
+      h('i', { style: `width:${Math.max(1.5, (100 * (r[value] || 0)) / max).toFixed(1)}%`, 'aria-hidden': 'true' }),
+      h('span', {}, label(r.key)),
+      h('em', {}, second && r[second] != null ? [fmt2(r[second]), ' · '] : null, h('b', {}, fmt(r[value]))))));
+  draw(limit);
+  const box = h('div', { class: 'stack' }, list);
+  if (rows.length > limit) {
+    const more = h('button', { class: 'link small more', type: 'button', onclick: () => { draw(rows.length); more.remove(); } }, `Show all ${rows.length}`);
+    box.append(more);
+  }
+  return box;
+}
+/** A panel with tabs, each a different breakdown of the same visits. */
+function panel(title, tabs) {
+  const body = h('div', {});
+  const nav = h('nav', { class: 'tabs', role: 'tablist', 'aria-label': title });
+  const pick = (i) => { nav.querySelectorAll('button').forEach((b, j) => { b.classList.toggle('on', i === j); b.setAttribute('aria-selected', String(i === j)); }); body.replaceChildren(tabs[i][1]()); };
+  tabs.forEach(([name], i) => nav.append(h('button', { type: 'button', role: 'tab', onclick: () => pick(i) }, name)));
+  const p = h('section', { class: 'panel' }, h('h3', {}, title), tabs.length > 1 ? nav : null, body);
+  pick(0);
+  return p;
+}
+function heatmap(grid) {
+  const max = Math.max(1, ...grid.flat());
+  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const hour = (hr) => new Date(2024, 0, 1, hr).toLocaleTimeString(undefined, { hour: 'numeric' });
+  return h('div', { class: 'scroll' }, h('div', { class: 'heat', role: 'table', 'aria-label': 'Page views by weekday and hour, your time', style: 'min-width:520px' },
+    h('span'), Array.from({ length: 24 }, (_, hr) => h('span', { class: 'hl' }, hr % 3 ? '' : hour(hr).replace(/\s/g, ''))),
+    grid.flatMap((row, d) => [h('span', {}, days[d]), ...row.map((v, hr) => h('i', {
+      title: `${days[d]} ${hour(hr)}: ${v.toLocaleString()} views`,
+      style: v ? `background:color-mix(in srgb,var(--s1) ${Math.round(12 + 88 * Math.sqrt(v / max))}%,var(--sunk))` : null,
+    }))])));
+}
+const VITALS = {
+  LCP: ['Largest contentful paint', 'How long the main content takes to show.', msText],
+  INP: ['Interaction to next paint', 'How quickly the page answers a click or key.', msText],
+  CLS: ['Cumulative layout shift', 'How much the page jumps around while loading.', (v) => v == null ? '—' : v.toFixed(2)],
+  FCP: ['First contentful paint', 'When anything first appears.', msText],
+  TTFB: ['Time to first byte', 'How long the first byte takes to arrive.', msText],
+};
+function vitalCard(v) {
+  const [title, about, fmt] = VITALS[v.name];
+  const st = v.p75 == null ? null : v.p75 <= v.good_max ? ['good', '●', 'Good'] : v.p75 <= v.poor_min ? ['ni', '▲', 'Needs improvement'] : ['poor', '■', 'Poor'];
+  const total = Math.max(1, v.samples);
+  return h('div', { class: 'vital', title: about },
+    h('div', { class: 'muted small' }, h('b', { style: 'font:600 .8rem var(--body);color:var(--ink)' }, v.name), ' · ', title),
+    h('b', {}, fmt(v.p75)),
+    st ? h('span', { class: 'st ' + st[0] }, h('span', { 'aria-hidden': 'true' }, st[1]), st[2]) : h('span', { class: 'muted small' }, 'No samples yet'),
+    v.samples ? h('span', { class: 'muted small' }, `75th percentile of ${v.samples.toLocaleString()} ${v.samples === 1 ? 'visit' : 'visits'}`) : null,
+    v.samples ? h('div', { class: 'dist', role: 'img', 'aria-label': `${v.good} good, ${v.needs_improvement} need improvement, ${v.poor} poor` },
+      v.good ? h('i', { class: 'g', style: `width:${(100 * v.good) / total}%` }) : null,
+      v.needs_improvement ? h('i', { class: 'n', style: `width:${(100 * v.needs_improvement) / total}%` }) : null,
+      v.poor ? h('i', { class: 'p', style: `width:${(100 * v.poor) / total}%` }) : null) : null);
+}
+async function analytics() {
+  const app = R.slug || '';
+  const tz = -new Date().getTimezoneOffset();
+  const a = await api(`/analytics?days=${anDays}&tz=${tz}${app ? '&app=' + enc(app) : ''}`);
+  const t = a.totals, p = a.previous, hourly = a.bucket === 'hour';
+  const appSel = h('select', { 'aria-label': 'App', onchange: (e) => go('analytics', e.target.value || undefined) },
+    h('option', { value: '' }, 'All apps'), a.apps.map(x => h('option', { value: x.slug, selected: x.slug === app }, x.name)));
+  const ranges = h('div', { class: 'seg', role: 'group', 'aria-label': 'Period' }, RANGES.map(([d, label]) => {
+    const locked = d > a.retention_days;
+    return h('button', { type: 'button', class: d === a.days ? 'on' : '', 'aria-pressed': String(d === a.days), 'aria-disabled': locked ? 'true' : null,
+      title: locked ? `The ${cap(a.plan)} plan keeps ${retention(a.retention_days)} of analytics.${ADMIN ? ' Upgrade to keep more.' : ''}` : null,
+      onclick: () => { if (locked) { if (ADMIN) go('billing'); return; } anDays = d; store('brod-analytics-days', String(d)); render(); } }, label);
+  }));
+  const period = RANGES.find(([d]) => d === a.days)?.[1] || `${a.days} days`;
+  const nothing = !t.views && !t.requests;
+  const series = a.series;
+  const status = a.requests.status, reqTotal = Math.max(1, a.requests.total);
+  const statusColors = { '2xx': 'var(--good)', '3xx': 'var(--s1)', '4xx': 'var(--ni)', '5xx': 'var(--poor)' };
+  const latMax = Math.max(1, ...a.requests.latency.map(l => l.count));
+  const vitalsSeen = a.vitals.some(v => v.samples);
+  return [
+    head('Analytics', a.app ? `${a.app.name}: who visits, where they come from, what they do, and how fast it is.` : `Every app in ${B.name}: who visits, where they come from, what they do, and how fast it is.`,
+      h('span', { class: 'livedot', title: 'Visitors who opened a page in the last 5 minutes' }, h('i', { 'aria-hidden': 'true' }), `${a.live_visitors} ${a.live_visitors === 1 ? 'visitor' : 'visitors'} right now`)),
+    h('div', { class: 'anbar' }, appSel, ranges,
+      h('button', { class: 'link small', type: 'button', onclick: () => render() }, 'Refresh'),
+      a.app ? h('button', { class: 'link small', type: 'button', onclick: () => go('app', a.app.slug) }, 'Open the app’s page') : null),
+    h('section', { class: 'kpis', 'aria-label': `Totals for the last ${period}` },
+      kpi(fmtN(t.visitors), 'visitors', delta(t.visitors, p.visitors)),
+      kpi(fmtN(t.views), 'page views', delta(t.views, p.views)),
+      kpi(fmtN(t.sessions), 'visits (sessions)', delta(t.sessions, p.sessions)),
+      kpi(t.sessions ? t.views_per_session.toFixed(1) : '—', 'pages per visit', delta(t.views_per_session, p.views_per_session)),
+      kpi(t.sessions ? pct(t.bounce_rate) : '—', 'bounce rate', delta(t.bounce_rate, p.bounce_rate, { lowerIsBetter: true })),
+      kpi(t.sessions ? dur(t.avg_session_ms) : '—', 'visit length', delta(t.avg_session_ms, p.avg_session_ms)),
+      t.avg_engaged_seconds != null ? kpi(dur(t.avg_engaged_seconds * 1000), 'time on page') : null),
+    nothing ? h('div', { class: 'note' }, h('b', {}, 'No visits in this period yet.'),
+      h('p', {}, 'Numbers appear here a few seconds after someone opens one of your apps. Static pages are measured automatically; server apps add one line to their pages (see the end of this page).')) : null,
+    h('section', {}, sechead(`Visitors and page views, last ${period}`, h('span', { class: 'muted small' }, hourly ? 'per hour' : 'per day, your time')),
+      lineChart(series, [{ key: 'views', label: 'Page views' }, { key: 'visitors', label: 'Visitors' }], hourly)),
+    h('div', { class: 'panels' },
+      panel('Pages', [
+        ['Top pages', () => barList(a.pages, { head: ['Page', 'Visitors · Views'] })],
+        ['Entry pages', () => barList(a.entry_pages, { value: 'sessions', second: null, head: ['Where visits start', 'Visits'] })],
+        ['Exit pages', () => barList(a.exit_pages, { value: 'sessions', second: null, head: ['Where visits end', 'Visits'] })],
+        ['Not found', () => barList(a.not_found, { head: ['Missing page (404)', 'Visitors · Views'] })],
+      ]),
+      panel('Sources', [
+        ['Referrers', () => barList(a.referrers, { label: LABELS.referrer, head: ['Site', 'Visitors · Views'] })],
+        ['Campaign source', () => barList(a.utm_sources, { label: LABELS.utm, head: ['utm_source / ref', 'Visitors · Views'] })],
+        ['Medium', () => barList(a.utm_mediums, { label: LABELS.utm, head: ['utm_medium', 'Visitors · Views'] })],
+        ['Campaign', () => barList(a.utm_campaigns, { label: LABELS.utm, head: ['utm_campaign', 'Visitors · Views'] })],
+      ]),
+      panel('Locations', [
+        ['Countries', () => barList(a.countries, { label: LABELS.country, head: ['Country', 'Visitors · Views'] })],
+        ['Languages', () => barList(a.languages, { label: LABELS.lang, head: ['Language', 'Visitors · Views'] })],
+      ]),
+      panel('Devices', [
+        ['Device', () => barList(a.devices, { head: ['Device', 'Visitors · Views'] })],
+        ['Browser', () => barList(a.browsers, { head: ['Browser', 'Visitors · Views'] })],
+        ['OS', () => barList(a.os, { head: ['Operating system', 'Visitors · Views'] })],
+        ['Screen', () => barList(a.screens, { head: ['Screen', 'Visitors · Reports'] })],
+        ['Resolution', () => barList(a.resolutions, { head: ['Resolution', 'Visitors · Reports'] })],
+      ]),
+      a.app ? null : panel('Apps', [['By app', () => barList(a.by_app, { label: (k) => a.by_app.find(x => x.key === k)?.name || k, head: ['App', 'Visitors · Views'] })]]),
+      panel('Engagement', [
+        ['Pages per visit', () => barList(a.session_lengths.map(([k, n]) => ({ key: `${k} ${k === '1' ? 'page' : 'pages'}`, sessions: n })), { value: 'sessions', second: null, head: ['Visit depth', 'Visits'], limit: 6 })],
+        ['Time on page', () => barList(a.engagement.pages, { value: 'avg_seconds', second: 'samples', fmt: (s) => dur(s * 1000), head: ['Page', 'Reads · Average'] })],
+        ['Signed in', () => barList([{ key: 'Signed in', views: t.signed_in_views }, { key: 'Not signed in', views: t.views - t.signed_in_views }], { second: null, head: ['Visitor', 'Views'] })],
+      ])),
+    h('section', {}, sechead('When people visit', h('span', { class: 'muted small' }, 'page views by weekday and hour, your time')), heatmap(a.heatmap)),
+    h('section', {}, sechead('Performance and reliability', h('span', { class: 'muted small' }, 'every request the app answered')),
+      h('div', { class: 'kpis' },
+        kpi(fmtN(a.requests.total), 'requests', delta(a.requests.total, p.requests)),
+        kpi(bytes(a.requests.bytes), 'sent'),
+        kpi(msText(a.requests.p50_ms), 'median response'),
+        kpi(msText(a.requests.p95_ms), '95th percentile'),
+        kpi(a.requests.total ? pct(a.requests.error_rate) : '—', 'server errors (5xx)'),
+        kpi(fmtN(a.requests.bots), 'from crawlers')),
+      a.requests.total ? h('div', { class: 'panels' },
+        h('div', { class: 'panel' }, h('h3', {}, 'Responses'),
+          h('div', { class: 'sbar', role: 'img', 'aria-label': Object.entries(status).map(([k, v]) => `${v} ${k}`).join(', ') },
+            Object.entries(status).filter(([, v]) => v).map(([k, v]) => h('i', { title: `${k}: ${v.toLocaleString()}`, style: `width:${(100 * v) / reqTotal}%;background:${statusColors[k]}` }))),
+          h('div', { class: 'legend' }, Object.entries(status).map(([k, v]) => h('span', {}, h('i', { style: `background:${statusColors[k]};height:10px;width:10px;border-radius:3px` }), `${k} `, h('b', { class: 'num', style: 'color:var(--ink)' }, v.toLocaleString()))))),
+        h('div', { class: 'panel' }, h('h3', {}, 'Response times'),
+          h('div', { class: 'bars' }, a.requests.latency.map((l, i) => h('div', { class: 'brow', title: `${l.count.toLocaleString()} requests` },
+            h('i', { style: `width:${Math.max(l.count ? 1.5 : 0, (100 * l.count) / latMax).toFixed(1)}%` }),
+            h('span', {}, l.under_ms ? `${i ? a.requests.latency[i - 1].under_ms : 0}–${l.under_ms} ms` : `${a.requests.latency[i - 1].under_ms} ms and slower`),
+            h('em', {}, h('b', {}, fmtN(l.count))))))),
+      ) : null,
+      a.requests.total ? h('div', { class: 'stack' }, h('h3', {}, hourly ? 'Requests per hour' : 'Requests per day'), lineChart(series, [{ key: 'requests', label: 'Requests' }], hourly)) : null),
+    h('section', {}, sechead('Core Web Vitals', h('span', { class: 'muted small' }, '75th percentile of real visits')),
+      vitalsSeen ? h('div', { class: 'vitals' }, a.vitals.map(vitalCard)) : h('p', { class: 'muted' }, 'No measurements yet. Browsers report them when a visitor leaves a page.')),
+    h('div', { class: 'panels' },
+      panel('Events', [
+        ['Custom events', () => barList(a.events, { head: ['Event', 'Visitors · Count'] })],
+        ['Outbound links', () => barList(a.outbound, { head: ['Site', 'Visitors · Clicks'] })],
+      ]),
+      h('section', { class: 'panel' }, h('h3', {}, 'JavaScript errors'),
+        a.errors.length ? h('div', { class: 'scroll' }, h('table', {},
+          h('thead', {}, h('tr', {}, h('th', {}, 'Error'), h('th', { class: 'right' }, 'Visitors'), h('th', { class: 'right' }, 'Count'), h('th', { class: 'right' }, 'Last'))),
+          h('tbody', {}, a.errors.map(e => h('tr', {},
+            h('td', {}, h('div', { class: 'mono small' }, e.message), e.source ? h('div', { class: 'muted small mono' }, e.source) : null),
+            h('td', { class: 'right num' }, e.visitors), h('td', { class: 'right num' }, e.count), h('td', { class: 'right muted small nowrap' }, ago(e.last))))))) :
+          h('p', { class: 'muted small' }, 'No errors reported in this period.'))),
+    h('section', {}, h('h2', {}, 'How this is measured'),
+      h('p', { class: 'sub' }, `Brod counts every page an app serves, with no cookies and nothing that identifies a person: a visitor is a salted hash that changes every day, so someone who comes back tomorrow counts again. A visit (session) ends after 30 minutes without a new page. Crawlers and bots are left out of visitors and page views. The ${cap(a.plan)} plan keeps ${retention(a.retention_days)} of analytics; older data is deleted.`),
+      h('p', { class: 'sub' }, 'Static pages get a small script that adds Core Web Vitals, time on page, screen size, JavaScript errors, outbound clicks and navigations inside single-page apps. Server apps add it to their pages themselves, and any app can send its own events:'),
+      h('pre', { class: 'snippet' }, `<script src="/_brod/insights.js" defer><\/script>\n<script>\n  // later, when something worth counting happens:\n  brod.track('signup', { value: 1, label: 'pro plan' });\n<\/script>`),
+      h('p', { class: 'muted small' }, 'To leave a page out, add <meta name="brod-insights" content="off">. Campaign tags (utm_source, utm_medium, utm_campaign, or ref) on a link are counted; the rest of the query string is never kept.')),
+  ];
+}
+
+// ---------- agent connections ----------
+// Connections live on their own page (/w/<workspace>/connections), which also covers agents that sign in with OAuth.
+async function agents() {
+  const { connections } = await api('/tokens');
+  const live = connections.filter(c => !c.revoked_at);
+  const page = `/w/${enc(B.workspace)}/connections`;
+  return [
+    head('Agents', 'An agent with a connection can deploy and manage apps here. Widening access or inviting people still asks you to confirm.',
+      h('a', { class: 'btn deploy', href: page }, 'Connect an agent')),
+    h('section', {}, sechead('Connections', h('a', { class: 'link', href: page }, 'Manage')),
+      live.length ? h('ul', { class: 'list tight' }, live.map(c => h('li', {}, h('span', { class: 'grow' }, h('b', {}, c.name), c.made_by ? h('div', { class: 'muted small' }, `made by ${c.made_by}`) : null),
+        h('span', { class: 'pill ok' }, h('i'), 'Connected')))) : empty('No agents connected', 'Add Brod to Claude Code or any MCP client. It signs in through this site, no token to copy.')),
+  ];
+}
+
+// ---------- theme ----------
+// The OS setting decides by default; a choice made here is remembered in this browser.
+function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch { return null; } }
+const dark = () => { const t = document.documentElement.dataset.theme; return t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches; };
+const themeBtn = document.getElementById('theme');
+const paintTheme = () => (themeBtn.textContent = dark() ? 'Light theme' : 'Dark theme');
+const saved = store('brod-theme');
+if (saved === 'light' || saved === 'dark') document.documentElement.dataset.theme = saved;
+themeBtn.addEventListener('click', () => { const t = dark() ? 'light' : 'dark'; document.documentElement.dataset.theme = t; store('brod-theme', t); paintTheme(); });
+paintTheme();
+
+// ---------- start ----------
+const brand = document.getElementById('brand');
+brand.append(B.icon ? h('span', { class: 'wsicon', 'aria-hidden': 'true' }, B.icon) : h('span', { class: 'logo', 'aria-hidden': 'true' }), h('span', {}, 'Brod', h('span', { class: 'muted' }, ' – '), B.name));
+brand.addEventListener('click', () => go('overview'));
+document.getElementById('sidedeploy').addEventListener('click', () => go('new'));
+document.getElementById('who').textContent = B.email;
+document.getElementById('role').textContent = B.role;
+document.getElementById('home').href = `/w/${B.workspace}?view=apps`;
+render(true);
+</script>
+</html>

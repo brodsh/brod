@@ -1,0 +1,166 @@
+# Brod on your own server: the Rust server, the server-app runtime (workerd) and Caddy for HTTPS.
+# From this folder: cp .env.example .env, fill it in, then: docker compose up -d
+# See "Run it on your own server" in README.md.
+name: brod
+
+services:
+  brod:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: brod:local
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      BROD_LISTEN: 0.0.0.0:8080
+      BROD_DATA_DIR: /data
+      # Caddy terminates HTTPS and says so in X-Forwarded-Proto.
+      BROD_TRUST_PROXY: "1"
+      BROD_RUNTIME_URL: http://runtime:8081
+    volumes:
+      - brod-data:/data
+    networks:
+      default:
+        # A fixed address: workerd resolves the runtime's "brod" service once at startup, so a recreated brod
+        # container must come back at the same address.
+        ipv4_address: 172.29.71.10
+    # Only Caddy and the runtime reach Brod; nothing is published on the host.
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/brod", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  runtime:
+    build:
+      context: ..
+      dockerfile: deploy/runtime/Dockerfile
+    image: brod-runtime:local
+    restart: unless-stopped
+    # The supervisor (deploy/runtime/supervisor/) is the main process; an init passes it docker stop's signal.
+    init: true
+    depends_on:
+      brod:
+        condition: service_healthy
+    environment:
+      BROD_RUNTIME_SECRET: ${BROD_RUNTIME_SECRET:?set BROD_RUNTIME_SECRET in .env}
+      BROD_INTERNAL_URL: http://brod:8080
+      # Restart workerd when it has not answered for this long (an app in a loop) or uses more memory than this.
+      RUNTIME_STALL_MS: ${RUNTIME_STALL_MS:-5000}
+      RUNTIME_MEMORY_MB: ${RUNTIME_MEMORY_MB:-1536}
+    # A ceiling the kernel enforces, above RUNTIME_MEMORY_MB, so the runtime can never take the machine's memory.
+    mem_limit: ${RUNTIME_MEM_LIMIT:-2g}
+    volumes:
+      - runtime-data:/data
+    expose:
+      - "8081"
+
+  # Optional, with --profile previews: headless Chromium that screenshots and records marketplace releases in an
+  # empty sandbox (server/src/preview.rs). Also set BROD_PREVIEW_URL=http://preview:8790 and BROD_PREVIEW_SECRET in .env.
+  preview:
+    profiles: ["previews"]
+    build:
+      context: ..
+      dockerfile: deploy/preview/Dockerfile
+    image: brod-preview:local
+    restart: unless-stopped
+    depends_on:
+      brod:
+        condition: service_healthy
+    environment:
+      BROD_PREVIEW_SECRET: ${BROD_PREVIEW_SECRET:-}
+      BROD_INTERNAL_URL: http://brod:8080
+    # Chromium wants more shared memory than Docker's 64 MB default.
+    shm_size: 1gb
+    expose:
+      - "8790"
+
+  caddy:
+    image: caddy:2.10
+    restart: unless-stopped
+    depends_on:
+      brod:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      BROD_API_HOST: ${BROD_API_HOST:?set BROD_API_HOST in .env, for example brod.sh}
+      APPS_DOMAIN: ${APPS_DOMAIN:?set APPS_DOMAIN in .env, for example apps.brod.sh}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+  # Optional: S3-style storage for app files on the same machine. Start with: docker compose --profile minio up -d
+  # and set S3_ENDPOINT=http://minio:9000, S3_BUCKET, S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY in .env.
+  minio:
+    image: minio/minio:latest
+    profiles: ["minio"]
+    restart: unless-stopped
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-brod}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-change-me-please}
+    volumes:
+      - minio-data:/data
+    expose:
+      - "9000"
+
+  # Creates the bucket once MinIO is up.
+  minio-bucket:
+    image: minio/mc:latest
+    profiles: ["minio"]
+    depends_on:
+      - minio
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        until mc alias set local http://minio:9000 "$$S3_ACCESS_KEY_ID" "$$S3_SECRET_ACCESS_KEY"; do sleep 1; done;
+        mc mb --ignore-existing local/"$$S3_BUCKET"
+    environment:
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-brod}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-change-me-please}
+      S3_BUCKET: ${S3_BUCKET:-brod-bundles}
+
+  # Optional: Brod's database in Postgres instead of the SQLite file in brod-data. Start with:
+  # docker compose --profile postgres up -d, with POSTGRES_PASSWORD and
+  # BROD_DATABASE_URL=postgres://brod:<the same password>@postgres:5432/brod in .env. Brod waits for it at start.
+  # Back it up with pg_dump (see "Backups" in README.md); brod backup only copies SQLite.
+  postgres:
+    image: postgres:17
+    profiles: ["postgres"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: brod
+      POSTGRES_DB: brod
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-please}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "brod", "-d", "brod"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  default:
+    ipam:
+      config:
+        # Change it if it overlaps a network your server already uses (and brod's ipv4_address with it).
+        - subnet: 172.29.71.0/24
+
+volumes:
+  brod-data:
+  runtime-data:
+  caddy-data:
+  caddy-config:
+  minio-data:
+  postgres-data:

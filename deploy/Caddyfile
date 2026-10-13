@@ -1,0 +1,47 @@
+# HTTPS for Brod. The API host gets an ordinary certificate. Workspace hosts (<workspace>.{$APPS_DOMAIN}), app hosts
+# (<slug>.<workspace>.{$APPS_DOMAIN}) and custom domains get one each on their first visit (on-demand TLS), but only
+# after Brod's /_caddy/ask confirms the address exists (for a custom domain: that a workspace has proven it owns it),
+# so nobody can make Caddy request certificates for made-up names.
+# Brod can also do all of this itself, with no Caddy: see compose.tls.yml.
+# BROD_UPSTREAM is where Caddy reaches Brod: brod:8080 inside the compose network (the default), or 127.0.0.1:8080
+# when Caddy runs on the host network.
+{
+	email {$ACME_EMAIL}
+	on_demand_tls {
+		ask http://{$BROD_UPSTREAM:brod:8080}/_caddy/ask
+	}
+}
+
+(brod) {
+	# Brod's internal endpoints answer only on its internal address; refuse them here as well.
+	@internal path /_caddy/* /_runtime/*
+	respond @internal 404
+
+	# Caddy passes the original Host and sets X-Forwarded-For, X-Forwarded-Proto and X-Forwarded-Host.
+	reverse_proxy {$BROD_UPSTREAM:brod:8080}
+}
+
+# Other sites on the same server, if any (mounted at /etc/caddy/sites).
+import /etc/caddy/sites/*.caddy
+
+{$BROD_API_HOST} {
+	import brod
+}
+
+*.{$APPS_DOMAIN}, *.*.{$APPS_DOMAIN} {
+	tls {
+		on_demand
+	}
+	import brod
+}
+
+# Custom domains: any other name, once /_caddy/ask says a workspace has proven it (domains.rs).
+https:// {
+	# Its own issuer keeps this policy apart from the one above: identical, Caddy merges the two and drops the
+	# *.*.{$APPS_DOMAIN} subject, and app hosts then get certificates from Caddy's internal CA.
+	tls {
+		on_demand
+		issuer acme
+	}
+	import brod
+}
