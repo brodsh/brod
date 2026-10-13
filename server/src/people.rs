@@ -97,7 +97,7 @@ pub fn my_workspaces(conn: &Connection, cfg: &Config, user: &User) -> Result<Vec
         [&user.id],
         |r| {
             let slug: String = r.get(0)?;
-            Ok(json!({ "slug": slug, "name": r.get::<_, String>(1)?, "plan": r.get::<_, String>(2)?, "role": r.get::<_, String>(3)?, "home": format!("{}/w/{slug}", cfg.api_origin) }))
+            Ok(json!({ "slug": slug, "name": r.get::<_, String>(1)?, "plan": if crate::model::self_hosted() { "self-hosted".to_string() } else { r.get::<_, String>(2)? }, "role": r.get::<_, String>(3)?, "home": format!("{}/w/{slug}", cfg.api_origin) }))
         },
     )
 }
@@ -111,6 +111,21 @@ pub fn membership(conn: &Connection, user: &User, workspace: Option<&str>) -> Re
     )
 }
 
+/// Who may make a workspace. Hosted: anyone with a verified email. Self-hosted: an admin of an existing workspace or,
+/// on a server with no workspace yet, BROD_ADMIN_EMAIL (anyone who signs in first, when that is not set).
+pub fn may_create_workspace(conn: &Connection, cfg: &Config, user: &User) -> Result<bool> {
+    if cfg.mode == crate::config::Mode::Hosted {
+        return Ok(true);
+    }
+    if conn.exists("SELECT 1 FROM members WHERE user_id = ? AND role = 'admin'", [&user.id])? {
+        return Ok(true);
+    }
+    if conn.exists("SELECT 1 FROM workspaces", ())? {
+        return Ok(false);
+    }
+    Ok(cfg.admin_email.as_deref().is_none_or(|e| e == user.email))
+}
+
 pub fn create_workspace(conn: &Connection, cfg: &Config, user: &User, name: &str, accept_terms: bool) -> Result<Value> {
     let clean = js_slice(js_trim(name), 60);
     if clean.is_empty() {
@@ -119,8 +134,16 @@ pub fn create_workspace(conn: &Connection, cfg: &Config, user: &User, name: &str
     if user.email_verified_at.is_none() {
         return Err(Problem::new(403, "unverified", "Confirm your email address first."));
     }
+    if !may_create_workspace(conn, cfg, user)? {
+        return Err(Problem::new(
+            403,
+            "workspaces_closed",
+            "On this server only workspace admins can create workspaces. Ask an admin to invite you.",
+        ));
+    }
     let t = now();
-    if !accept_terms {
+    // Hosted, the service's terms of use must be accepted once. A self-hosted server has no such terms.
+    if !accept_terms && cfg.mode == crate::config::Mode::Hosted {
         let accepted: Option<i64> = conn.first("SELECT terms_accepted_at FROM users WHERE id = ?", [&user.id], |r| r.get(0))?.flatten();
         if accepted.is_none() {
             return Err(Problem::new(
@@ -219,8 +242,9 @@ pub fn describe_workspace(conn: &Connection, cfg: &Config, c: &Caller) -> Result
     let p = plan(&c.workspace);
     Ok(json!({
         "workspace": c.workspace.slug, "name": c.workspace.name, "home": home_url(cfg, &c.workspace), "your_role": c.role,
-        "plan": c.workspace.plan, "running_apps": apps, "app_limit": p.apps, "members": member_count(conn, &c.workspace)?, "member_limit": p.members,
-        "storage_bytes": crate::usage::workspace_storage(conn, &c.workspace.id)?.total(), "storage_limit": p.storage,
+        "plan": crate::model::plan_label(&c.workspace), "running_apps": apps, "app_limit": crate::model::limit_json(p.apps),
+        "members": member_count(conn, &c.workspace)?, "member_limit": crate::model::limit_json(p.members),
+        "storage_bytes": crate::usage::workspace_storage(conn, &c.workspace.id)?.total(), "storage_limit": crate::model::limit_json(p.storage),
         "groups": groups,
         "default_app_roles": ["owner", "editor", "viewer"],
         "access_modes": {
