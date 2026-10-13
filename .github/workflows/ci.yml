@@ -27,6 +27,20 @@ jobs:
       - run: npm ci
       - run: npm test
 
+  # Dependency policy (deny.toml): licenses compatible with AGPL-3.0, no known advisories, crates.io only.
+  licenses:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+      - name: cargo deny (server)
+        run: cargo deny --manifest-path server/Cargo.toml --config deny.toml check
+      - name: cargo deny (runtime supervisor)
+        run: cargo deny --manifest-path deploy/runtime/supervisor/Cargo.toml --config deny.toml check
+
   # The Rust server (server/): format, lints, unit tests, the end-to-end suite with server apps on
   # the workerd runtime and without it, and the Docker images (built only, never pushed).
   rust:
