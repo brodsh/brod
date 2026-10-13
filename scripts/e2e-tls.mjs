@@ -84,7 +84,7 @@ try {
   await wait('Pebble', () => new Promise(r => https.get({ host: '127.0.0.1', port: 15000, path: '/roots/0', ca: [execFileSync('cat', [minica])], servername: 'localhost', agent: false }, res => r(res.statusCode === 200)).on('error', () => r(false))));
   start('brod', brodBin, [], {
     API_ORIGIN: `https://${API_HOST}`, APPS_DOMAIN: APPS, ADMIN_SECRET: 'dev-admin-secret', IDENTITY_SECRET: 'dev-identity-secret',
-    SECRETS_KEY: 'dev-secrets-key-0123456789', DEV_MODE: '1', BROD_DATA_DIR: join(state, 'data'), BROD_LISTEN: `127.0.0.1:${INTERNAL}`,
+    SECRETS_KEY: 'dev-secrets-key-0123456789', DEV_MODE: '1', BROD_MODE: 'hosted', BROD_DATA_DIR: join(state, 'data'), BROD_LISTEN: `127.0.0.1:${INTERNAL}`,
     BROD_TLS: 'acme', ACME_DIRECTORY: 'https://localhost:14000/dir', ACME_CA_ROOT: minica, ACME_EMAIL: 'ops@brod.test',
     BROD_HTTPS_LISTEN: `127.0.0.1:${HTTPS_PORT}`, BROD_HTTP_LISTEN: `127.0.0.1:${HTTP_PORT}`, DNS_RESOLVER_URL: `http://127.0.0.1:${doh.port}/dns-query`,
   });

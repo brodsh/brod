@@ -79,6 +79,10 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: End-to-end tests, server apps on workerd
         run: npm run e2e:rust
+      - name: End-to-end tests, self-hosted defaults (first start, no secrets or email set)
+        run: npm run e2e:self-hosted
+        env:
+          BROD_BIN: server/target/release/brod
       - name: End-to-end tests, static apps only (server apps refused)
         run: npm run e2e:rust:static
         env:
