@@ -105,6 +105,9 @@ struct Pending {
 #[derive(Default)]
 pub struct Analytics {
     pending: Mutex<Pending>,
+    /// Held from taking the pending rows until they are written. Without it, a report that flushes first could find
+    /// the buffer already taken by the periodic flush and read the database before that flush had written it.
+    flushing: tokio::sync::Mutex<()>,
 }
 
 /// One request to an app, from the moment the gateway sees it until its response.
@@ -492,6 +495,7 @@ fn write(conn: &Connection, p: Pending) -> Result<()> {
 
 /// Write what was collected since the last flush. Called on a timer, before a report is read, and at shutdown.
 pub async fn flush(st: &State) -> Result<()> {
+    let _one_at_a_time = st.analytics.flushing.lock().await;
     let p = st.analytics.take();
     if p.views.is_empty() && p.events.is_empty() && p.stats.is_empty() {
         return Ok(());
