@@ -1,0 +1,24 @@
+# Marketplace previews: a headless Chromium that screenshots and records listed apps in an empty sandbox
+# (server/src/preview.rs). Only useful with BROD_MARKETPLACE=true. Layer it on the main file:
+#   docker compose -f docker-compose.yml -f deploy/compose.preview.yml up -d
+# Needs BROD_PREVIEW_SECRET in .env (openssl rand -hex 32). The first build downloads about 2 GB.
+services:
+  brod:
+    environment:
+      BROD_PREVIEW_URL: http://preview:8790
+      BROD_PREVIEW_SECRET: ${BROD_PREVIEW_SECRET:?set BROD_PREVIEW_SECRET in .env}
+
+  preview:
+    build:
+      context: .
+      dockerfile: deploy/preview/Dockerfile
+    image: brod-preview:local
+    restart: unless-stopped
+    depends_on:
+      brod:
+        condition: service_healthy
+    environment:
+      BROD_PREVIEW_SECRET: ${BROD_PREVIEW_SECRET:?set BROD_PREVIEW_SECRET in .env}
+      BROD_INTERNAL_URL: http://brod:8080
+    # Chromium wants more shared memory than Docker's 64 MB default.
+    shm_size: 1gb

@@ -1,0 +1,78 @@
+# Brod: the server, its Postgres database and the runtime for server apps.
+#   cp .env.example .env      (then set BROD_ADMIN_EMAIL)
+#   docker compose up -d
+#   docker compose logs brod  (the sign-in link and the line that connects your agent)
+# No password or secret needs setting: Brod generates its secrets into the brod-data volume, and Postgres is reached
+# only through a socket the two containers share, with no network port.
+# For a server with a domain and HTTPS, see docs/deploy-production.md.
+name: brod
+
+services:
+  brod:
+    image: ghcr.io/brodsh/brod:${BROD_VERSION:-latest}
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      BROD_DATA_DIR: /data
+      BROD_DATABASE_URL: postgres://brod@%2Fvar%2Frun%2Fpostgresql/brod
+      BROD_RUNTIME_URL: http://runtime:8081
+    ports:
+      # Only this machine can reach it. Use "8080:8080" (and a proxy with HTTPS) to let others in.
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - brod-data:/data
+      - postgres-socket:/var/run/postgresql
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826
+    restart: unless-stopped
+    # No TCP listener: Brod connects through the socket in the shared postgres-socket volume, so there is no password
+    # to set and nothing on the network to reach.
+    command: ["postgres", "-c", "listen_addresses="]
+    environment:
+      POSTGRES_USER: brod
+      POSTGRES_DB: brod
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - postgres-socket:/var/run/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "brod", "-d", "brod"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  runtime:
+    image: ghcr.io/brodsh/brod-runtime:${BROD_VERSION:-latest}
+    build:
+      context: .
+      dockerfile: deploy/runtime/Dockerfile
+    restart: unless-stopped
+    # The supervisor is the main process; an init passes it docker stop's signal.
+    init: true
+    environment:
+      # The secret Brod generated, read from its data volume (mounted read-only below).
+      BROD_RUNTIME_SECRET_FILE: /brod/runtime-secret
+      BROD_INTERNAL_URL: http://brod:8080
+      RUNTIME_STALL_MS: ${RUNTIME_STALL_MS:-5000}
+      RUNTIME_MEMORY_MB: ${RUNTIME_MEMORY_MB:-1536}
+    # A ceiling the kernel enforces, above RUNTIME_MEMORY_MB, so server apps can never take the machine's memory.
+    mem_limit: ${RUNTIME_MEM_LIMIT:-2g}
+    volumes:
+      - brod-data:/brod:ro
+      - runtime-data:/data
+    depends_on:
+      brod:
+        condition: service_healthy
+        # workerd looks up Brod's address once at start, so it restarts whenever Brod's container is recreated.
+        restart: true
+
+volumes:
+  brod-data:
+  postgres-data:
+  postgres-socket:
+  runtime-data:
