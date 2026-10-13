@@ -410,6 +410,9 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
             ));
         }
     };
+    if let Err(e) = st.calls.check(&caller) {
+        return Ok(json_response(&json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32000, "message": e.message } }), 429, &[]));
+    }
     let raw = req.bytes(crate::tar::BUNDLE_BYTES, "The request body").await?;
     let body: Value = match serde_json::from_slice(&raw) {
         Ok(v) => v,

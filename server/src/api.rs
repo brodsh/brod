@@ -95,6 +95,7 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
     }
 
     let c = control::authenticate_async(st, Credentials::of(&req)).await?;
+    st.calls.check(&c)?;
     if m != Method::GET && m != Method::HEAD {
         control::require_write(&c, "make changes")?;
     }
