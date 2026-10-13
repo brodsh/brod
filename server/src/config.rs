@@ -151,10 +151,18 @@ impl Config {
         }
         let mut cfg = Config::from_vars(&vars)?;
         cfg.generated_secrets = generated;
-        // The runtime sidecar reads the secret Brod uses from here (BROD_RUNTIME_SECRET_FILE), so Compose needs no copy of it.
+        // The runtime sidecar reads the secret Brod uses from a file, so Compose needs no copy of it: BROD_RUNTIME_SECRET_FILE
+        // (Compose puts it in a volume that holds nothing else), or <data>/runtime-secret.
         if let (false, Some(secret)) = (hosted, vars.get("BROD_RUNTIME_SECRET").map(|s| s.trim()).filter(|s| !s.is_empty())) {
-            let path = data_dir.join("runtime-secret");
-            std::fs::create_dir_all(&data_dir).map_err(|e| ConfigError(format!("Could not create {}: {e}", data_dir.display())))?;
+            let path = vars
+                .get("BROD_RUNTIME_SECRET_FILE")
+                .map(|p| p.trim())
+                .filter(|p| !p.is_empty())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| data_dir.join("runtime-secret"));
+            if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+                std::fs::create_dir_all(dir).map_err(|e| ConfigError(format!("Could not create {}: {e}", dir.display())))?;
+            }
             write_private(&path, secret).map_err(|e| ConfigError(format!("Could not write {}: {e}", path.display())))?;
         }
         Ok(cfg)

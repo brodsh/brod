@@ -2,8 +2,9 @@
 #   cp .env.example .env      (then set BROD_ADMIN_EMAIL)
 #   docker compose up -d
 #   docker compose logs brod  (the sign-in link and the line that connects your agent)
-# No password or secret needs setting: Brod generates its secrets into the brod-data volume, and Postgres is reached
-# only through a socket the two containers share, with no network port.
+# No password or secret needs setting: Brod generates its secrets into the brod-data volume and shares only the
+# runtime's secret with the runtime, and Postgres is reached only through a socket the two containers share, with no
+# network port.
 # For a server with a domain and HTTPS, see docs/deploy-production.md.
 name: brod
 
@@ -17,12 +18,15 @@ services:
       BROD_DATA_DIR: /data
       BROD_DATABASE_URL: postgres://brod@%2Fvar%2Frun%2Fpostgresql/brod
       BROD_RUNTIME_URL: http://runtime:8081
+      # Where Brod writes the secret it shares with the runtime: a volume that holds nothing else.
+      BROD_RUNTIME_SECRET_FILE: /run/brod/runtime-secret
     ports:
       # Only this machine can reach it. Use "8080:8080" (and a proxy with HTTPS) to let others in.
       - "127.0.0.1:8080:8080"
     volumes:
       - brod-data:/data
       - postgres-socket:/var/run/postgresql
+      - runtime-secret:/run/brod
     depends_on:
       postgres:
         condition: service_healthy
@@ -55,15 +59,15 @@ services:
     # The supervisor is the main process; an init passes it docker stop's signal.
     init: true
     environment:
-      # The secret Brod generated, read from its data volume (mounted read-only below).
-      BROD_RUNTIME_SECRET_FILE: /brod/runtime-secret
+      # The secret Brod generated, from the one-file volume below. The runtime never sees Brod's data or other secrets.
+      BROD_RUNTIME_SECRET_FILE: /run/brod/runtime-secret
       BROD_INTERNAL_URL: http://brod:8080
       RUNTIME_STALL_MS: ${RUNTIME_STALL_MS:-5000}
       RUNTIME_MEMORY_MB: ${RUNTIME_MEMORY_MB:-1536}
     # A ceiling the kernel enforces, above RUNTIME_MEMORY_MB, so server apps can never take the machine's memory.
     mem_limit: ${RUNTIME_MEM_LIMIT:-2g}
     volumes:
-      - brod-data:/brod:ro
+      - runtime-secret:/run/brod:ro
       - runtime-data:/data
     depends_on:
       brod:
@@ -76,3 +80,4 @@ volumes:
   postgres-data:
   postgres-socket:
   runtime-data:
+  runtime-secret:

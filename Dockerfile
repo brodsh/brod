@@ -35,7 +35,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     if [ "$TARGETARCH" = "$BUILDARCH" ]; then unset CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER CC_x86_64_unknown_linux_gnu CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER CC_aarch64_unknown_linux_gnu; fi; \
     cargo build --release --locked --manifest-path server/Cargo.toml --target "$(cat /triple)"; \
     cp "server/target/$(cat /triple)/release/brod" /brod; \
-    mkdir /data
+    mkdir -p /data /run-brod
 
 # glibc and libgcc only: no shell, no package manager.
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
@@ -45,6 +45,8 @@ LABEL org.opencontainers.image.title="Brod" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
 COPY --from=build /brod /usr/local/bin/brod
 COPY --from=build --chown=65532:65532 /data /data
+# Where Compose mounts the volume Brod shares the runtime's secret through; owned by Brod so it can write there.
+COPY --from=build --chown=65532:65532 /run-brod /run/brod
 ENV BROD_LISTEN=0.0.0.0:8080 \
     BROD_DATA_DIR=/data
 VOLUME /data
