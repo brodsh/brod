@@ -1,5 +1,5 @@
 // Per-app secrets. Encrypted at rest with AES-256-GCM under a key derived from SECRETS_KEY with HKDF-SHA256,
-// with the app id as associated data: the same scheme as src/secrets.ts, so values move between the two unchanged.
+// with the app id as associated data.
 // Stored as base64(iv) + "." + base64(ciphertext and tag).
 use crate::db::{Connection, params};
 use aes_gcm::aead::{Aead, KeyInit, Payload};
@@ -126,20 +126,11 @@ mod tests {
     }
 
     #[test]
-    fn opens_a_value_sealed_by_src_secrets_ts() {
-        // Made by src/secrets.ts (putSecret) under SECRETS_KEY "dev-secrets-key-0123456789" for app "app_compat".
-        // test-node/secrets-compat.test.ts checks the other direction with a value sealed here.
-        let sealed = include_str!("../tests/fixtures/sealed-by-ts.txt").trim();
+    fn opens_a_value_sealed_by_an_earlier_version() {
+        // Sealed by Brod's first (TypeScript) version under SECRETS_KEY "dev-secrets-key-0123456789" for app
+        // "app_compat". Stored secrets must keep opening after an upgrade.
+        let sealed = include_str!("../tests/fixtures/sealed-v1.txt").trim();
         assert_eq!(open(KEY, "app_compat", sealed).unwrap(), "sk_live_ünïcode ✓");
-    }
-
-    /// Writes tests/fixtures/sealed-by-rust.txt, which test-node/secrets-compat.test.ts opens with src/secrets.ts.
-    /// Run with: cargo test write_rust_fixture -- --ignored
-    #[test]
-    #[ignore]
-    fn write_rust_fixture() {
-        let sealed = seal(KEY, "app_compat", "sk_live_ünïcode ✓").unwrap();
-        std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/sealed-by-rust.txt"), sealed + "\n").unwrap();
     }
 
     #[test]

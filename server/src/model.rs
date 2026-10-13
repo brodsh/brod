@@ -1,4 +1,4 @@
-// Shared types and limits, as in src/lib.ts.
+// Shared types and limits.
 use crate::db::Row;
 use serde::Serialize;
 use serde_json::{Map, Value};

@@ -120,7 +120,7 @@ try {
   const W = (await call('/v1/workspaces', { json: { name: 'TLS', accept_terms: true } })).json.workspace;
   const d = await call('/v1/deploys', { json: { name: 'Shop', files: [{ path: 'index.html', content: '<html><body>shop</body></html>' }] }, headers: { 'x-brod-workspace': W } });
   const APP = d.json.app;
-  // A new free workspace keeps its apps inside it for a day unless the operator trusts it (src/abuse.ts).
+  // A new free workspace keeps its apps inside it for a day unless the operator trusts it (server/src/abuse.rs).
   await call(`/v1/admin/workspaces/${W}/trust`, { method: 'POST', headers: { authorization: 'Bearer dev-admin-secret' } });
   await call(`/v1/apps/${APP}/access`, { json: { access: 'public' }, headers: { 'x-brod-workspace': W } });
   const page = await get(`${APP}.${W}.${APPS}`, '/', { ca });

@@ -2,7 +2,7 @@
 // Both get the same schema under the same migration names, and a small pool of connections.
 // Database calls block, so every call runs on tokio's blocking pool and never on the async workers.
 //
-// Domain code writes SQLite's dialect, as the TypeScript spec does, through `Sql`, `Row` and `params!`, and never sees
+// Domain code writes SQLite's dialect, through `Sql`, `Row` and `params!`, and never sees
 // the driver. On Postgres each statement is translated once (`pg_sql`) and kept prepared.
 use postgres::types::{FromSql, IsNull, ToSql, Type};
 use rusqlite::OpenFlags;
@@ -17,7 +17,7 @@ use tokio::sync::Semaphore;
 
 use crate::problem::{Problem, Result};
 
-/// migrations/*.sql, built into the binary so the image needs nothing else. Names match `wrangler d1 migrations`.
+/// migrations/*.sql, built into the binary so the image needs nothing else. Applied migrations are recorded by name in d1_migrations.
 pub const MIGRATIONS: &[(&str, &str)] = &[
     ("0001_init.sql", include_str!("../../migrations/0001_init.sql")),
     ("0002_server_apps.sql", include_str!("../../migrations/0002_server_apps.sql")),
@@ -717,7 +717,7 @@ impl Pg {
     }
 }
 
-/// SQLite's dialect, as the domain code and the TypeScript spec write it, in Postgres's. Mechanical, and only for the
+/// SQLite's dialect, as the domain code writes it, in Postgres's. Mechanical, and only for the
 /// forms this code uses: `?` and `?N` placeholders; `x IS ?` (NULL-safe equality); `? IS NULL`, whose parameter Postgres
 /// cannot type on its own (always text here); GROUP_CONCAT(x, sep); LIKE, which ignores ASCII case in SQLite;
 /// INSERT OR IGNORE; and MAX(a, b) / MIN(a, b) with two or more arguments, SQLite's scalar forms of GREATEST and LEAST.
@@ -813,7 +813,7 @@ fn ends_with_word(s: &str, w: &str) -> bool {
     s.ends_with(w) && s[..s.len() - w.len()].chars().next_back().is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'))
 }
 
-/// Apply the migrations in order, each in its own transaction, recorded in d1_migrations as wrangler does.
+/// Apply the migrations in order, each in its own transaction, recorded in d1_migrations (a name kept from Brod's first, Cloudflare D1-based version).
 pub fn migrate(conn: &Connection) -> std::result::Result<(), String> {
     let pg = conn.is_postgres();
     let (set, table) = if pg {
@@ -880,7 +880,7 @@ pub fn backup(from: &Path, to: &Path) -> std::result::Result<(), String> {
     Ok(())
 }
 
-/// Several writes as one transaction, like D1's batch(): all apply or none do. SQLite's BEGIN IMMEDIATE takes the
+/// Several writes as one transaction: all apply or none do. SQLite's BEGIN IMMEDIATE takes the
 /// write lock up front, so two writers queue on the busy timeout instead of failing on a lock upgrade. On Postgres
 /// every transaction takes one advisory lock for the same effect: writers go one at a time, so a check and the write
 /// that depends on it (limits, last admin, version numbers) cannot interleave with another writer's.
@@ -898,14 +898,14 @@ pub fn tx<R>(conn: &Connection, f: impl FnOnce(&Connection) -> Result<R>) -> Res
     }
 }
 
-/// Query helpers in the spirit of D1's first(), all() and run().
+/// Query helpers: first(), all() and run().
 pub trait Sql {
     fn first<T, P: Params>(&self, sql: &str, params: P, map: impl FnOnce(&Row) -> Result<T>) -> Result<Option<T>>;
     fn all<T, P: Params>(&self, sql: &str, params: P, map: impl FnMut(&Row) -> Result<T>) -> Result<Vec<T>>;
     fn run<P: Params>(&self, sql: &str, params: P) -> Result<usize>;
     fn exists<P: Params>(&self, sql: &str, params: P) -> Result<bool>;
     fn count<P: Params>(&self, sql: &str, params: P) -> Result<i64>;
-    /// Rows as JSON objects with the columns in order, the way D1's all() returns them.
+    /// Rows as JSON objects with the columns in order.
     fn rows_json<P: Params>(&self, sql: &str, params: P) -> Result<Vec<Value>>;
     /// Hand each row to `f` as it is read, without collecting them (see `Connection::stream`).
     fn each<P: Params>(&self, sql: &str, params: P, f: impl FnMut(&Row) -> Result<()>) -> Result<()>;

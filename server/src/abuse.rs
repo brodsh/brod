@@ -1,6 +1,6 @@
 // Abuse protection: takedowns and suspended workspaces, rate limits for anonymous and new users, the guardrail that
 // keeps a new workspace's apps inside it for its first day, the flag the deploy-time phishing check (scan.rs) puts on
-// a version, and the operator's API under /v1/admin/ (ADMIN_SECRET). Mirrors src/abuse.ts.
+// a version, and the operator's API under /v1/admin/ (ADMIN_SECRET).
 use std::net::IpAddr;
 
 use axum::http::Method;
@@ -249,7 +249,7 @@ pub async fn serve(st: &State, req: &mut Req, seg: &[String]) -> Result<Response
     let (what, a, b, action) = (s(1).map(String::from), s(2).map(String::from), s(3).map(String::from), s(4).map(String::from));
     let m = req.method.clone();
     let o: Map<String, Value> = if m == Method::POST {
-        // Lenient, like the TypeScript: a missing or broken body reads as {}.
+        // Lenient: a missing or broken body reads as {}.
         match serde_json::from_slice(&req.bytes(64 * 1024, "The request body").await?) {
             Ok(Value::Object(o)) => o,
             _ => Map::new(),

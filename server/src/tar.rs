@@ -1,5 +1,5 @@
 // Unpack a .tar, .tar.gz or .zip bundle in memory (and pack a .tar.gz). Handles ustar prefixes, GNU long names and pax path records,
-// exactly as src/tar.ts does, and the stored and deflated entries of a zip (what Finder and Explorer make).
+// and the stored and deflated entries of a zip (what Finder and Explorer make).
 use flate2::read::{DeflateDecoder, MultiGzDecoder};
 use std::io::Read;
 
@@ -211,7 +211,7 @@ fn header(name: &[u8], size: usize, kind: u8, mtime_ms: i64) -> [u8; 512] {
 }
 
 /// A tar.gz of the files, the way `tar -czf` would write them, every file dated `mtime_ms`. A path longer than a ustar
-/// header holds gets a pax path record, as in src/tar.ts.
+/// header holds gets a pax path record.
 pub fn pack(files: &[BundleFile], mtime_ms: i64) -> Vec<u8> {
     use std::io::Write;
     let mut tar = Vec::new();

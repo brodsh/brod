@@ -184,7 +184,7 @@ pub fn json(data: Value) -> Response {
     json_response(&data, 200, &[])
 }
 
-/// The look shared by every platform page. Keep it in step with PAGE_CSS in src/lib.ts.
+/// The look shared by every platform page.
 const PAGE_CSS: &str = r##":root{--bg:#F1F5F2;--surface:#FBFCFB;--sunk:#E7EDE8;--ink:#15201B;--muted:#5A6860;--line:#D7E0D9;--deploy:#F4B62E;--green:#1E5B4A;--ok:#2B7A4B;--bad:#B2372E;--bad-bg:#FBECEA;--display:'Bricolage Grotesque','Segoe UI',system-ui,sans-serif;--body:'Instrument Sans','Segoe UI',system-ui,sans-serif;--mono:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace;color-scheme:light}
 @media(prefers-color-scheme:dark){:root{--bg:#111815;--surface:#182019;--sunk:#0C120F;--ink:#E6EDE8;--muted:#93A199;--line:#2A3630;--green:#7FD0B0;--ok:#6CC48D;--bad:#F0857A;--bad-bg:#2E1A18;color-scheme:dark}}
 *{box-sizing:border-box}
@@ -271,7 +271,6 @@ pub fn notice(status: u16, title: &str, text: &str, extra: &str) -> Response {
     page(status, title, &format!("<h1>{}</h1><p>{}</p>{extra}", esc(title), esc(text)), None, &[])
 }
 
-/// Keep in step with NOT_FOUND_CSS in src/lib.ts.
 const NOT_FOUND_CSS: &str = r##"<style>
 .nf{display:flex;flex-direction:column;align-items:center;text-align:center;gap:12px;padding:6px 0 2px}
 .nf-art{position:relative;width:176px;height:116px;margin:6px 0 8px}
@@ -285,7 +284,7 @@ const NOT_FOUND_CSS: &str = r##"<style>
 </style>"##;
 
 /// The page for an app that is not there. A visitor who may not open an app sees exactly this too, so an address
-/// says nothing about whether an app lives at it. Keep in step with notFound() in src/lib.ts.
+/// says nothing about whether an app lives at it.
 pub fn not_found(api_origin: &str) -> Response {
     let body = format!(
         r#"{NOT_FOUND_CSS}<div class="nf">

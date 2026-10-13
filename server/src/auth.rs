@@ -1,5 +1,5 @@
 // Pages and sign-in on the API host: magic links, Google, the hand-off of a sign-in to an app's own address,
-// invitations, confirmations of agent requests, and the workspace home page. Mirrors src/auth.ts.
+// invitations, confirmations of agent requests, and the workspace home page.
 //
 // One sign-in, many addresses: the platform session cookie lives only on the API host. When an app needs a person,
 // the gateway sends them to /auth/app, which hands the app a one-time code; the app's host swaps it for its own

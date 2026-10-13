@@ -1,4 +1,4 @@
-// Custom domains. Mirrors src/domains.ts: the same checks in the same order, the same errors, the same JSON.
+// Custom domains.
 //
 // A workspace can serve one app at a domain it owns (shop.example.com), or point a whole domain at the workspace
 // (*.apps.example.com: <app>.apps.example.com opens that app, apps.example.com the home page). A domain is claimed,

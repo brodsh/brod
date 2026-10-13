@@ -1,4 +1,4 @@
-// Configuration from environment variables (and a .env file), with the same names as the Worker's vars and secrets.
+// Configuration from environment variables (and a .env file).
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;

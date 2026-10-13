@@ -1,5 +1,4 @@
 // The control plane. The REST API, the MCP endpoint and the confirmation pages call only these functions.
-// Mirrors src/control.ts: the same checks in the same order, the same errors, the same JSON.
 use crate::db::{Connection, params};
 use bytes::Bytes;
 use serde_json::{Map, Value, json};

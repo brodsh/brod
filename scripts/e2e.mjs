@@ -1,4 +1,4 @@
-// End-to-end check against a running `wrangler dev` (with DEV_MODE=1 from .dev.vars), using the official MCP client
+// End-to-end check against a running Brod server with DEV_MODE=1 (started by scripts/e2e-rust.mjs), using the official MCP client
 // the way an agent would, and a small cookie-keeping browser for people signing in across the API and app hosts.
 // Usage: node scripts/e2e.mjs [api origin]   (default http://localhost:8787)
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -16,7 +16,7 @@ let passed = 0, failed = 0;
 const check = (name, ok, detail = '') => { ok ? passed++ : failed++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok || !detail ? '' : `\n      ${detail}`}`); };
 const run = Date.now();
 
-/** Send a request to the local Worker with any Host header, so *.localhost need not resolve on this machine. */
+/** Send a request to the local server with any Host header, so *.localhost need not resolve on this machine. */
 function send(url, { method = 'GET', headers = {}, body } = {}) {
   const u = new URL(url);
   return new Promise((resolve, reject) => {
@@ -335,7 +335,7 @@ check('a report reaches the review queue', rep.status === 200 && JSON.parse(queu
 
 const up = await tool('deploy_app', { app: APP, note: 'Second version by upload' });
 check('deploy_app without files returns an upload address', !up.isError && (up.data.finish_url ?? up.data.upload_url)?.includes('/v1/uploads/'), JSON.stringify(up.data));
-// Follow next_step: one PUT to the API, or (hosts with a small request limit, such as Vercel) a PUT to the bucket, then finish.
+// Follow next_step: one PUT to the API, or a PUT straight to the bucket when the server asks for one, then finish.
 const curl = (args, input) => { const r = execSync(`${input ? `${input} | ` : ''}curl -sS -w "\\n%{http_code}" ${args}`).toString(); const i = r.lastIndexOf('\n'); return { body: r.slice(0, i), status: Number(r.slice(i + 1)) }; };
 const sendBundle = (u, source) => {
   const put = curl(`-X PUT --data-binary @- "${u.upload_url}"`, source);
@@ -566,7 +566,7 @@ export default {
 };`);
 const sres = sendBundle(sup.data, `tar -czf - -C ${sdir} build`);
 if (process.env.E2E_SKIP_SERVER_APPS === '1') {
-  // Hosts without Cloudflare's Worker Loader (Vercel, Node) serve static apps only; the rest of this section needs one.
+  // A server without the server-app runtime serves static apps only; the rest of this section needs one.
   check('a server app is refused with a clear reason on a static-only host', sres.status === 400 && JSON.parse(sres.body).error.code === 'server_apps_unavailable', sres.body);
   console.log('SKIP  the rest of section 7 (server apps): E2E_SKIP_SERVER_APPS=1');
   await sclient.close().catch(() => {});

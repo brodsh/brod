@@ -118,7 +118,7 @@ check('only admins see billing', (await bo.api('/v1/billing')).status === 403);
 
 const d1 = await ada.api('/v1/deploys', { json: { name: `Counter ${run}`, files: [{ path: 'index.html', content: '<h1>hi</h1>' }, { path: 'style.css', content: 'h1{}' }] } });
 const APP = d1.body.app, url = d1.body.url;
-// A new free workspace keeps its apps inside it for a day unless the operator trusts it (src/abuse.ts).
+// A new free workspace keeps its apps inside it for a day unless the operator trusts it (server/src/abuse.rs).
 await send(`${API}/v1/admin/workspaces/${ada.workspace}/trust`, { method: 'POST', headers: { authorization: `Bearer ${process.env.ADMIN_SECRET ?? 'dev-admin-secret'}` } });
 await ada.api(`/v1/apps/${APP}/access`, { json: { access: 'public' } });
 const page = (ua, dest, path = '/') => send(url + path, { headers: { 'user-agent': ua, ...(dest ? { 'sec-fetch-dest': dest } : {}) } });

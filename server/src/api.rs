@@ -1,4 +1,4 @@
-// The REST control-plane API under /v1/: agents with a token, the dashboard with a session. Mirrors api() in src/index.ts.
+// The REST control-plane API under /v1/: agents with a token, the dashboard with a session.
 use axum::http::Method;
 use axum::response::Response;
 use serde_json::{Map, Value, json};

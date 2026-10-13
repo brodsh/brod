@@ -1,5 +1,5 @@
 // The workspace layer: people, workspaces, groups, invites, per-app role grants, sessions,
-// and the one access decision the gateway makes for every visitor request. Mirrors src/people.ts.
+// and the one access decision the gateway makes for every visitor request.
 // Functions here are synchronous over one database connection; callers run them on the blocking pool.
 use crate::db::{Connection, Row, params};
 use serde_json::{Map, Value, json};

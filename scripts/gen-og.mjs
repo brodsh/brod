@@ -1,6 +1,6 @@
 // Render server/src/og.png, the 1200 × 630 picture link previews show for https://brod.sh (og:image, twitter:image).
 // It is the landing page's own hero: the headline beside the transcript of an agent putting an app online.
-// Usage: npm run gen:og && npm run gen:home   (gen:home copies the picture into src/home.ts for the Worker)
+// Usage: npm run gen:og
 import { chromium } from 'playwright';
 
 const html = `<!doctype html><html><head><meta charset="utf-8">

@@ -11,7 +11,7 @@ use crate::util::sha256_hex;
 
 pub const PAGE: &str = include_str!("home.html");
 
-/// The same tag the TypeScript Worker sends: the first 16 hex digits of the page's SHA-256.
+/// The ETag: the first 16 hex digits of the page's SHA-256.
 static ETAG: LazyLock<String> = LazyLock::new(|| format!("\"{}\"", &sha256_hex(PAGE)[..16]));
 
 pub fn page(req: &Req) -> Response {
