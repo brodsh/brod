@@ -135,10 +135,10 @@ impl Config {
         let set = |vars: &HashMap<String, String>, k: &str| vars.get(k).is_some_and(|v| !v.trim().is_empty());
         let hosted = vars.get("BROD_MODE").is_some_and(|m| m.trim() == "hosted");
         let mut generated = Vec::new();
+        let data_dir = PathBuf::from(
+            vars.get("BROD_DATA_DIR").filter(|d| !d.trim().is_empty()).map(|d| d.trim().to_string()).unwrap_or_else(|| "data".into()),
+        );
         if !hosted && GENERATED.iter().any(|k| !set(&vars, k)) {
-            let data_dir = PathBuf::from(
-                vars.get("BROD_DATA_DIR").filter(|d| !d.trim().is_empty()).map(|d| d.trim().to_string()).unwrap_or_else(|| "data".into()),
-            );
             let stored = load_or_create_secrets(&data_dir)?;
             for k in GENERATED {
                 if !set(&vars, k)
@@ -151,6 +151,12 @@ impl Config {
         }
         let mut cfg = Config::from_vars(&vars)?;
         cfg.generated_secrets = generated;
+        // The runtime sidecar reads the secret Brod uses from here (BROD_RUNTIME_SECRET_FILE), so Compose needs no copy of it.
+        if let (false, Some(secret)) = (hosted, vars.get("BROD_RUNTIME_SECRET").map(|s| s.trim()).filter(|s| !s.is_empty())) {
+            let path = data_dir.join("runtime-secret");
+            std::fs::create_dir_all(&data_dir).map_err(|e| ConfigError(format!("Could not create {}: {e}", data_dir.display())))?;
+            write_private(&path, secret).map_err(|e| ConfigError(format!("Could not write {}: {e}", path.display())))?;
+        }
         Ok(cfg)
     }
 
@@ -407,8 +413,7 @@ fn is_weak_secret(v: &str) -> bool {
     v.len() < 32 || KNOWN.contains(&v) || v.starts_with("change-me")
 }
 
-/// Read <data>/secrets.env, or write one with a fresh random value for each of GENERATED. The runtime sidecar reads
-/// BROD_RUNTIME_SECRET from <data>/runtime-secret, so that is written too.
+/// Read <data>/secrets.env, or write one with a fresh random value for each of GENERATED.
 fn load_or_create_secrets(data_dir: &std::path::Path) -> Result<HashMap<String, String>, ConfigError> {
     let path = data_dir.join("secrets.env");
     let fail = |e: std::io::Error| ConfigError(format!("Could not keep generated secrets in {}: {e}", path.display()));
@@ -428,7 +433,6 @@ fn load_or_create_secrets(data_dir: &std::path::Path) -> Result<HashMap<String, 
         }
         write_private(&path, &text).map_err(fail)?;
     }
-    write_private(&data_dir.join("runtime-secret"), &out["BROD_RUNTIME_SECRET"]).map_err(fail)?;
     Ok(out)
 }
 
@@ -503,7 +507,6 @@ mod tests {
         let again = load_or_create_secrets(&dir).unwrap();
         assert_eq!(first, again);
         assert!(GENERATED.iter().all(|k| first[*k].len() == 64));
-        assert_eq!(std::fs::read_to_string(dir.join("runtime-secret")).unwrap(), first["BROD_RUNTIME_SECRET"]);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
