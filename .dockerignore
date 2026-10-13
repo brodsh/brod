@@ -1,8 +1,9 @@
-node_modules
-server/target
 .git
-.wrangler
-dist
-.vercel
+**/target
+node_modules
 .env
+.env.*
+!.env.example
 deploy/.env
+data
+*.db

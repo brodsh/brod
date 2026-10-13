@@ -1,8 +1,17 @@
-node_modules
-.wrangler
-dist
-.vercel
+# Build output
+target/
+node_modules/
+
+# Local configuration and data
 .env
 .env.local
-server/target/
-deploy/runtime/supervisor/target/
+deploy/.env
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
