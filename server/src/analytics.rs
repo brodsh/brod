@@ -982,7 +982,7 @@ pub fn report(conn: &Connection, c: &Caller, app: Option<&str>, days: Option<i64
         out.insert(k.to_string(), v);
     };
     put("app", app_json);
-    put("plan", json!(c.workspace.plan));
+    put("plan", json!(crate::model::plan_label(&c.workspace)));
     put("retention_days", json!(keep));
     put("days", json!(days));
     put("tz", json!(tz));

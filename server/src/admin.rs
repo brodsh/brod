@@ -44,6 +44,7 @@ pub async fn page(st: &State, req: &Req, slug: String) -> Result<Response> {
     // Inside <script type="application/json">, so "<" is escaped to keep "</script>" out of the data.
     let boot = json!({
         "workspace": w.slug, "name": w.name, "icon": w.icon, "role": role, "email": user.email,
+        "hosted": st.cfg.mode == crate::config::Mode::Hosted, "marketplace": st.cfg.marketplace,
     })
     .to_string()
     .replace('<', "\\u003c");

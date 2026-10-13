@@ -158,7 +158,35 @@ pub struct Plan {
 }
 pub const MB: i64 = 1024 * 1024;
 pub const PLANS: [&str; 3] = ["free", "solo", "team"];
+/// A limit that is never reached: what a self-hosted server allows. JSON shows it as null (`limit_json`).
+pub const UNLIMITED: i64 = i64::MAX;
+/// How long a self-hosted server keeps analytics.
+pub const SELF_HOSTED_ANALYTICS_DAYS: i64 = 365;
+
+/// Self-hosted servers have no plans: every workspace may run as many apps, with as many people and as much storage,
+/// as the machine holds. Set once at start (state.rs) from BROD_MODE.
+static SELF_HOSTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+pub fn set_self_hosted(on: bool) {
+    let _ = SELF_HOSTED.set(on);
+}
+pub fn self_hosted() -> bool {
+    SELF_HOSTED.get().copied().unwrap_or(false)
+}
+
+/// The plan name to show for a workspace: its stored plan when hosted, "self-hosted" otherwise.
+pub fn plan_label(w: &Workspace) -> &str {
+    if self_hosted() { "self-hosted" } else { &w.plan }
+}
+
+/// A limit as JSON: a number, or null when there is none.
+pub fn limit_json(n: i64) -> serde_json::Value {
+    if n == UNLIMITED { serde_json::Value::Null } else { n.into() }
+}
+
 pub fn plan_named(name: &str) -> Plan {
+    if self_hosted() {
+        return Plan { apps: UNLIMITED, members: UNLIMITED, storage: UNLIMITED, analytics_days: SELF_HOSTED_ANALYTICS_DAYS };
+    }
     match name {
         "solo" => Plan { apps: 15, members: 1, storage: 5 * 1024 * MB, analytics_days: 365 },
         "team" => Plan { apps: 50, members: 25, storage: 25 * 1024 * MB, analytics_days: 730 },

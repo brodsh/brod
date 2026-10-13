@@ -310,7 +310,7 @@ pub fn workspace_usage(conn: &Connection, c: &Caller, days: Option<i64>) -> Resu
     let s = workspace_storage(conn, &c.workspace.id)?;
     Ok(json!({
         "days": days, "apps": out, "total_views": views_total, "total_visitors": visitors_total,
-        "storage": { "bundles": s.bundles, "files": s.files, "data": s.data, "total": s.total(), "limit": plan(&c.workspace).storage },
+        "storage": { "bundles": s.bundles, "files": s.files, "data": s.data, "total": s.total(), "limit": crate::model::limit_json(plan(&c.workspace).storage) },
     }))
 }
 

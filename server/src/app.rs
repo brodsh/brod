@@ -101,7 +101,7 @@ async fn api_host(st: State, mut req: Req) -> Response {
         "/_caddy/ask" if is_internal(&st, &req) => caddy_ask(&st, &req).await,
         p if p.starts_with("/_runtime/") && is_internal(&st, &req) => crate::runtime::internal(&st, req).await,
         "/mcp" => crate::mcp::serve(&st, req).await,
-        "/stripe/webhook" if req.method == Method::POST => {
+        "/stripe/webhook" if req.method == Method::POST && st.cfg.mode == crate::config::Mode::Hosted => {
             let body = req.bytes(1024 * 1024, "The webhook").await;
             match body {
                 Ok(body) => crate::billing::webhook(&st, req.header("stripe-signature"), &body).await.map(json),

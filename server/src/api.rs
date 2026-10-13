@@ -242,7 +242,8 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
                 return Ok(json(crate::domains::remove_domain(st, &c, &seg[1]).await?));
             }
         }
-        Some("billing") => {
+        // Plans and payment exist only on a hosted server (BROD_MODE=hosted).
+        Some("billing") if st.cfg.mode == crate::config::Mode::Hosted => {
             if m == Method::GET && s(1).is_none() {
                 return Ok(json(crate::billing::summary(st, &c).await?));
             }
@@ -281,7 +282,7 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
                 }
             }
         }
-        Some("marketplace") => {
+        Some("marketplace") if st.cfg.marketplace => {
             if m == Method::GET && s(1).is_none() {
                 let search = req.param("search").filter(|x| !x.is_empty());
                 let mut v = db(Box::new(move |conn, _, c| crate::market::browse(conn, c, search.as_deref()))).await?;
@@ -303,7 +304,7 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
                 return Ok(created(crate::market::install(st, &c, &key, b).await?));
             }
         }
-        Some("listings") => {
+        Some("listings") if st.cfg.marketplace => {
             if m == Method::GET && s(1).is_none() {
                 let mut v = db(Box::new(|conn, _, c| crate::market::my_listings(conn, c))).await?;
                 v["auto_previews"] = json!(st.cfg.preview.is_some());
@@ -412,11 +413,11 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
                         };
                         return Ok(json(control::delete_version(st, &c, &slug, n).await?));
                     }
-                    if action == "marketplace" && m == Method::POST && s(3) == Some("update") {
+                    if action == "marketplace" && st.cfg.marketplace && m == Method::POST && s(3) == Some("update") {
                         let b = req.json_object().await?;
                         return Ok(json(crate::market::update_install(st, &c, &slug, b).await?));
                     }
-                    if action == "marketplace" && m == Method::DELETE && s(3).is_none() {
+                    if action == "marketplace" && st.cfg.marketplace && m == Method::DELETE && s(3).is_none() {
                         return Ok(json(db(Box::new(move |conn, _, c| crate::market::unlink(conn, c, &slug))).await?));
                     }
                     if action == "settings" && s(3).is_none() && m == Method::GET {
