@@ -154,6 +154,8 @@ Three things hold state. Back up all of them, and keep the copies off the server
 | `brod-data` volume | `/data` in the `brod` container | app files, **`secrets.env`** (without it, stored app secrets cannot be read and every session ends) |
 | `runtime-data` volume | `/data` in the `runtime` container | each server app's own SQLite database, key-value store and files |
 
+The `runtime-secret` volume needs no backup: Brod writes it again from `secrets.env` at every start.
+
 Run these from the folder with `docker-compose.yml`. Compose names the volumes after the folder (`brod` here), so
 check yours with `docker volume ls`.
 

@@ -201,7 +201,7 @@ impl Config {
         }
         if !need.is_empty() {
             return Err(ConfigError(format!(
-                "Brod is not configured yet. Set these environment variables: {}. See deploy/.env.example.",
+                "Brod is not configured yet. Set these environment variables: {}. See .env.example and docs/configuration.md.",
                 need.join(", ")
             )));
         }

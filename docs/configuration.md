@@ -31,7 +31,8 @@ This page is generated from `.env.example` by `node scripts/config-docs.mjs`. Ed
 | `ADMIN_SECRET` |  | The bearer token for the operator API (/v1/admin). Generated into &lt;BROD_DATA_DIR&gt;/secrets.env on first start if not set. |
 | `IDENTITY_SECRET` |  | Keys the identity tokens apps receive, password-app cookies and visitor counts. Generated on first start if not set. |
 | `SECRETS_KEY` |  | Encrypts app secrets at rest; changing it makes stored app secrets unreadable. Generated on first start if not set. |
-| `BROD_RUNTIME_SECRET` |  | Shared with the runtime sidecar. Generated on first start if not set, and written to &lt;BROD_DATA_DIR&gt;/runtime-secret. |
+| `BROD_RUNTIME_SECRET` |  | Shared with the runtime sidecar. Generated on first start if not set. |
+| `BROD_RUNTIME_SECRET_FILE` |  | Where Brod writes BROD_RUNTIME_SECRET for the runtime to read. Default: &lt;BROD_DATA_DIR&gt;/runtime-secret. Compose sets this. |
 
 ## Data
 

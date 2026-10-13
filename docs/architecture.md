@@ -73,9 +73,11 @@ The runtime exposes its own endpoints on port 8081: `/_runtime/check`, `/_runtim
 (`deploy/runtime/host.js`, default export). Brod sends that secret on every call to the runtime (`runtime.rs`,
 `usage.rs`). host.js strips all `x-brod-runtime-*` headers before an app sees the request.
 
-On a self-hosted server the runtime secret is generated with the other secrets and written to `<data>/runtime-secret`
-(`config.rs::from_env`). Compose mounts Brod's data volume read-only into the runtime container, and the supervisor
-reads the secret from `BROD_RUNTIME_SECRET_FILE` (`deploy/runtime/supervisor/src/main.rs::config`).
+On a self-hosted server the runtime secret is generated with the other secrets, and Brod writes the value it uses to
+`BROD_RUNTIME_SECRET_FILE`, or `<data>/runtime-secret` without it (`config.rs::from_env`). Compose points that at a
+volume holding nothing else, `runtime-secret`, which the runtime container mounts read-only. The runtime never sees
+Brod's data volume. The supervisor reads the secret from its own `BROD_RUNTIME_SECRET_FILE`
+(`deploy/runtime/supervisor/src/main.rs::config`) and hands it to workerd.
 
 ### Background work in `brod`
 
@@ -325,7 +327,7 @@ runtime gets them decrypted from `/_runtime/code` and passes them to the app as 
 
 In self-hosted mode, any of `ADMIN_SECRET`, `IDENTITY_SECRET`, `SECRETS_KEY` and `BROD_RUNTIME_SECRET` that is not set
 is generated (32 random bytes, hex) and kept in `<data>/secrets.env`, mode 0600. The runtime secret is also written to
-`<data>/runtime-secret` for the runtime container. Back up `secrets.env` with the database: without `SECRETS_KEY`, app
+`BROD_RUNTIME_SECRET_FILE` (in Compose, the `runtime-secret` volume) for the runtime container. Back up `secrets.env` with the database: without `SECRETS_KEY`, app
 secrets cannot be decrypted, and without `IDENTITY_SECRET` all password cookies and identity tokens change. In hosted
 mode every secret must come from the environment, and weak values (under 32 characters or known examples) stop the
 server from starting.
