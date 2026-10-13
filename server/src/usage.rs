@@ -28,6 +28,8 @@ type Batch = HashMap<(String, String), (i64, HashSet<String>)>;
 #[derive(Default)]
 pub struct Visits {
     pending: Mutex<Batch>,
+    /// Held from taking the batch until it is written, so a reader's flush waits for one already under way.
+    flushing: tokio::sync::Mutex<()>,
 }
 
 impl Visits {
@@ -105,6 +107,7 @@ fn write(conn: &Connection, batch: &Batch) -> Result<()> {
 
 /// Write the views counted so far. Called on a timer, before usage is read, and at shutdown.
 pub async fn flush(st: &State) -> Result<()> {
+    let _one_at_a_time = st.visits.flushing.lock().await;
     let batch = st.visits.take();
     if batch.is_empty() {
         return Ok(());
