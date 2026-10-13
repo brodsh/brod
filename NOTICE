@@ -1,0 +1,10 @@
+Brod
+Copyright (C) 2026 Rabin and the Brod contributors
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General
+Public License as published by the Free Software Foundation, version 3 only. See LICENSE for the full text.
+
+The hosted service at https://brod.sh is operated by the same author and runs this same code, with BROD_MODE=hosted.
+There is no separate closed-source edition.
+
+Third-party software included in Brod is listed, with its licenses, in THIRD_PARTY_LICENSES.md.
