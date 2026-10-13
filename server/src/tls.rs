@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
 use instant_acme::{
@@ -147,7 +147,7 @@ impl Certs {
     }
 
     fn cached(&self, name: &str) -> Option<Arc<Entry>> {
-        self.entries.read().unwrap().get(name).cloned()
+        self.entries.read().unwrap_or_else(PoisonError::into_inner).get(name).cloned()
     }
 
     fn load(&self, name: &str) -> Option<Entry> {
@@ -164,14 +164,14 @@ impl Certs {
         if let Some(e) = self.cached(&name).filter(|e| e.not_after > now) {
             return Some(e.config.clone());
         }
-        let lock = self.locks.lock().unwrap().entry(name.clone()).or_default().clone();
+        let lock = self.locks.lock().unwrap_or_else(PoisonError::into_inner).entry(name.clone()).or_default().clone();
         let _held = lock.lock().await;
         if let Some(e) = self.cached(&name).filter(|e| e.not_after > now) {
             return Some(e.config.clone());
         }
         if let Some(e) = self.load(&name).filter(|e| e.not_after > now) {
             let config = e.config.clone();
-            self.entries.write().unwrap().insert(name, Arc::new(e));
+            self.entries.write().unwrap_or_else(PoisonError::into_inner).insert(name, Arc::new(e));
             return Some(config);
         }
         self.obtain(st, &name).await.map(|e| e.config.clone())
@@ -179,7 +179,7 @@ impl Certs {
 
     /// Issue a certificate for `name` if Brod serves it and it has not failed lately, store it and hold it.
     async fn obtain(&self, st: &State, name: &str) -> Option<Arc<Entry>> {
-        if self.failures.lock().unwrap().get(name).is_some_and(|t| t.elapsed() < RETRY_AFTER_FAILURE) {
+        if self.failures.lock().unwrap_or_else(PoisonError::into_inner).get(name).is_some_and(|t| t.elapsed() < RETRY_AFTER_FAILURE) {
             return None;
         }
         match crate::app::may_have_certificate(st, name).await {
@@ -204,13 +204,13 @@ impl Certs {
             Ok(entry) => {
                 tracing::info!("tls: certificate for {name} until {}", crate::util::iso(entry.not_after * 1000));
                 let entry = Arc::new(entry);
-                self.entries.write().unwrap().insert(name.to_string(), entry.clone());
-                self.failures.lock().unwrap().remove(name);
+                self.entries.write().unwrap_or_else(PoisonError::into_inner).insert(name.to_string(), entry.clone());
+                self.failures.lock().unwrap_or_else(PoisonError::into_inner).remove(name);
                 Some(entry)
             }
             Err(e) => {
                 tracing::warn!("tls: no certificate for {name}: {e}");
-                self.failures.lock().unwrap().insert(name.to_string(), Instant::now());
+                self.failures.lock().unwrap_or_else(PoisonError::into_inner).insert(name.to_string(), Instant::now());
                 None
             }
         }
@@ -302,7 +302,10 @@ impl Certs {
                 }
                 let mut ch = a.challenge(ChallengeType::Http01).ok_or("the CA offered no HTTP-01 challenge")?;
                 let token = ch.token.clone();
-                self.challenges.write().unwrap().insert(token.clone(), ch.key_authorization().as_str().to_string());
+                self.challenges
+                    .write()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(token.clone(), ch.key_authorization().as_str().to_string());
                 tokens.push(token);
                 ch.set_ready().await.map_err(|e| e.to_string())?;
             }
@@ -318,7 +321,7 @@ impl Certs {
             Ok((chain, key))
         }
         .await;
-        let mut ch = self.challenges.write().unwrap();
+        let mut ch = self.challenges.write().unwrap_or_else(PoisonError::into_inner);
         for t in tokens {
             ch.remove(&t);
         }
@@ -327,7 +330,7 @@ impl Certs {
 
     /// The key authorization for an HTTP-01 token, while its order is open.
     pub fn challenge(&self, token: &str) -> Option<String> {
-        self.challenges.read().unwrap().get(token).cloned()
+        self.challenges.read().unwrap_or_else(PoisonError::into_inner).get(token).cloned()
     }
 
     /// Renew certificates past two thirds of their life, and drop those for names Brod no longer serves.
@@ -342,16 +345,16 @@ impl Certs {
             let Some(entry) = self.cached(&name).or_else(|| self.load(&name).map(Arc::new)) else { continue };
             if !crate::app::may_have_certificate(st, &name).await.unwrap_or(true) {
                 tracing::info!("tls: {name} is no longer served; removing its certificate");
-                self.entries.write().unwrap().remove(&name);
+                self.entries.write().unwrap_or_else(PoisonError::into_inner).remove(&name);
                 let (crt, key) = self.paths(&name);
                 let _ = std::fs::remove_file(crt);
                 let _ = std::fs::remove_file(key);
                 continue;
             }
             if entry.wants_renewal(now_secs()) {
-                let lock = self.locks.lock().unwrap().entry(name.clone()).or_default().clone();
+                let lock = self.locks.lock().unwrap_or_else(PoisonError::into_inner).entry(name.clone()).or_default().clone();
                 let _held = lock.lock().await;
-                self.failures.lock().unwrap().remove(&name);
+                self.failures.lock().unwrap_or_else(PoisonError::into_inner).remove(&name);
                 // On failure the old certificate stays in use until it expires, and the next check tries again.
                 self.obtain(st, &name).await;
             }
