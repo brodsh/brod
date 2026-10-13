@@ -58,6 +58,7 @@ COPY deploy/runtime/config.capnp deploy/runtime/host.js /etc/brod-runtime/
 VOLUME /data
 EXPOSE 8081
 USER nonroot
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 CMD ["/usr/local/bin/brod-runtime", "healthcheck"]
 # Brod is expected at brod:8080 (override workerd's with -e brod=<host:port>, and the supervisor's with
 # BROD_INTERNAL_URL). The secret comes from BROD_RUNTIME_SECRET or BROD_RUNTIME_SECRET_FILE.
 ENTRYPOINT ["/usr/local/bin/brod-runtime", "/usr/local/bin/workerd", "serve", "/etc/brod-runtime/config.capnp", "--experimental"]

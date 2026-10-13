@@ -59,6 +59,17 @@ impl Reason {
 }
 
 fn main() -> ExitCode {
+    // `brod-runtime healthcheck`: for the container's health check. Answers 0 when workerd answers /_runtime/health.
+    if std::env::args().nth(1).as_deref() == Some("healthcheck") {
+        return match config(vec!["healthcheck".into()], |k| std::env::var(k).ok()) {
+            Ok(cfg) if matches!(ping(&cfg), Health::Answered) => ExitCode::SUCCESS,
+            Ok(_) => ExitCode::from(1),
+            Err(e) => {
+                eprintln!("brod-runtime: {e}");
+                ExitCode::from(2)
+            }
+        };
+    }
     let cfg = match config(std::env::args().skip(1).collect(), |k| std::env::var(k).ok()) {
         Ok(c) => c,
         Err(e) => {
