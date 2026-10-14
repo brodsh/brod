@@ -13,7 +13,7 @@
 // nothing about it is public. It answers a desktop screenshot, a phone screenshot and a short screencast, which
 // replace the listing's previous automatic previews; previews people uploaded stay as they are.
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use axum::response::Response;
@@ -53,7 +53,7 @@ pub struct Previews {
     busy: Mutex<HashSet<String>>,
 }
 
-/// The token of a sandbox host ("<token>.brod-preview.internal", with or without a port), if it is one.
+/// The token of a sandbox host ("`<token>`.brod-preview.internal", with or without a port), if it is one.
 pub fn token_of(host: &str) -> Option<&str> {
     let name = host.rsplit_once(':').map_or(host, |(h, p)| if p.bytes().all(|b| b.is_ascii_digit()) { h } else { host });
     name.strip_suffix(HOST_SUFFIX).filter(|t| t.len() == 32 && t.bytes().all(|b| b.is_ascii_hexdigit()))
@@ -62,7 +62,7 @@ pub fn token_of(host: &str) -> Option<&str> {
 /// Serve a sandbox: the release's files and server code, to the capturing browser, as a person with the app's top role.
 pub async fn serve(st: &State, req: Req, token: &str) -> Result<Response> {
     let found = {
-        let open = st.previews.open.lock().unwrap();
+        let open = st.previews.open.lock().unwrap_or_else(PoisonError::into_inner);
         open.get(token).filter(|s| s.expires_at > now()).cloned()
     };
     let Some(sb) = found else {
@@ -134,11 +134,11 @@ async fn wipe(st: &State, listing_id: &str, server: bool) -> Result<()> {
 /// server has no preview sidecar, or when the listing is already being captured.
 pub async fn generate(st: &State, listing_id: &str, n: Option<i64>) -> Result<Option<usize>> {
     let Some(pv) = st.cfg.preview.clone() else { return Ok(None) };
-    if !st.previews.busy.lock().unwrap().insert(listing_id.to_string()) {
+    if !st.previews.busy.lock().unwrap_or_else(PoisonError::into_inner).insert(listing_id.to_string()) {
         return Ok(None);
     }
     let r = capture(st, &pv, listing_id, n).await;
-    st.previews.busy.lock().unwrap().remove(listing_id);
+    st.previews.busy.lock().unwrap_or_else(PoisonError::into_inner).remove(listing_id);
     r.map(Some)
 }
 
@@ -172,7 +172,7 @@ async fn capture(st: &State, pv: &crate::config::RuntimeConfig, listing_id: &str
     }
     let token = random_id("", 16);
     wipe(st, listing_id, has_server).await?;
-    st.previews.open.lock().unwrap().insert(token.clone(), sb.clone());
+    st.previews.open.lock().unwrap_or_else(PoisonError::into_inner).insert(token.clone(), sb.clone());
     let res = st
         .http
         .post(format!("{}/capture", pv.url))
@@ -181,7 +181,7 @@ async fn capture(st: &State, pv: &crate::config::RuntimeConfig, listing_id: &str
         .json(&json!({ "host": format!("{token}{HOST_SUFFIX}") }))
         .send()
         .await;
-    st.previews.open.lock().unwrap().remove(&token);
+    st.previews.open.lock().unwrap_or_else(PoisonError::into_inner).remove(&token);
     let cleaned = wipe(st, listing_id, has_server).await;
     let res = res.map_err(|e| Problem::new(502, "preview_failed", format!("The preview service could not be reached: {e}")))?;
     if !res.status().is_success() {
@@ -268,7 +268,7 @@ pub fn spawn(st: &State, listing_id: &str) {
     let (st, id) = (st.clone(), listing_id.to_string());
     tokio::spawn(async move {
         if let Err(e) = generate(&st, &id, None).await {
-            eprintln!("preview of {id} failed: {}", e.message);
+            tracing::warn!("preview of {id} failed: {}", e.message);
         }
     });
 }

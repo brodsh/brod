@@ -97,6 +97,12 @@ jobs:
         run: |
           cargo clippy --manifest-path server/Cargo.toml --all-targets --locked -- -D warnings
           cargo clippy --manifest-path deploy/runtime/supervisor/Cargo.toml --all-targets --locked -- -D warnings
+      - name: API docs build without warnings
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          cargo doc --no-deps --manifest-path server/Cargo.toml --locked
+          cargo doc --no-deps --manifest-path deploy/runtime/supervisor/Cargo.toml --locked
       - name: Unit tests
         run: |
           cargo test --manifest-path server/Cargo.toml --locked

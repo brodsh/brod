@@ -235,7 +235,7 @@ fn ends_clean(hay: &[u8], needle: &str) -> bool {
     all(hay, needle).into_iter().any(|i| !alnum(hay.get(i + needle.len())))
 }
 
-/// The text between <tag ...> and </tag>, for each such element. `s` is lower case.
+/// The text between `<tag ...>` and `</tag>`, for each such element. `s` is lower case.
 fn elements(s: &[u8], tag: &str) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     let (open_tag, close_tag) = (format!("<{tag}"), format!("</{tag}"));
@@ -275,7 +275,7 @@ fn attr_values(s: &[u8], name: &str) -> Vec<Vec<u8>> {
     out
 }
 
-/// Drop <script>, <style> and comments, then every tag, then words that are addresses or emails: roughly what a visitor reads.
+/// Drop `<script>`, `<style>` and comments, then every tag, then words that are addresses or emails: roughly what a visitor reads.
 fn visible_text(s: &[u8]) -> Vec<u8> {
     let mut t = s.to_vec();
     for (a, b) in [("<script", "</script"), ("<style", "</style"), ("<!--", "-->")] {

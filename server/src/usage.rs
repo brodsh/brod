@@ -317,7 +317,7 @@ pub fn workspace_usage(conn: &Connection, c: &Caller, days: Option<i64>) -> Resu
     }))
 }
 
-/// GET /v1/apps/<app>/usage: one app's views per day and its storage, version by version.
+/// GET /v1/apps/`<app>`/usage: one app's views per day and its storage, version by version.
 pub fn app_usage(conn: &Connection, c: &Caller, slug: &str, days: Option<i64>) -> Result<Value> {
     crate::people::require_role(c, "builder", "see usage")?;
     let app = crate::control::get_app(conn, c, slug)?;

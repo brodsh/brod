@@ -27,7 +27,6 @@ say so in an issue: it helps decide the order.
 
 ## Running Brod
 
-- A health check for the runtime container.
 - Structured logs (`tracing`) with a JSON option.
 - Clean-up of old versions, which count toward storage until someone deletes them.
 - Re-checking custom domains' DNS records after they are verified, and wildcard certificates with DNS-01.

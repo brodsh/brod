@@ -666,7 +666,7 @@ fn vital_bounds(name: &str) -> Option<(f64, f64)> {
     })
 }
 
-/// GET /v1/analytics?days=30&app=<slug>&tz=<minutes east of UTC>: everything the analytics page shows.
+/// GET /v1/analytics?days=30&app=`<slug>`&tz=`<minutes east of UTC>`: everything the analytics page shows.
 pub fn report(conn: &Connection, c: &Caller, app: Option<&str>, days: Option<i64>, tz: Option<i64>) -> Result<Value> {
     crate::people::require_role(c, "builder", "see analytics")?;
     let keep = plan(&c.workspace).analytics_days;

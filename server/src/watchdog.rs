@@ -300,7 +300,7 @@ pub async fn stopped(st: &State, body: &Value) -> Result<Value> {
         let who = if b.app_id.is_empty() { "a deploy's start-up check" } else { b.app_id.as_str() };
         let stop =
             b.until.map(|u| format!(", stopped for {} s", u.saturating_duration_since(Instant::now()).as_secs())).unwrap_or_default();
-        eprintln!("runtime restarted ({reason:?}): {who} was running {} {}{stop}", b.method, b.path);
+        tracing::warn!("runtime restarted ({reason:?}): {who} was running {} {}{stop}", b.method, b.path);
     }
     Ok(json!({
         "blamed": blamed.iter().map(|b| json!({ "app": b.app_id, "request": format!("{} {}", b.method, b.path), "stopped": b.until.is_some() })).collect::<Vec<_>>()

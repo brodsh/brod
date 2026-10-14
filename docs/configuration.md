@@ -95,6 +95,13 @@ This page is generated from `.env.example` by `node scripts/config-docs.mjs`. Ed
 | `DNS_RESOLVER_URL` | `https://cloudflare-dns.com/dns-query` | The DNS-over-HTTPS resolver that checks a custom domain's TXT record. Default: Cloudflare's. |
 | `CUSTOM_DOMAIN_TARGET` |  | The name custom domains point their CNAME at. Default: BROD_PUBLIC_URL's host. |
 
+## Logs
+
+| Variable | Example or default | What it does |
+| --- | --- | --- |
+| `BROD_LOG` | `info` | The least important log events written: error, warn, info or debug. |
+| `BROD_LOG_FORMAT` | `text` | text (one line per event) or json (one JSON object per line, for log collectors). |
+
 ## Features
 
 | Variable | Example or default | What it does |

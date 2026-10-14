@@ -45,7 +45,7 @@ pub struct Config {
     pub abuse_checks: bool,
     /// SMTP_URL: send email through an SMTP server (email.rs), for example smtps://user:pass@smtp.example.com.
     pub smtp_url: Option<String>,
-    /// Secrets that were not in the environment and came from (or were written to) <data>/secrets.env instead.
+    /// Secrets that were not in the environment and came from (or were written to) `<data>`/secrets.env instead.
     pub generated_secrets: Vec<String>,
     /// Problems worth a line in the log at start, such as a short secret on a self-hosted server.
     pub warnings: Vec<String>,
@@ -105,7 +105,7 @@ pub struct StripeConfig {
     /// The recurring Stripe prices for the paid plans.
     pub price_solo: Option<String>,
     pub price_team: Option<String>,
-    /// https://api.stripe.com, or a stand-in for tests.
+    /// `https://api.stripe.com`, or a stand-in for tests.
     pub api_base: String,
 }
 
@@ -127,7 +127,7 @@ impl std::fmt::Display for ConfigError {
 
 impl Config {
     /// Read the process environment, after loading `.env` from the working directory if there is one.
-    /// Self-hosted, secrets that are not set are generated once and kept in <data>/secrets.env, so a first start needs
+    /// Self-hosted, secrets that are not set are generated once and kept in `<data>`/secrets.env, so a first start needs
     /// no configuration at all. Hosted, every secret must come from the environment.
     pub fn from_env() -> Result<Config, ConfigError> {
         let _ = dotenvy::dotenv();
@@ -421,7 +421,7 @@ fn is_weak_secret(v: &str) -> bool {
     v.len() < 32 || KNOWN.contains(&v) || v.starts_with("change-me")
 }
 
-/// Read <data>/secrets.env, or write one with a fresh random value for each of GENERATED.
+/// Read `<data>`/secrets.env, or write one with a fresh random value for each of GENERATED.
 fn load_or_create_secrets(data_dir: &std::path::Path) -> Result<HashMap<String, String>, ConfigError> {
     let path = data_dir.join("secrets.env");
     let fail = |e: std::io::Error| ConfigError(format!("Could not keep generated secrets in {}: {e}", path.display()));

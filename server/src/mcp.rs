@@ -369,7 +369,7 @@ async fn handle(st: &State, c: &Caller, m: &Value) -> Option<Value> {
                     reply(json!({ "content": [{ "type": "text", "text": text(&result) }], "structuredContent": result, "isError": false }))
                 }
                 Err(e) if e.is_internal() => {
-                    eprintln!("error: {e}");
+                    tracing::error!("{e}");
                     reply(
                         json!({ "content": [{ "type": "text", "text": "Something went wrong on our side. Try again." }], "isError": true }),
                     )

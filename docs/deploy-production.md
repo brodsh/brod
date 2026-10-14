@@ -211,7 +211,8 @@ server code. Disk use is the apps' files (every kept version counts) plus their 
 
 ## Monitoring
 
-- `GET /healthz` answers `200` when Brod is up. The `brod` image has a Docker health check that uses it.
+- `GET /healthz` answers `200` when Brod is up. Both images have Docker health checks (`docker compose ps` shows
+  them): `brod` uses `/healthz`, and the runtime asks workerd directly.
 - `docker compose logs brod` shows start-up, email and errors. `docker compose logs runtime` shows when an app stalled
   or ran the runtime out of memory, and which app was paused for it.
 - Each app's own activity and server logs are in the admin page and in `get_logs`.

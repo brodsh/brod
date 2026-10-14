@@ -15,7 +15,7 @@
 //! for a while (server/src/watchdog.rs), then kills workerd and starts it again. Apps' data is in SQLite on disk, so a
 //! restart loses only the requests in flight.
 //!
-//! Usage: brod-runtime <command...>, for example brod-runtime workerd serve config.capnp --experimental
+//! Usage: brod-runtime `<command...>`, for example brod-runtime workerd serve config.capnp --experimental
 //! Environment: BROD_RUNTIME_SECRET (required), BROD_INTERNAL_URL (default http://brod:8080), RUNTIME_PORT (the port
 //! workerd listens on, default 8081), RUNTIME_STALL_MS (default 5000), RUNTIME_MEMORY_MB (default 1536; 0 turns it off).
 use std::io::{Read, Write};
@@ -59,6 +59,17 @@ impl Reason {
 }
 
 fn main() -> ExitCode {
+    // `brod-runtime healthcheck`: for the container's health check. Answers 0 when workerd answers /_runtime/health.
+    if std::env::args().nth(1).as_deref() == Some("healthcheck") {
+        return match config(vec!["healthcheck".into()], |k| std::env::var(k).ok()) {
+            Ok(cfg) if matches!(ping(&cfg), Health::Answered) => ExitCode::SUCCESS,
+            Ok(_) => ExitCode::from(1),
+            Err(e) => {
+                eprintln!("brod-runtime: {e}");
+                ExitCode::from(2)
+            }
+        };
+    }
     let cfg = match config(std::env::args().skip(1).collect(), |k| std::env::var(k).ok()) {
         Ok(c) => c,
         Err(e) => {
@@ -278,7 +289,7 @@ fn resident_bytes(pid: u32) -> u64 {
     std::fs::read_to_string(format!("/proc/{pid}/status")).map(|s| vm_rss(&s)).unwrap_or(0)
 }
 
-/// The VmRSS line of /proc/<pid>/status, in bytes.
+/// The VmRSS line of /proc/`<pid>`/status, in bytes.
 fn vm_rss(status: &str) -> u64 {
     status
         .lines()

@@ -1,6 +1,6 @@
 {
   "name": "brod",
-  "version": "0.2.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Brod: the self-hosted cloud your AI agent deploys team tools to, over MCP. Node is used only for the end-to-end tests.",
   "license": "AGPL-3.0-only",

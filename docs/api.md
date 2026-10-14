@@ -80,9 +80,6 @@ curl -sS -H "Authorization: Bearer $BROD_TOKEN" -H 'content-type: application/js
 tar -czf - -C dist . | curl -sS -X PUT --data-binary @- "<upload_url>"
 ```
 
-The API also has `POST /v1/uploads/:id/finish`, which deploys an archive already staged in the file store at
-`_uploads/<id>.tar.gz`. The standard setup uploads with `PUT` and does not need it.
-
 ### Apps
 
 | Route | |

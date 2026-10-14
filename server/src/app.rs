@@ -23,7 +23,7 @@ fn valid_slug(s: &str) -> bool {
     !s.is_empty() && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-/// The labels in front of APPS_DOMAIN ("todo.acme.<APPS_DOMAIN>" -> ["todo", "acme"]), empty for a malformed
+/// The labels in front of APPS_DOMAIN ("todo.acme.`<APPS_DOMAIN>`" -> ["todo", "acme"]), empty for a malformed
 /// one, None for any other host (the API host included).
 pub fn app_labels(st: &State, host: &str) -> Option<Vec<String>> {
     if host == st.cfg.api_host {
@@ -145,8 +145,8 @@ async fn caddy_ask(st: &State, req: &Req) -> Result<Response> {
     Ok(empty(if may_have_certificate(st, &domain).await? { 200 } else { 404 }))
 }
 
-/// Whether a certificate may be issued for `domain`: the API host, www, an existing <workspace>.<APPS_DOMAIN>, an
-/// existing <slug>.<workspace>.<APPS_DOMAIN>, or a proven custom domain, so certificates are issued only for real
+/// Whether a certificate may be issued for `domain`: the API host, www, an existing `<workspace>`.`<APPS_DOMAIN>`, an
+/// existing `<slug>`.`<workspace>`.`<APPS_DOMAIN>`, or a proven custom domain, so certificates are issued only for real
 /// addresses. For /_caddy/ask and Brod's own on-demand TLS (tls.rs).
 pub async fn may_have_certificate(st: &State, domain: &str) -> Result<bool> {
     let domain = domain.trim_end_matches('.').to_lowercase();

@@ -26,8 +26,6 @@ pub mod limits {
     /// MCP clients registering themselves, across the server.
     pub const OAUTH_CLIENTS_PER_HOUR: i64 = 100;
     pub const IDENTITY_TTL_SEC: i64 = 300;
-    pub const SERVER_CPU_MS: i64 = 50;
-    pub const SERVER_SUBREQUESTS: i64 = 50;
     pub const LOG_BYTES: usize = 8 * 1024;
     pub const LOG_RETENTION_MS: i64 = 7 * 24 * 3600 * 1000;
     /// Wrong passwords for one password-protected app, from anyone.
@@ -98,7 +96,7 @@ pub struct AppRow {
     /// Set when the platform operator took the app down (abuse.rs), with the reason the owner sees.
     pub taken_down_at: Option<i64>,
     pub takedown_reason: String,
-    /// The version waiting on staging (<slug>--staging.<workspace>), if any. It goes live with publish_staging.
+    /// The version waiting on staging (`<slug>`--staging.`<workspace>`), if any. It goes live with publish_staging.
     pub staging_version: Option<i64>,
 }
 
