@@ -5,7 +5,7 @@
 #   docker buildx build --platform linux/amd64,linux/arm64 -t brod .
 # The Rust stage runs on the build machine and cross-compiles, so an arm64 image does not need emulation.
 
-FROM --platform=$BUILDPLATFORM rust:1.99-bookworm@sha256:114c7a4425406451c2866b6aafe69fe29b1b298832db1277d411ac73c82d04d6 AS build
+FROM --platform=$BUILDPLATFORM rust:1.97-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97 AS build
 ARG TARGETARCH
 ARG BUILDARCH
 # A C cross-compiler for the target, for the parts of SQLite and ring written in C.
