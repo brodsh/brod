@@ -80,7 +80,7 @@ fn argon2() -> argon2::Argon2<'static> {
     argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params)
 }
 
-/// Store a password as an Argon2id PHC string ("$argon2id$v=19$m=19456,t=2,p=1$<salt>$<hash>"), never the password
+/// Store a password as an Argon2id PHC string (`$argon2id$v=19$m=19456,t=2,p=1$<salt>$<hash>`), never the password
 /// itself. Slow on purpose (tens of milliseconds); call it off the async threads.
 pub fn hash_password(password: &str) -> String {
     use argon2::password_hash::{PasswordHasher, SaltString};
@@ -88,7 +88,7 @@ pub fn hash_password(password: &str) -> String {
     argon2().hash_password(password.as_bytes(), &salt).expect("hashing into memory does not fail").to_string()
 }
 
-/// Check a password against an Argon2id hash, or a "pbkdf2$<iterations>$<salt>$<hash>" one from before Argon2.
+/// Check a password against an Argon2id hash, or a `pbkdf2$<iterations>$<salt>$<hash>` one from before Argon2.
 pub fn verify_password(password: &str, stored: &str) -> bool {
     if stored.starts_with("$argon2") {
         use argon2::password_hash::{PasswordHash, PasswordVerifier};
