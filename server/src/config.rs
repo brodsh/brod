@@ -12,8 +12,17 @@ pub enum StorageConfig {
     S3 { endpoint: String, bucket: String, access_key_id: String, secret_access_key: String, region: String, virtual_hosted: bool },
 }
 
+/// BROD_MODE. `SelfHosted` (the default) is one organisation's own Brod: no plans or billing, no public landing page,
+/// and only workspace admins create workspaces. `Hosted` is a public multi-tenant service such as brod.sh.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    SelfHosted,
+    Hosted,
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
+    pub mode: Mode,
     pub apps_domain: String,
     pub api_origin: String,
     /// The host of API_ORIGIN, lowercased, for example "brod.sh".
@@ -25,6 +34,21 @@ pub struct Config {
     pub resend_api_key: Option<String>,
     /// The sender for sign-in and invitation emails. Required with RESEND_API_KEY.
     pub email_from: Option<String>,
+    /// BROD_ADMIN_EMAIL: on a database with no people yet, this person becomes the admin of a first workspace (setup.rs).
+    pub admin_email: Option<String>,
+    /// BROD_AUTO_MIGRATE: apply new database migrations at start (the default). Off: refuse to start until `brod migrate`.
+    pub auto_migrate: bool,
+    /// BROD_MARKETPLACE: the cross-workspace app listings (market.rs). Default on when hosted, off when self-hosted.
+    pub marketplace: bool,
+    /// BROD_ABUSE_CHECKS: the deploy-time phishing scan, the public report link in apps and the hold on new
+    /// workspaces (abuse.rs, scan.rs). Default on when hosted, off when self-hosted.
+    pub abuse_checks: bool,
+    /// SMTP_URL: send email through an SMTP server (email.rs), for example smtps://user:pass@smtp.example.com.
+    pub smtp_url: Option<String>,
+    /// Secrets that were not in the environment and came from (or were written to) <data>/secrets.env instead.
+    pub generated_secrets: Vec<String>,
+    /// Problems worth a line in the log at start, such as a short secret on a self-hosted server.
+    pub warnings: Vec<String>,
     /// BROD_GA_ID: a Google Analytics 4 measurement ID for the public landing page (home.rs). None: no Google tag.
     pub ga_id: Option<String>,
     pub google_client_id: Option<String>,
@@ -103,15 +127,59 @@ impl std::fmt::Display for ConfigError {
 
 impl Config {
     /// Read the process environment, after loading `.env` from the working directory if there is one.
+    /// Self-hosted, secrets that are not set are generated once and kept in <data>/secrets.env, so a first start needs
+    /// no configuration at all. Hosted, every secret must come from the environment.
     pub fn from_env() -> Result<Config, ConfigError> {
         let _ = dotenvy::dotenv();
-        Config::from_vars(&std::env::vars().collect())
+        let mut vars: HashMap<String, String> = std::env::vars().collect();
+        let set = |vars: &HashMap<String, String>, k: &str| vars.get(k).is_some_and(|v| !v.trim().is_empty());
+        let hosted = vars.get("BROD_MODE").is_some_and(|m| m.trim() == "hosted");
+        let mut generated = Vec::new();
+        if !hosted && GENERATED.iter().any(|k| !set(&vars, k)) {
+            let data_dir = PathBuf::from(
+                vars.get("BROD_DATA_DIR").filter(|d| !d.trim().is_empty()).map(|d| d.trim().to_string()).unwrap_or_else(|| "data".into()),
+            );
+            let stored = load_or_create_secrets(&data_dir)?;
+            for k in GENERATED {
+                if !set(&vars, k)
+                    && let Some(v) = stored.get(k)
+                {
+                    vars.insert(k.to_string(), v.clone());
+                    generated.push(k.to_string());
+                }
+            }
+        }
+        let mut cfg = Config::from_vars(&vars)?;
+        cfg.generated_secrets = generated;
+        Ok(cfg)
     }
 
     pub fn from_vars(v: &HashMap<String, String>) -> Result<Config, ConfigError> {
         let get = |k: &str| v.get(k).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-        let mut need: Vec<&str> =
-            ["APPS_DOMAIN", "API_ORIGIN", "ADMIN_SECRET", "IDENTITY_SECRET"].into_iter().filter(|k| get(k).is_none()).collect();
+        let mode = match get("BROD_MODE").as_deref() {
+            None | Some("self-hosted") => Mode::SelfHosted,
+            Some("hosted") => Mode::Hosted,
+            Some(other) => {
+                return Err(ConfigError(format!("BROD_MODE must be \"self-hosted\" (the default) or \"hosted\", not {other:?}.")));
+            }
+        };
+        let hosted = mode == Mode::Hosted;
+        let listen = get("BROD_LISTEN").unwrap_or_else(|| "0.0.0.0:8080".into());
+        let listen: SocketAddr =
+            listen.parse().map_err(|_| ConfigError(format!("BROD_LISTEN must be an address such as 0.0.0.0:8080, not {listen:?}.")))?;
+        // BROD_PUBLIC_URL is where people and agents reach Brod. API_ORIGIN is its older name. Self-hosted, it defaults to
+        // this machine, and apps live under the same host (<app>.<workspace>.localhost:8080).
+        let public_url = get("BROD_PUBLIC_URL")
+            .or_else(|| get("API_ORIGIN"))
+            .or_else(|| (!hosted).then(|| format!("http://localhost:{}", listen.port())));
+        let mut need: Vec<&str> = Vec::new();
+        if public_url.is_none() {
+            need.push("BROD_PUBLIC_URL");
+        }
+        if hosted && get("APPS_DOMAIN").is_none() {
+            need.push("APPS_DOMAIN");
+        }
+        need.extend(["ADMIN_SECRET", "IDENTITY_SECRET"].into_iter().filter(|k| get(k).is_none()));
         let s3_keys = ["S3_ENDPOINT", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"];
         let s3 = s3_keys.iter().any(|k| get(k).is_some());
         if s3 {
@@ -123,8 +191,20 @@ impl Config {
                 need.join(", ")
             )));
         }
-        let api_origin = get("API_ORIGIN").unwrap_or_default().trim_end_matches('/').to_string();
+        let api_origin = public_url.unwrap_or_default().trim_end_matches('/').to_string();
+        if !(api_origin.starts_with("http://") || api_origin.starts_with("https://")) {
+            return Err(ConfigError(format!("BROD_PUBLIC_URL must start with http:// or https://, not {api_origin:?}.")));
+        }
         let api_host = api_origin.split_once("://").map(|(_, h)| h).unwrap_or(&api_origin).split('/').next().unwrap_or("").to_lowercase();
+        let apps_domain = get("APPS_DOMAIN").map(|d| d.to_lowercase()).unwrap_or_else(|| api_host.clone());
+        let on_off = |name: &str, default: bool| -> Result<bool, ConfigError> {
+            match get(name).as_deref() {
+                None => Ok(default),
+                Some("1" | "true" | "on" | "yes") => Ok(true),
+                Some("0" | "false" | "off" | "no") => Ok(false),
+                Some(other) => Err(ConfigError(format!("{name} must be true or false, not {other:?}."))),
+            }
+        };
         let data_dir = PathBuf::from(get("BROD_DATA_DIR").unwrap_or_else(|| "data".into()));
         let storage = if s3 {
             StorageConfig::S3 {
@@ -138,9 +218,6 @@ impl Config {
         } else {
             StorageConfig::Fs { dir: get("FILES_DIR").map(PathBuf::from).unwrap_or_else(|| data_dir.join("files")) }
         };
-        let listen = get("BROD_LISTEN").unwrap_or_else(|| "0.0.0.0:8080".into());
-        let listen: SocketAddr =
-            listen.parse().map_err(|_| ConfigError(format!("BROD_LISTEN must be an address such as 0.0.0.0:8080, not {listen:?}.")))?;
         let database_url = get("BROD_DATABASE_URL");
         if let Some(u) = &database_url
             && !(u.starts_with("postgres://") || u.starts_with("postgresql://"))
@@ -187,7 +264,7 @@ impl Config {
             None | Some("0") | Some("off") => None,
             Some(mode @ ("acme" | "local")) => {
                 if !api_origin.starts_with("https://") {
-                    return Err(ConfigError("BROD_TLS serves HTTPS, so API_ORIGIN must be an https:// address.".into()));
+                    return Err(ConfigError("BROD_TLS serves HTTPS, so BROD_PUBLIC_URL must be an https:// address.".into()));
                 }
                 let issuer = if mode == "local" {
                     crate::tls::Issuer::Local
@@ -232,9 +309,46 @@ impl Config {
                 )));
             }
         };
+        let mut warnings = Vec::new();
+        for k in ["ADMIN_SECRET", "IDENTITY_SECRET", "SECRETS_KEY", "BROD_RUNTIME_SECRET"] {
+            let Some(value) = get(k) else { continue };
+            if !is_weak_secret(&value) {
+                continue;
+            }
+            let msg = format!("{k} is short or a well-known example value. Use at least 32 random characters: openssl rand -hex 32");
+            if hosted && get("DEV_MODE").as_deref() != Some("1") {
+                return Err(ConfigError(msg));
+            }
+            warnings.push(msg);
+        }
+        let admin_email = get("BROD_ADMIN_EMAIL").map(|e| crate::util::norm_email(&e));
+        if let Some(e) = &admin_email
+            && !crate::util::is_email(e)
+        {
+            return Err(ConfigError(format!("BROD_ADMIN_EMAIL must be an email address, not {e:?}.")));
+        }
+        let smtp_url = get("SMTP_URL");
+        if let Some(u) = &smtp_url {
+            if !(u.starts_with("smtp://") || u.starts_with("smtps://")) {
+                return Err(ConfigError("SMTP_URL must start with smtp:// (STARTTLS) or smtps:// (TLS).".into()));
+            }
+            if get("EMAIL_FROM").is_none() {
+                return Err(ConfigError(
+                    "SMTP_URL is set but EMAIL_FROM is not. Set EMAIL_FROM, for example \"Brod <brod@example.com>\".".into(),
+                ));
+            }
+        }
         Ok(Config {
+            mode,
+            generated_secrets: Vec::new(),
+            warnings,
+            auto_migrate: on_off("BROD_AUTO_MIGRATE", true)?,
+            marketplace: on_off("BROD_MARKETPLACE", hosted)?,
+            abuse_checks: on_off("BROD_ABUSE_CHECKS", hosted)?,
+            admin_email,
+            smtp_url,
             network,
-            apps_domain: get("APPS_DOMAIN").unwrap_or_default().to_lowercase(),
+            apps_domain,
             api_origin,
             api_host,
             admin_secret: get("ADMIN_SECRET").unwrap_or_default(),
@@ -284,14 +398,85 @@ impl Config {
     }
 }
 
+/// The secrets a self-hosted Brod makes for itself when the environment does not set them.
+pub const GENERATED: [&str; 4] = ["ADMIN_SECRET", "IDENTITY_SECRET", "SECRETS_KEY", "BROD_RUNTIME_SECRET"];
+
+/// Values that must never protect a real server: the examples in Brod's own docs and tests, and the usual guesses.
+fn is_weak_secret(v: &str) -> bool {
+    const KNOWN: [&str; 6] = ["dev-admin-secret", "dev-identity-secret", "dev-secrets-key-0123456789", "change-me", "changeme", "secret"];
+    v.len() < 32 || KNOWN.contains(&v) || v.starts_with("change-me")
+}
+
+/// Read <data>/secrets.env, or write one with a fresh random value for each of GENERATED. The runtime sidecar reads
+/// BROD_RUNTIME_SECRET from <data>/runtime-secret, so that is written too.
+fn load_or_create_secrets(data_dir: &std::path::Path) -> Result<HashMap<String, String>, ConfigError> {
+    let path = data_dir.join("secrets.env");
+    let fail = |e: std::io::Error| ConfigError(format!("Could not keep generated secrets in {}: {e}", path.display()));
+    let mut out: HashMap<String, String> = match std::fs::read_to_string(&path) {
+        Ok(text) => text.lines().filter_map(|l| l.split_once('=')).map(|(k, v)| (k.trim().to_string(), v.trim().to_string())).collect(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
+        Err(e) => return Err(fail(e)),
+    };
+    if GENERATED.iter().any(|k| !out.contains_key(*k)) {
+        for k in GENERATED {
+            out.entry(k.to_string()).or_insert_with(|| crate::util::random_id("", 32));
+        }
+        std::fs::create_dir_all(data_dir).map_err(fail)?;
+        let mut text = String::from("# Generated by Brod on first start. Keep this file private; back it up with the database.\n");
+        for k in GENERATED {
+            text.push_str(&format!("{k}={}\n", out[k]));
+        }
+        write_private(&path, &text).map_err(fail)?;
+    }
+    write_private(&data_dir.join("runtime-secret"), &out["BROD_RUNTIME_SECRET"]).map_err(fail)?;
+    Ok(out)
+}
+
+/// Write a file only its owner can read.
+fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    std::io::Write::write_all(&mut opts.open(path)?, text.as_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn names_missing_variables_without_values() {
-        let err = Config::from_vars(&[("API_ORIGIN".to_string(), "https://brod.sh/".to_string())].into_iter().collect()).unwrap_err();
+        let vars = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<HashMap<_, _>>();
+        let err = Config::from_vars(&vars(&[("BROD_MODE", "hosted"), ("API_ORIGIN", "https://brod.example.test/")])).unwrap_err();
         assert!(err.0.contains("APPS_DOMAIN, ADMIN_SECRET, IDENTITY_SECRET"), "{}", err.0);
+        // Self-hosted needs only the two secrets (from_env generates them), and defaults to this machine.
+        let err = Config::from_vars(&vars(&[])).unwrap_err();
+        assert!(err.0.contains("Set these environment variables: ADMIN_SECRET, IDENTITY_SECRET."), "{}", err.0);
+        let local =
+            Config::from_vars(&vars(&[("ADMIN_SECRET", "a"), ("IDENTITY_SECRET", "b"), ("BROD_LISTEN", "127.0.0.1:9000")])).unwrap();
+        assert_eq!((local.api_origin.as_str(), local.apps_domain.as_str()), ("http://localhost:9000", "localhost:9000"));
+        assert_eq!(local.mode, Mode::SelfHosted);
+        assert!(!local.marketplace && !local.abuse_checks && local.auto_migrate);
+        assert_eq!(local.warnings.len(), 2, "short secrets are reported");
+        // BROD_PUBLIC_URL wins over the older API_ORIGIN.
+        let named = Config::from_vars(&vars(&[
+            ("ADMIN_SECRET", "a"),
+            ("IDENTITY_SECRET", "b"),
+            ("BROD_PUBLIC_URL", "https://brod.acme.test"),
+            ("API_ORIGIN", "https://old.test"),
+        ]))
+        .unwrap();
+        assert_eq!(named.api_origin, "https://brod.acme.test");
+        // Hosted refuses a well-known or short secret outside DEV_MODE.
+        let weak = Config::from_vars(&vars(&[
+            ("BROD_MODE", "hosted"),
+            ("API_ORIGIN", "https://b.test"),
+            ("APPS_DOMAIN", "b.test"),
+            ("ADMIN_SECRET", "dev-admin-secret"),
+            ("IDENTITY_SECRET", &"x".repeat(40)),
+        ]));
+        assert!(weak.unwrap_err().0.starts_with("ADMIN_SECRET is short"));
         let c = Config::for_tests();
         assert_eq!(c.api_host, "localhost:8787");
         assert!(matches!(c.storage, StorageConfig::Fs { .. }));
@@ -309,6 +494,22 @@ mod tests {
         .collect();
         v.extend(extra.iter().map(|(k, v)| (k.to_string(), v.to_string())));
         Config::from_vars(&v)
+    }
+
+    #[test]
+    fn generated_secrets_are_kept_and_reused() {
+        let dir = std::env::temp_dir().join(format!("brod-secrets-{}", crate::util::random_id("", 6)));
+        let first = load_or_create_secrets(&dir).unwrap();
+        let again = load_or_create_secrets(&dir).unwrap();
+        assert_eq!(first, again);
+        assert!(GENERATED.iter().all(|k| first[*k].len() == 64));
+        assert_eq!(std::fs::read_to_string(dir.join("runtime-secret")).unwrap(), first["BROD_RUNTIME_SECRET"]);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(dir.join("secrets.env")).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

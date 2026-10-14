@@ -28,6 +28,8 @@ type Batch = HashMap<(String, String), (i64, HashSet<String>)>;
 #[derive(Default)]
 pub struct Visits {
     pending: Mutex<Batch>,
+    /// Held from taking the batch until it is written, so a reader's flush waits for one already under way.
+    flushing: tokio::sync::Mutex<()>,
 }
 
 impl Visits {
@@ -105,6 +107,7 @@ fn write(conn: &Connection, batch: &Batch) -> Result<()> {
 
 /// Write the views counted so far. Called on a timer, before usage is read, and at shutdown.
 pub async fn flush(st: &State) -> Result<()> {
+    let _one_at_a_time = st.visits.flushing.lock().await;
     let batch = st.visits.take();
     if batch.is_empty() {
         return Ok(());
@@ -310,7 +313,7 @@ pub fn workspace_usage(conn: &Connection, c: &Caller, days: Option<i64>) -> Resu
     let s = workspace_storage(conn, &c.workspace.id)?;
     Ok(json!({
         "days": days, "apps": out, "total_views": views_total, "total_visitors": visitors_total,
-        "storage": { "bundles": s.bundles, "files": s.files, "data": s.data, "total": s.total(), "limit": plan(&c.workspace).storage },
+        "storage": { "bundles": s.bundles, "files": s.files, "data": s.data, "total": s.total(), "limit": crate::model::limit_json(plan(&c.workspace).storage) },
     }))
 }
 

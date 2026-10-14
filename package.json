@@ -15,6 +15,7 @@
     "e2e:rust:static": "node scripts/e2e-rust.mjs static",
     "e2e:rust:s3": "node scripts/e2e-rust.mjs s3",
     "e2e:rust:pg": "node scripts/e2e-rust.mjs pg",
+    "e2e:self-hosted": "node scripts/e2e-self-hosted.mjs",
     "e2e:tls": "node scripts/e2e-tls.mjs",
     "gen:og": "node scripts/gen-og.mjs"
   },

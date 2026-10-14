@@ -432,7 +432,7 @@ pub fn list_apps(conn: &Connection, cfg: &Config, c: &Caller) -> Result<Value> {
     let running = apps.iter().filter(|a| a.status == "live").count();
     let described: Vec<Value> = apps.iter().map(|a| described(conn, cfg, c, a).map(Value::Object)).collect::<Result<_>>()?;
     Ok(
-        json!({ "workspace": c.workspace.slug, "plan": c.workspace.plan, "running_apps": running, "app_limit": plan(&c.workspace).apps, "apps": described }),
+        json!({ "workspace": c.workspace.slug, "plan": crate::model::plan_label(&c.workspace), "running_apps": running, "app_limit": crate::model::limit_json(plan(&c.workspace).apps), "apps": described }),
     )
 }
 
@@ -874,9 +874,11 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFi
         runtime::check_server(st, s, &files).await?;
     }
     let bytes: usize = files.iter().map(|f| f.bytes.len()).sum();
-    // The phishing check: a flagged version still deploys, but its app stays private or people-only and the Brod team gets a report.
+    // The phishing check (BROD_ABUSE_CHECKS): a flagged version still deploys, but its app stays private or people-only
+    // and the operator gets a report.
+    let checks = st.cfg.abuse_checks;
     let (files, scan) = tokio::task::spawn_blocking(move || {
-        let scan = crate::scan::scan_bundle(&files);
+        let scan = if checks { crate::scan::scan_bundle(&files) } else { crate::scan::Scan::default() };
         (files, scan)
     })
     .await
@@ -1668,7 +1670,9 @@ pub fn set_access(
         abuse::check_up(conn, &app)?;
     }
     if opening {
-        abuse::check_can_open_outside(conn, c, &access)?;
+        if cfg.abuse_checks {
+            abuse::check_can_open_outside(conn, c, &access)?;
+        }
         abuse::check_not_flagged(conn, &app, &access)?;
     }
     if c.agent && widening {

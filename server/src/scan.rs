@@ -9,7 +9,7 @@
 // none of those signals, is not.
 use crate::tar::BundleFile;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Scan {
     pub flagged: bool,
     pub score: i64,

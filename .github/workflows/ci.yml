@@ -79,6 +79,10 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: End-to-end tests, server apps on workerd
         run: npm run e2e:rust
+      - name: End-to-end tests, self-hosted defaults (first start, no secrets or email set)
+        run: npm run e2e:self-hosted
+        env:
+          BROD_BIN: server/target/release/brod
       - name: End-to-end tests, static apps only (server apps refused)
         run: npm run e2e:rust:static
         env:
@@ -91,6 +95,11 @@ jobs:
         run: npm run e2e:tls
         env:
           BROD_BIN: server/target/release/brod
+      - name: Free disk space for the Docker builds
+        # The preview image alone is about 2 GB; the runner's preinstalled SDKs that this job never uses take 20 GB more.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
       - name: Build the Docker images (not pushed)
         run: |
           docker build -f deploy/Dockerfile -t brod:ci .

@@ -134,8 +134,10 @@ async fn sign_in_page(st: &State, ret: Option<String>, app: Option<String>, sent
         _ => "<p>We email you a link. No password needed.</p>".into(),
     };
     let report = match &app {
-        Some(a) => format!("<p><small><a href=\"{}/_brod/report\">Report this app</a></small></p>", app_url(cfg, &a.wslug, &a.app.slug)),
-        None => String::new(),
+        Some(a) if st.cfg.abuse_checks => {
+            format!("<p><small><a href=\"{}/_brod/report\">Report this app</a></small></p>", app_url(cfg, &a.wslug, &a.app.slug))
+        }
+        _ => String::new(),
     };
     let color = app.as_ref().map(|a| a.color.clone());
     if let Some((email, link)) = sent {
@@ -160,7 +162,11 @@ async fn sign_in_page(st: &State, ret: Option<String>, app: Option<String>, sent
         String::new()
     };
     let slug = app.as_ref().map(BrandedApp::reference).unwrap_or_default();
-    let newcomer = if app.is_some() { "" } else { "<p class=\"muted\">New to Brod? <a href=\"/auth/signup\">Create a workspace</a></p>" };
+    let newcomer = if app.is_some() || st.cfg.mode != crate::config::Mode::Hosted {
+        ""
+    } else {
+        "<p class=\"muted\">New to Brod? <a href=\"/auth/signup\">Create a workspace</a></p>"
+    };
     Ok(page(
         200,
         "Sign in",
@@ -290,7 +296,22 @@ async fn home_page(st: &State, req: &Req, slug: String) -> Result<Response> {
     ))
 }
 
-fn new_workspace_page(error: &str) -> Response {
+/// Signed in, but in no workspace, on a server where only admins make workspaces.
+fn no_workspace_page() -> Response {
+    notice(
+        403,
+        "No workspace yet",
+        "You are signed in, but not in any workspace on this server. Ask a workspace admin to invite you.",
+        "<form method=\"post\" action=\"/auth/signout\"><button class=\"secondary small\">Sign out</button></form>",
+    )
+}
+
+fn new_workspace_page(cfg: &Config, error: &str) -> Response {
+    let terms = if cfg.mode == crate::config::Mode::Hosted {
+        "<p><label><input type=\"checkbox\" name=\"accept_terms\" value=\"1\" required> I accept the <a href=\"/terms\">terms of use and acceptable-use policy</a>.</label></p>"
+    } else {
+        ""
+    };
     let alert = if error.is_empty() { String::new() } else { format!("<p role=\"alert\"><b>{}</b></p>", esc(error)) };
     page(
         if error.is_empty() { 200 } else { 400 },
@@ -298,7 +319,7 @@ fn new_workspace_page(error: &str) -> Response {
         &format!(
             "<h1>Create a workspace</h1><p>One workspace for your team or company: one sign-in, one set of groups, one home page for every app.</p>
 {alert}<form method=\"post\" action=\"/new\"><input name=\"name\" required maxlength=\"60\" placeholder=\"Workspace name, for example Acme\" aria-label=\"Workspace name\">
-<p><label><input type=\"checkbox\" name=\"accept_terms\" value=\"1\" required> I accept the <a href=\"/terms\">terms of use and acceptable-use policy</a>.</label></p><button class=\"block\">Create workspace</button></form>"
+{terms}<button class=\"block\">Create workspace</button></form>"
         ),
         None,
         &[],
@@ -332,13 +353,21 @@ pub async fn serve(st: &State, req: &mut Req) -> Result<Option<Response>> {
             if req.param("return").is_some() || req.param("app").is_some() {
                 return sign_in_page(st, req.param("return"), req.param("app"), None).await.map(Some);
             }
+            // The landing page advertises the hosted service; a self-hosted server opens on its sign-in form.
+            if cfg.mode != crate::config::Mode::Hosted {
+                return sign_in_page(st, None, None, None).await.map(Some);
+            }
             return Ok(Some(crate::home::page(&st.cfg, req)));
         };
-        let ws = st.db.call(move |c| people::my_workspaces(c, &cfg, &user)).await?;
-        let to = ws.first().and_then(|w| w["slug"].as_str()).map(|s| format!("/w/{s}")).unwrap_or_else(|| "/new".into());
-        return Ok(Some(redirect(&to, &[])));
+        let (ws, may_create) =
+            st.db.call(move |c| Ok((people::my_workspaces(c, &cfg, &user)?, people::may_create_workspace(c, &cfg, &user)?))).await?;
+        return Ok(Some(match ws.first().and_then(|w| w["slug"].as_str()) {
+            Some(s) => redirect(&format!("/w/{s}"), &[]),
+            None if may_create => redirect("/new", &[]),
+            None => no_workspace_page(),
+        }));
     }
-    if p == "/terms" {
+    if p == "/terms" && st.cfg.mode == crate::config::Mode::Hosted {
         return Ok(Some(page(200, "Terms of use", TERMS, None, &[])));
     }
     if p == "/signin" && m == Method::GET {
@@ -349,7 +378,7 @@ pub async fn serve(st: &State, req: &mut Req) -> Result<Option<Response>> {
         return sign_in_page(st, req.param("return"), req.param("app"), None).await.map(Some);
     }
     if p == "/auth/signup" && m == Method::GET {
-        if person(st, req).await?.is_some() {
+        if person(st, req).await?.is_some() || cfg.mode != crate::config::Mode::Hosted {
             return Ok(Some(redirect("/", &[])));
         }
         return Ok(Some(sign_up_page(&cfg)));
@@ -688,11 +717,12 @@ pub async fn serve(st: &State, req: &mut Req) -> Result<Option<Response>> {
     }
 
     if p == "/new" && m == Method::GET {
-        return Ok(Some(if person(st, req).await?.is_some() {
-            new_workspace_page("")
-        } else {
-            redirect("/auth/signin?return=%2Fnew", &[])
-        }));
+        let Some((user, _)) = person(st, req).await? else {
+            return Ok(Some(redirect("/auth/signin?return=%2Fnew", &[])));
+        };
+        let c2 = cfg.clone();
+        let may = st.db.call(move |c| people::may_create_workspace(c, &c2, &user)).await?;
+        return Ok(Some(if may { new_workspace_page(&cfg, "") } else { no_workspace_page() }));
     }
     if p == "/new" && m == Method::POST {
         same_origin(&cfg, req)?;
@@ -704,7 +734,7 @@ pub async fn serve(st: &State, req: &mut Req) -> Result<Option<Response>> {
         let made = st.db.call(move |c| people::create_workspace(c, &cfg, &user, &name, accept)).await;
         return Ok(Some(match made {
             Ok(w) => redirect(&format!("/w/{}", w["workspace"].as_str().unwrap_or("")), &[]),
-            Err(e) if !e.is_internal() => new_workspace_page(&e.message),
+            Err(e) if !e.is_internal() => new_workspace_page(&st.cfg, &e.message),
             Err(e) => return Err(e),
         }));
     }

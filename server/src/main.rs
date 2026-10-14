@@ -39,6 +39,31 @@ fn main() {
             std::process::exit(2);
         }
     };
+    brod::db::set_auto_migrate(cfg.auto_migrate);
+    // `brod migrate`: apply pending migrations and stop, for servers that run with BROD_AUTO_MIGRATE=false.
+    if std::env::args().nth(1).as_deref() == Some("migrate") {
+        brod::db::set_auto_migrate(true);
+        open_db(&cfg);
+        return;
+    }
+    // `brod setup-link`: a fresh one-time sign-in link for BROD_ADMIN_EMAIL, for when the first one was lost or expired.
+    if std::env::args().nth(1).as_deref() == Some("setup-link") {
+        if cfg.admin_email.is_none() {
+            eprintln!("Set BROD_ADMIN_EMAIL to the admin's email address first.");
+            std::process::exit(2);
+        }
+        let db = open_db(&cfg);
+        let c2 = cfg.clone();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio runtime starts");
+        match rt.block_on(db.call(move |c| brod::setup::prepare(c, &c2, true))) {
+            Ok(setup) => println!("{}", brod::setup::banner(&cfg, &setup).unwrap_or_default()),
+            Err(e) => {
+                eprintln!("could not make a sign-in link: {}", e.message);
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     // `brod backup <file>`: a consistent copy of the database while the server keeps running.
     if std::env::args().nth(1).as_deref() == Some("backup") {
         let Some(to) = std::env::args().nth(2) else {
@@ -67,22 +92,23 @@ fn main() {
 async fn run(cfg: Config) {
     // One crypto provider for every TLS user in the process: Brod's own HTTPS (tls.rs) and its ACME client.
     let _ = rustls::crypto::ring::default_provider().install_default();
+    let mode = match cfg.mode {
+        brod::config::Mode::SelfHosted => "self-hosted",
+        brod::config::Mode::Hosted => "hosted",
+    };
+    println!("Brod {} ({mode})", env!("CARGO_PKG_VERSION"));
+    if !cfg.generated_secrets.is_empty() {
+        println!("config: {} generated and kept in {}", cfg.generated_secrets.join(", "), cfg.data_dir.join("secrets.env").display());
+    }
+    for w in &cfg.warnings {
+        eprintln!("warning: {w}");
+    }
     if cfg.dev_mode && cfg.api_origin.starts_with("https://") {
         eprintln!("warning: DEV_MODE=1 returns sign-in links in API responses. Do not use it on a public server.");
     }
-    let connections = std::env::var("BROD_DB_CONNECTIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
-    let opened = match &cfg.database_url {
-        Some(url) => Db::open_pg(url, connections),
-        None => Db::open(&cfg.data_dir.join("brod.db"), connections),
-    };
-    let db = match opened {
-        Ok(db) => db,
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    };
+    let db = open_db(&cfg);
     let listen = cfg.listen;
+    brod::model::set_self_hosted(cfg.mode == brod::config::Mode::SelfHosted);
     if let Some(mb) = cfg.dev_free_storage_mb {
         brod::model::set_free_storage(mb * brod::model::MB);
     }
@@ -94,8 +120,17 @@ async fn run(cfg: Config) {
             std::process::exit(1);
         }
     };
-    let database = if st.cfg.database_url.is_some() { "Postgres" } else { "SQLite" };
-    println!("Brod listening on http://{listen} (API {}, apps *.{}, {database})", st.cfg.api_origin, st.cfg.apps_domain);
+    println!("email: {}", brod::email::describe(&st.cfg));
+    println!("listening on {listen}; open {} (apps at *.{})", st.cfg.api_origin, st.cfg.apps_domain);
+    let c2 = st.cfg.clone();
+    match st.db.call(move |c| brod::setup::prepare(c, &c2, false)).await {
+        Ok(setup) => {
+            if let Some(text) = brod::setup::banner(&st.cfg, &setup) {
+                println!("\n{text}\n");
+            }
+        }
+        Err(e) => eprintln!("warning: first-start setup failed: {}", e.message),
+    }
     if let Some(tls) = st.cfg.tls.clone()
         && let Err(e) = brod::tls::start(st.clone(), tls).await
     {
@@ -167,6 +202,29 @@ async fn run(cfg: Config) {
     let _ = brod::usage::flush(&st).await;
     let _ = brod::analytics::flush(&st).await;
     println!("Brod stopped");
+}
+
+/// Open the database named by the configuration, applying migrations as BROD_AUTO_MIGRATE says, or exit.
+fn open_db(cfg: &Config) -> Db {
+    let connections = std::env::var("BROD_DB_CONNECTIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
+    let opened = match &cfg.database_url {
+        Some(url) => {
+            println!("database: Postgres");
+            Db::open_pg(url, connections)
+        }
+        None => {
+            let path = cfg.data_dir.join("brod.db");
+            println!("database: SQLite at {}", path.display());
+            Db::open(&path, connections)
+        }
+    };
+    match opened {
+        Ok(db) => db,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
 }
 
 async fn shutdown_signal() {

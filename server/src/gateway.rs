@@ -313,7 +313,7 @@ pub async fn serve_version(
             && !runtime::is_server_path(&path)
             && let Some(obj) = st.store.get(&format!("{base}{path}")).await?
         {
-            return file_response(&req, app, obj, &path).await;
+            return file_response(st, &req, app, obj, &path).await;
         }
         return runtime::dispatch(st, req, app, origin, version, &server, identity).await;
     }
@@ -329,7 +329,7 @@ pub async fn serve_version(
     };
     for c in candidates {
         if let Some(obj) = st.store.get(&format!("{base}{c}")).await? {
-            return file_response(&req, app, obj, &c).await;
+            return file_response(st, &req, app, obj, &c).await;
         }
     }
     match st.store.get(&format!("{base}404.html")).await? {
@@ -338,7 +338,7 @@ pub async fn serve_version(
     }
 }
 
-async fn file_response(req: &Req, app: &AppRow, obj: Object, hit: &str) -> Result<Response> {
+async fn file_response(st: &State, req: &Req, app: &AppRow, obj: Object, hit: &str) -> Result<Response> {
     let html = hit.ends_with(".html");
     let is_public = app.access == "public";
     let etag = obj.meta.http_etag();
@@ -371,7 +371,7 @@ async fn file_response(req: &Req, app: &AppRow, obj: Object, hit: &str) -> Resul
     if html {
         let page = read_capped(obj.body, crate::tar::FILE_BYTES + 1024 * 1024, "The page").await?;
         let page = with_insights(page);
-        let page = if is_public { append_to_body(&page, REPORT_LINK) } else { page };
+        let page = if is_public && st.cfg.abuse_checks { append_to_body(&page, REPORT_LINK) } else { page };
         return Ok(response(200, bytes_body(page), &headers));
     }
     headers.push(("content-length", obj.meta.size.to_string()));
@@ -416,7 +416,7 @@ fn last_index_of(hay: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 async fn special(st: &State, req: &mut Req, v: Visit) -> Result<Response> {
-    let report_link = "<p><small><a href=\"/_brod/report\">Report this app</a></small></p>";
+    let report_link = if st.cfg.abuse_checks { "<p><small><a href=\"/_brod/report\">Report this app</a></small></p>" } else { "" };
     let Visit { app, visitor, decision, workspace_slug, origin, domain, staging, .. } = v;
     // What the browser stopped, or would have stopped, under the app's Content-Security-Policy (network.rs). Browsers
     // may send these without the visitor's cookies, so they are taken from anyone: they are only ever shown to the app's
@@ -576,7 +576,7 @@ async fn special(st: &State, req: &mut Req, v: Visit) -> Result<Response> {
             identity["token"] = json!(token);
             Ok(json_response(&identity, 200, &[("cache-control", "private, no-store".into())]))
         }
-        "/_brod/report" => {
+        "/_brod/report" if st.cfg.abuse_checks => {
             if req.method == Method::POST {
                 let form = if req.header("content-type").unwrap_or("").contains("application/x-www-form-urlencoded") {
                     req.form().await.unwrap_or_default()

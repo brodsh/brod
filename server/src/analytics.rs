@@ -105,6 +105,9 @@ struct Pending {
 #[derive(Default)]
 pub struct Analytics {
     pending: Mutex<Pending>,
+    /// Held from taking the pending rows until they are written. Without it, a report that flushes first could find
+    /// the buffer already taken by the periodic flush and read the database before that flush had written it.
+    flushing: tokio::sync::Mutex<()>,
 }
 
 /// One request to an app, from the moment the gateway sees it until its response.
@@ -492,6 +495,7 @@ fn write(conn: &Connection, p: Pending) -> Result<()> {
 
 /// Write what was collected since the last flush. Called on a timer, before a report is read, and at shutdown.
 pub async fn flush(st: &State) -> Result<()> {
+    let _one_at_a_time = st.analytics.flushing.lock().await;
     let p = st.analytics.take();
     if p.views.is_empty() && p.events.is_empty() && p.stats.is_empty() {
         return Ok(());
@@ -563,14 +567,16 @@ struct Range {
     buckets: usize,
 }
 impl Range {
+    /// The period ending now: `to` is exclusive, so it is one past `t`, and what was recorded in the very millisecond
+    /// the report was asked for is in it.
     fn new(days: i64, tz_minutes: i64, t: i64) -> Range {
         let tz = tz_minutes * MINUTE;
         if days == 1 {
             let this_hour = t - t.rem_euclid(HOUR);
-            return Range { from: this_hour - 23 * HOUR, to: t, hourly: true, tz, buckets: 24 };
+            return Range { from: this_hour - 23 * HOUR, to: t + 1, hourly: true, tz, buckets: 24 };
         }
         let today = (t + tz).div_euclid(DAY);
-        Range { from: (today - days + 1) * DAY - tz, to: t, hourly: false, tz, buckets: days as usize }
+        Range { from: (today - days + 1) * DAY - tz, to: t + 1, hourly: false, tz, buckets: days as usize }
     }
     fn bucket(&self, at: i64) -> Option<usize> {
         if at < self.from || at >= self.to {
@@ -982,7 +988,7 @@ pub fn report(conn: &Connection, c: &Caller, app: Option<&str>, days: Option<i64
         out.insert(k.to_string(), v);
     };
     put("app", app_json);
-    put("plan", json!(c.workspace.plan));
+    put("plan", json!(crate::model::plan_label(&c.workspace)));
     put("retention_days", json!(keep));
     put("days", json!(days));
     put("tz", json!(tz));
@@ -1105,10 +1111,14 @@ mod tests {
         assert_eq!(r.buckets, 7);
         assert_eq!((r.from + 345 * MINUTE).rem_euclid(DAY), 0);
         assert_eq!(r.bucket(t - 1), Some(6));
+        // A view recorded in the same millisecond as the report counts: reports flush first, then read at once.
+        assert_eq!(r.bucket(t), Some(6));
+        assert_eq!(r.bucket(t + 1), None);
         assert_eq!(r.bucket(r.from), Some(0));
         assert_eq!(r.bucket(r.from - 1), None);
         let h = Range::new(1, 0, t + 30 * MINUTE);
         assert_eq!((h.buckets, h.bucket(t + 29 * MINUTE), h.bucket(t - 1), h.bucket(t - 23 * HOUR - 1)), (24, Some(23), Some(22), None));
+        assert_eq!(h.bucket(t + 30 * MINUTE), Some(23));
     }
 
     #[tokio::test]

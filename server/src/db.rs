@@ -814,6 +814,13 @@ fn ends_with_word(s: &str, w: &str) -> bool {
     s.ends_with(w) && s[..s.len() - w.len()].chars().next_back().is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'))
 }
 
+/// BROD_AUTO_MIGRATE: whether opening the database applies pending migrations (the default) or refuses to start
+/// with a list of them. `brod migrate` applies them either way. Set once at start (main.rs).
+static AUTO_MIGRATE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+pub fn set_auto_migrate(on: bool) {
+    AUTO_MIGRATE.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Apply the migrations in order, each in its own transaction, recorded in d1_migrations (a name kept from Brod's first, Cloudflare D1-based version).
 pub fn migrate(conn: &Connection) -> std::result::Result<(), String> {
     let pg = conn.is_postgres();
@@ -834,10 +841,25 @@ pub fn migrate(conn: &Connection) -> std::result::Result<(), String> {
     };
     let result = (|| {
         conn.execute_batch(table).map_err(|e| e.to_string())?;
+        let mut pending = Vec::new();
         for (name, sql) in set {
-            if conn.exists("SELECT 1 FROM d1_migrations WHERE name = ?", [name]).map_err(|e| e.to_string())? {
-                continue;
+            if !conn.exists("SELECT 1 FROM d1_migrations WHERE name = ?", [name]).map_err(|e| e.to_string())? {
+                pending.push((name, sql));
             }
+        }
+        if pending.is_empty() {
+            println!("database: schema up to date ({} migrations)", set.len());
+            return Ok(());
+        }
+        if !AUTO_MIGRATE.load(std::sync::atomic::Ordering::Relaxed) {
+            let names: Vec<&str> = pending.iter().map(|(n, _)| **n).collect();
+            return Err(format!(
+                "database: {} migrations are waiting ({}) and BROD_AUTO_MIGRATE is off. Back up the database, then run: brod migrate",
+                names.len(),
+                names.join(", ")
+            ));
+        }
+        for (name, sql) in &pending {
             let script = format!("BEGIN;\n{sql}\n;INSERT INTO d1_migrations (name) VALUES ('{}');", name.replace('\'', "''"));
             // SQLite changes a constraint by rebuilding the table (0003, 0009). With foreign keys on, dropping the old
             // table counts every row that points at it as broken, though the new table takes its place with the same
@@ -859,8 +881,10 @@ pub fn migrate(conn: &Connection) -> std::result::Result<(), String> {
                 let _ = conn.execute_batch("ROLLBACK");
                 return Err(format!("Migration {name} failed and was rolled back: {e}"));
             }
-            eprintln!("applied migration {name}");
         }
+        let (first, last) = (pending[0].0, pending[pending.len() - 1].0);
+        let range = if pending.len() == 1 { first.to_string() } else { format!("{first} to {last}") };
+        println!("database: applied {} new migrations ({range}); schema up to date", pending.len());
         Ok(())
     })();
     if pg {

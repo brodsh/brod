@@ -310,6 +310,10 @@ details.tableview summary{cursor:pointer;color:var(--muted);font-size:.85rem}
 'use strict';
 const B = JSON.parse(document.getElementById('boot').textContent);
 const ADMIN = B.role === 'admin';
+// Billing exists only on a hosted server; the marketplace only where the operator turned it on.
+const HOSTED = B.hosted, MARKET = B.marketplace;
+// "3 of 10", or just "3" when there is no limit (a self-hosted server sends null).
+const ofLimit = (n, limit, fmt = String) => limit == null ? fmt(n) : `${fmt(n)} of ${fmt(limit)}`;
 const $main = document.getElementById('main');
 
 // ---------- small helpers ----------
@@ -509,17 +513,18 @@ function progress(into, target, file, after) {
 // The sidebar in groups, so it stays readable as pages are added. A group with no label sits at the top.
 const NAV = [
   [null, [['overview', 'Overview']]],
-  ['Build', [['apps', 'Apps'], ['market', 'Marketplace'], ['domains', 'Domains']]],
+  ['Build', [['apps', 'Apps'], ...(MARKET ? [['market', 'Marketplace']] : []), ['domains', 'Domains']]],
   ['Insights', [['analytics', 'Analytics'], ['log', 'Activity']]],
   ['Team', [['people', 'People'], ['groups', 'Groups'], ['spaces', 'Spaces']]],
-  ['Workspace', [['agents', 'Agents'], ...(ADMIN ? [['billing', 'Billing']] : [])]],
+  ['Workspace', [['agents', 'Agents'], ...(ADMIN && HOSTED ? [['billing', 'Billing']] : [])]],
 ];
 const PAGES = { overview, apps: directory, new: newApp, app: appPage, analytics, domains, market, spaces, people, groups, log: activity, agents, billing };
 let R = route();
 function route() {
   const [page, slug, tab] = location.hash.slice(1).split('/').map(decodeURIComponent);
   if (page === 'activity') return { page: 'log' };
-  return page in PAGES ? { page, slug, tab } : { page: 'overview' };
+  const off = (page === 'market' && !MARKET) || (page === 'billing' && !HOSTED);
+  return page in PAGES && !off ? { page, slug, tab } : { page: 'overview' };
 }
 function go(page, slug, tab) {
   const hash = '#' + [page, slug ?? (tab ? '' : null), tab].filter(x => x != null).map(enc).join('/');
@@ -580,14 +585,15 @@ async function overview() {
     head(B.name, `${data.apps.length} ${data.apps.length === 1 ? 'app' : 'apps'}, ${live.length} running. Each one has its own address, sign-in and guest list.`, deployBtn()),
     needs.length ? h('section', {}, h('h2', {}, 'Needs you'), h('ul', { class: 'list' }, needs)) : null,
     h('section', { class: 'stats' },
-      stat(`${data.running_apps} of ${data.app_limit}`, 'apps running', 'apps'),
+      stat(ofLimit(data.running_apps, data.app_limit), 'apps running', 'apps'),
       stat(ppl.people.length, ppl.people.length === 1 ? 'person in the workspace' : 'people in the workspace', 'people'),
       usage ? stat(usage.total_views, 'visits in 14 days', 'analytics') : null,
-      usage ? stat(bytes(usage.storage.total), `of ${bytes(usage.storage.limit)} storage`, ADMIN ? 'billing' : 'apps') : null),
+      usage ? stat(bytes(usage.storage.total), usage.storage.limit == null ? 'storage' : `of ${bytes(usage.storage.limit)} storage`, ADMIN && HOSTED ? 'billing' : 'apps') : null),
     h('section', {}, sechead('Apps', h('button', { class: 'link', onclick: () => go('apps') }, 'All apps')),
       data.apps.length ? h('ul', { class: 'list' }, data.apps.map(a => appRow(a, byApp[a.app])))
-        : empty('Nothing deployed yet', 'Drop in a zip of a built app, pick a ready-made one from the marketplace, or connect an agent and ask it to deploy. It gets an address and sign-in in one step.',
-          h('div', { class: 'acts' }, deployBtn(), h('button', { class: 'btn', onclick: () => go('new', undefined, 'market') }, 'Pick from the marketplace')))),
+        : empty('Nothing deployed yet', MARKET ? 'Drop in a zip of a built app, pick a ready-made one from the marketplace, or connect an agent and ask it to deploy. It gets an address and sign-in in one step.'
+            : 'Drop in a zip of a built app, or connect an agent and ask it to deploy. It gets an address and sign-in in one step.',
+          h('div', { class: 'acts' }, deployBtn(), MARKET ? h('button', { class: 'btn', onclick: () => go('new', undefined, 'market') }, 'Pick from the marketplace') : null))),
     h('section', {}, sechead('Recent activity', h('button', { class: 'link', onclick: () => go('log') }, 'Full log')),
       ev.events.length ? h('ul', { class: 'list tight' }, ev.events.map(auditRow)) : h('p', { class: 'muted' }, 'Nothing yet.')),
   ];
@@ -622,7 +628,7 @@ async function directory() {
       h('span', {}, `shared with ${a.shared_with.length}`), h('a', { class: 'link', href: a.url + '/', target: '_blank', rel: 'noopener' }, 'Open'))));
   filter.addEventListener('input', () => { const q = filter.value.toLowerCase(); for (const c of cards) c.hidden = !c.dataset.name.includes(q); });
   return [
-    head('Apps', `${data.running_apps} of ${data.app_limit} running on the ${data.plan} plan.`, deployBtn()),
+    head('Apps', data.app_limit == null ? `${data.running_apps} running.` : `${data.running_apps} of ${data.app_limit} running on the ${data.plan} plan.`, deployBtn()),
     data.apps.length ? [h('label', { class: 'search' }, h('span', { class: 'sr' }, 'Filter apps'), filter), h('ul', { class: 'cards' }, cards)]
       : empty('Nothing deployed yet', 'Drop in a zip of a built app, or connect an agent and ask it to deploy.', deployBtn()),
   ];
@@ -641,8 +647,8 @@ async function newApp() {
     h('div', { class: 'fields' }, field('Name', name)), field('Bundle', zone),
     h('div', { class: 'deployline' }, h('button', { class: 'btn deploy big', type: 'submit' }, 'Deploy'),
       h('span', { class: 'muted small' }, 'Starts private. Only builders and admins can open it until you share it.')));
-  const shared = notePolicy(await api('/marketplace').catch(() => ({ listings: [] }))).listings.filter(l => !l.yours);
-  const tab = R.tab === 'market' ? 'market' : 'upload';
+  const shared = MARKET ? notePolicy(await api('/marketplace').catch(() => ({ listings: [] }))).listings.filter(l => !l.yours) : [];
+  const tab = MARKET && R.tab === 'market' ? 'market' : 'upload';
   const ways = [['upload', 'Upload your own'], ['market', `From the marketplace${shared.length ? ` (${shared.length})` : ''}`]];
   const body = tab === 'market'
     ? [h('p', { class: 'sub' }, 'Apps other workspaces on this server share, free for now. Deploying one gives you your own copy, with its own address, sign-in, access, secrets and data. When its maker publishes an update, you choose when to deploy it.'),
@@ -650,8 +656,8 @@ async function newApp() {
     : [form, out];
   return [
     head('Deploy an app', tab === 'market' ? 'Pick a ready-made app and deploy your own copy in one step.' : 'Name it, drop in the built folder as a zip and press the button. Hosting, HTTPS, sign-in and a guest list come with it.'),
-    h('nav', { class: 'tabs', 'aria-label': 'Ways to deploy' }, ways.map(([k, label]) =>
-      h('button', { class: tab === k ? 'on' : '', 'aria-current': tab === k ? 'page' : null, onclick: () => go('new', undefined, k) }, label))),
+    MARKET ? h('nav', { class: 'tabs', 'aria-label': 'Ways to deploy' }, ways.map(([k, label]) =>
+      h('button', { class: tab === k ? 'on' : '', 'aria-current': tab === k ? 'page' : null, onclick: () => go('new', undefined, k) }, label))) : null,
     h('div', { class: 'tabbody' }, body),
     h('section', {}, h('h2', {}, 'Or let an agent do it'), h('p', { class: 'sub' }, 'Connect Claude Code or another MCP client and ask it to deploy. It builds, zips and ships for you.'),
       h('div', {}, h('button', { class: 'btn', onclick: () => go('agents') }, 'Connect an agent'))),

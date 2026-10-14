@@ -39,6 +39,8 @@ const dns = await serveFakeDns();
 const env = {
   ...process.env, APPS_DOMAIN: `localhost:${PORT}`, API_ORIGIN: API, ADMIN_SECRET: 'dev-admin-secret', IDENTITY_SECRET: 'dev-identity-secret',
   SECRETS_KEY: 'dev-secrets-key-0123456789', DEV_MODE: '1', BROD_LISTEN: `127.0.0.1:${PORT}`, BROD_DATA_DIR: state,
+  // The full suite covers the hosted service's plans, billing, marketplace and abuse checks; e2e-self-hosted.mjs covers the default.
+  BROD_MODE: 'hosted',
   STRIPE_SECRET_KEY: STRIPE_KEY, STRIPE_WEBHOOK_SECRET: WEBHOOK_SECRET, STRIPE_PRICE_SOLO: 'price_solo', STRIPE_PRICE_TEAM: 'price_team',
   STRIPE_API_BASE: `http://127.0.0.1:${stripe.port}`, DNS_RESOLVER_URL: `http://127.0.0.1:${dns.port}/dns-query`,
   // A small free plan, so the storage checks can fill it (honoured only with DEV_MODE=1).
