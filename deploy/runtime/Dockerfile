@@ -7,7 +7,7 @@
 # Both build stages run on the build machine and fetch or cross-compile for the target, so no emulation is needed.
 
 # workerd ships as an npm package with a prebuilt binary per platform. Keep this in step with package.json.
-FROM --platform=$BUILDPLATFORM node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 AS fetch
+FROM --platform=$BUILDPLATFORM node:26-bookworm-slim@sha256:86f07bc9c5dce4578cf37e5a418b7bfc7f817cda25cde66e2b66e95ed86c4567 AS fetch
 ARG WORKERD_VERSION=1.20261006.1
 ARG TARGETARCH
 ARG BUILDARCH
