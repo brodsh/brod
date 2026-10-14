@@ -27,7 +27,7 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 getrandom = "0.3"
 hex = "0.4"
 hkdf = "0.12"
-hmac = "0.12"
+hmac = "0.13"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto", "service"] }
