@@ -69,7 +69,7 @@ fn main() -> ExitCode {
     let mut quick_exits = 0u32;
     loop {
         let started = Instant::now();
-        let mut child = match spawn(&cfg.command) {
+        let mut child = match spawn(&cfg.command, &cfg.secret) {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("brod-runtime: could not start {}: {e}", cfg.command[0]);
@@ -94,7 +94,17 @@ fn config(args: Vec<String>, get: impl Fn(&str) -> Option<String>) -> Result<Con
     if args.is_empty() {
         return Err("usage: brod-runtime <command...>, for example brod-runtime workerd serve config.capnp --experimental".into());
     }
-    let secret = get("BROD_RUNTIME_SECRET").filter(|s| s.len() >= 16).ok_or("BROD_RUNTIME_SECRET must be set (at least 16 characters).")?;
+    // The secret comes from the environment, or from a file: a self-hosted Brod generates it into its data folder, which
+    // Compose mounts here read-only (BROD_RUNTIME_SECRET_FILE).
+    let from_file = || {
+        let path = get("BROD_RUNTIME_SECRET_FILE")?;
+        std::fs::read_to_string(&path).ok().map(|s| s.trim().to_string())
+    };
+    let secret = get("BROD_RUNTIME_SECRET")
+        .filter(|s| !s.is_empty())
+        .or_else(from_file)
+        .filter(|s| s.len() >= 16)
+        .ok_or("BROD_RUNTIME_SECRET (or a readable BROD_RUNTIME_SECRET_FILE) must be set, at least 16 characters.")?;
     let number = |k: &str, default: u64| -> Result<u64, String> {
         match get(k).filter(|v| !v.is_empty()) {
             None => Ok(default),
@@ -116,9 +126,11 @@ fn config(args: Vec<String>, get: impl Fn(&str) -> Option<String>) -> Result<Con
     })
 }
 
-fn spawn(command: &[String]) -> std::io::Result<Child> {
+fn spawn(command: &[String], secret: &str) -> std::io::Result<Child> {
     let mut cmd = Command::new(&command[0]);
     cmd.args(&command[1..]);
+    // workerd reads the secret from its environment (config.capnp), whichever way the supervisor got it.
+    cmd.env("BROD_RUNTIME_SECRET", secret);
     // If this process dies, workerd goes with it rather than keeping the port.
     #[cfg(target_os = "linux")]
     unsafe {
@@ -306,6 +318,13 @@ mod tests {
         assert!(config(vec![], env(&[SECRET])).is_err());
         assert!(config(vec!["w".into()], env(&[])).is_err());
         assert!(config(vec!["w".into()], env(&[("BROD_RUNTIME_SECRET", "short")])).is_err());
+        let file = std::env::temp_dir().join(format!("brod-runtime-secret-{}", std::process::id()));
+        std::fs::write(&file, "test-runtime-secret-0123456789\n").unwrap();
+        let path = file.to_string_lossy().to_string();
+        let c = config(vec!["w".into()], env(&[("BROD_RUNTIME_SECRET_FILE", path.as_str())])).unwrap();
+        assert_eq!(c.secret, "test-runtime-secret-0123456789");
+        let _ = std::fs::remove_file(file);
+        assert!(config(vec!["w".into()], env(&[("BROD_RUNTIME_SECRET_FILE", "/nonexistent/brod")])).is_err());
         assert!(config(vec!["w".into()], env(&[SECRET, ("RUNTIME_STALL_MS", "10")])).is_err());
         assert!(config(vec!["w".into()], env(&[SECRET, ("RUNTIME_MEMORY_MB", "lots")])).is_err());
         assert!(config(vec!["w".into()], env(&[SECRET, ("RUNTIME_PORT", "70000")])).is_err());

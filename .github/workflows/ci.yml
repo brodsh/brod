@@ -102,17 +102,30 @@ jobs:
           df -h /
       - name: Build the Docker images (not pushed)
         run: |
-          docker build -f deploy/Dockerfile -t brod:ci .
-          docker build -f deploy/runtime/Dockerfile -t brod-runtime:ci .
+          docker compose build
           docker build -f deploy/preview/Dockerfile -t brod-preview:ci .
-      - name: Check the Compose file
+      - name: Check the Compose files
         run: |
-          cp deploy/.env.example deploy/.env
-          sed -i 's/^BROD_RUNTIME_SECRET=$/BROD_RUNTIME_SECRET=ci-runtime-secret-0123456789/' deploy/.env
-          docker compose -f deploy/docker-compose.yml config --quiet
-          docker compose -f deploy/docker-compose.yml --profile postgres config --quiet
-          docker compose -f deploy/docker-compose.yml --profile previews config --quiet
-          docker compose -f deploy/docker-compose.yml -f deploy/compose.tls.yml config --quiet
+          cp .env.example .env
+          printf 'BROD_API_HOST=brod.example.com\nAPPS_DOMAIN=apps.example.com\nACME_EMAIL=ci@example.com\nBROD_PREVIEW_SECRET=ci-preview-secret-0123456789\n' >> .env
+          docker compose config --quiet
+          docker compose -f docker-compose.yml -f deploy/compose.caddy.yml config --quiet
+          docker compose -f docker-compose.yml -f deploy/compose.tls.yml config --quiet
+          docker compose -f docker-compose.yml -f deploy/compose.preview.yml config --quiet
+          rm .env
+      - name: Quickstart (cp .env.example .env, docker compose up -d, the sign-in link in the log)
+        run: |
+          cp .env.example .env
+          docker compose up -d --wait
+          docker compose logs --no-log-prefix brod | tee brod.log
+          grep -q '/auth/verify?token=' brod.log
+          curl -fsS http://localhost:8080/healthz
+          docker compose down -v
+          rm .env brod.log
+      - name: HTTPS through Caddy (deploy/smoke-test.sh)
+        run: |
+          deploy/smoke-test.sh
+          docker compose -p brodsmoke down -v
 
   # The Rust server with its database in Postgres (BROD_DATABASE_URL): the unit tests, the SQLite-to-Postgres copy,
   # and the same end-to-end suite.

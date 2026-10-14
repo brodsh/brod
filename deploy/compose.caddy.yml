@@ -1,0 +1,35 @@
+# HTTPS with Caddy in front of Brod: certificates from Let's Encrypt for Brod's host and, on demand, for each app's
+# host. Layer it on the main file, from the repository root:
+#   docker compose -f docker-compose.yml -f deploy/compose.caddy.yml up -d
+# Needs in .env: BROD_PUBLIC_URL=https://<host>, BROD_API_HOST=<host>, APPS_DOMAIN, ACME_EMAIL, and DNS records for the
+# host and *.<APPS_DOMAIN> pointing at this server. See docs/deploy-production.md.
+services:
+  brod:
+    environment:
+      # Caddy terminates HTTPS and says so in X-Forwarded-Proto.
+      BROD_TRUST_PROXY: "1"
+    # Only Caddy reaches Brod.
+    ports: !reset []
+
+  caddy:
+    image: caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    restart: unless-stopped
+    depends_on:
+      brod:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      BROD_API_HOST: ${BROD_API_HOST:?set BROD_API_HOST in .env, for example brod.example.com}
+      APPS_DOMAIN: ${APPS_DOMAIN:?set APPS_DOMAIN in .env, for example apps.example.com}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  caddy-data:
+  caddy-config:

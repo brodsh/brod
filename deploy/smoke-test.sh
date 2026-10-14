@@ -1,42 +1,36 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-only
-# Smoke-test the whole compose stack (Brod, the runtime, Caddy) on this machine, with Caddy's local CA instead of
-# Let's Encrypt and brod.test / *.*.apps.brod.test pointed at 127.0.0.1 by curl. Needs the images built first:
-#   docker compose -f deploy/docker-compose.yml build
-# Usage: deploy/smoke-test.sh        (from the repository root; leaves the "brodsmoke" project running: see the end)
+# Smoke-test the production stack (Brod, Postgres, the runtime, Caddy from deploy/compose.caddy.yml) on this machine,
+# with Caddy's local CA instead of Let's Encrypt and brod.test / *.*.apps.brod.test pointed at 127.0.0.1 by curl.
+# Needs the images built first:  docker compose build
+# Usage: deploy/smoke-test.sh        (leaves the "brodsmoke" project running: see the end)
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 work=$(mktemp -d)
-sed 's|^\temail {$ACME_EMAIL}|\temail {$ACME_EMAIL}\n\tlocal_certs|' Caddyfile > "$work/Caddyfile"
+# Caddy's local CA for everything: local_certs, and the custom-domain block's own ACME issuer swapped for it too.
+sed -e 's|^\temail {$ACME_EMAIL}|\temail {$ACME_EMAIL}\n\tlocal_certs|' -e 's|^\t\tissuer acme$|\t\tissuer internal|' deploy/Caddyfile > "$work/Caddyfile"
 cat > "$work/override.yml" <<EOF
 services:
   brod:
     env_file: !reset []
     environment:
       DEV_MODE: "1"
-      API_ORIGIN: https://brod.test
+      BROD_PUBLIC_URL: https://brod.test
       APPS_DOMAIN: apps.brod.test
       ADMIN_SECRET: smoke-admin-secret
       IDENTITY_SECRET: smoke-identity-secret
       SECRETS_KEY: smoke-secrets-key-0123456789
       BROD_RUNTIME_SECRET: smoke-runtime-secret-0123456789
-  runtime:
-    environment:
-      BROD_RUNTIME_SECRET: smoke-runtime-secret-0123456789
   caddy:
     ports: !override
       - "127.0.0.1:443:443"
-    environment:
-      BROD_API_HOST: brod.test
-      APPS_DOMAIN: apps.brod.test
-      ACME_EMAIL: smoke@example.com
     volumes: !override
       - $work/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
 EOF
-export BROD_RUNTIME_SECRET=smoke-runtime-secret-0123456789 BROD_API_HOST=brod.test APPS_DOMAIN=apps.brod.test ACME_EMAIL=smoke@example.com
-compose() { docker compose -f docker-compose.yml -f "$work/override.yml" -p brodsmoke "$@"; }
+export BROD_API_HOST=brod.test APPS_DOMAIN=apps.brod.test ACME_EMAIL=smoke@example.com
+compose() { docker compose -f docker-compose.yml -f deploy/compose.caddy.yml -f "$work/override.yml" -p brodsmoke "$@"; }
 # docker-compose.yml names an env_file that must exist; the override replaces what it would set.
 if [ ! -f .env ]; then touch .env; trap 'rm -f .env' EXIT; fi
 compose up -d --no-build --wait

@@ -9,4 +9,6 @@ regexTarget = "secret"
 regexes = [
   '''^(test|smoke|bench|dev|e2e|ci)-[a-z-]*0123456789$''',
   '''^0123456789abcdef$''',
+  # An earlier version of the runtime supervisor's secret-file test (commit f671792).
+  '''^0123456789abcdef0123$''',
 ]
