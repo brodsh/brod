@@ -1,0 +1,23 @@
+# Postgres for developing Brod with `cargo run` (make dev). Reachable only from this machine, without a password.
+# Never use this file on a server.
+name: brod-dev
+
+services:
+  postgres:
+    image: postgres:17-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826
+    environment:
+      POSTGRES_USER: brod
+      POSTGRES_DB: brod
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "brod", "-d", "brod"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  postgres-dev:

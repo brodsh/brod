@@ -16,6 +16,18 @@ use crate::util::{encode_uri_component, esc, is_hex_color};
 
 const PAGE: &str = include_str!("admin.html");
 
+/// The page's source. In a debug build with BROD_DEV_ASSETS set to the folder holding admin.html (server/src), it is
+/// read from disk on every request, so a change to the page needs only a browser reload. Release builds ignore it.
+fn source() -> std::borrow::Cow<'static, str> {
+    #[cfg(debug_assertions)]
+    if let Some(page) =
+        std::env::var("BROD_DEV_ASSETS").ok().and_then(|dir| std::fs::read_to_string(std::path::Path::new(&dir).join("admin.html")).ok())
+    {
+        return page.into();
+    }
+    PAGE.into()
+}
+
 pub async fn page(st: &State, req: &Req, slug: String) -> Result<Response> {
     let cfg = st.cfg.clone();
     let cookie = req.header("cookie").map(String::from);
@@ -49,7 +61,7 @@ pub async fn page(st: &State, req: &Req, slug: String) -> Result<Response> {
     .to_string()
     .replace('<', "\\u003c");
     let accent = if is_hex_color(&w.color) { w.color.as_str() } else { "#1f6f4a" };
-    let html = PAGE.replace("{{TITLE}}", &esc(&format!("Brod – {}", w.name))).replace("{{ACCENT}}", accent).replace("{{BOOT}}", &boot);
+    let html = source().replace("{{TITLE}}", &esc(&format!("Brod – {}", w.name))).replace("{{ACCENT}}", accent).replace("{{BOOT}}", &boot);
     Ok(response(
         200,
         html,

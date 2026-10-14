@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// App files in a folder: the object under objects/<key> and its metadata in meta/<key>.json. The layout is the
-// same as src/node/fs-bucket.ts, so a FILES_DIR written by the Node build is read here unchanged.
+// App files in a folder: the object under objects/<key> and its metadata in meta/<key>.json.
 use axum::body::Body;
 use bytes::Bytes;
 use md5::{Digest, Md5};

@@ -1,0 +1,34 @@
+name: Help running Brod
+description: Installing, configuring or upgrading your own Brod.
+labels: [self-host]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: What you are trying to do
+    validations:
+      required: true
+  - type: dropdown
+    id: setup
+    attributes:
+      label: How you run it
+      options:
+        - docker compose (quickstart, localhost)
+        - docker compose with Caddy
+        - docker compose with nginx or another proxy
+        - docker compose with Brod's own HTTPS
+        - something else
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Your .env, without secrets
+      description: Remove every secret, password, token and API key.
+      render: sh
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: "`docker compose logs brod` from the start. Remove sign-in links and tokens."
+      render: text
