@@ -30,7 +30,6 @@ commit_parsers = [
   { message = "^chore\\(deps", skip = true },
   { message = "^chore|^style", group = "<!-- 7 -->Housekeeping" },
 ]
-tag_pattern = "v[0-9].*"
-# Release candidates get notes of their own, but a release lists everything since the previous release.
-ignore_tags = "-rc"
+# Only releases count as tags here, so a release candidate (v0.1.0-rc.1) never cuts the next release's notes short.
+tag_pattern = "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
 sort_commits = "oldest"
