@@ -1,5 +1,6 @@
-# Every push and pull request: the Rust server's format, lints, unit tests and end-to-end suite (on SQLite and on
-# Postgres), the Node unit tests, and the Docker images (built, never pushed).
+# Every push and pull request: no secrets in the history, dependency licenses and advisories, the Rust server's
+# format, lints, unit tests and end-to-end suites (on SQLite and on Postgres), the Node unit tests, and the Docker
+# images and Compose stack (built and started, never pushed). Actions are pinned by commit; Dependabot updates them.
 name: CI
 
 on:
@@ -19,27 +20,50 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
       - run: npm test
 
-  # Dependency policy (deny.toml): licenses compatible with AGPL-3.0, no known advisories, crates.io only.
-  licenses:
+  # No secret anywhere in the history (.gitleaks.toml allows only the tests' placeholder values).
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        run: |
+          curl -sSfL -o gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz
+          echo "a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          ./gitleaks detect --source . --redact --no-banner
+          ./gitleaks detect --source . --no-git --redact --no-banner
+
+  # Dependency policy (deny.toml): licenses compatible with AGPL-3.0, no known advisories, crates.io only; then
+  # cargo audit against the same RustSec database.
+  dependencies:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         with:
-          tool: cargo-deny@0.20.2
+          tool: cargo-deny@0.20.2,cargo-audit@0.22.2
       - name: cargo deny (server)
         run: cargo deny --manifest-path server/Cargo.toml --config deny.toml check
       - name: cargo deny (runtime supervisor)
         run: cargo deny --manifest-path deploy/runtime/supervisor/Cargo.toml --config deny.toml check
+      - name: cargo audit
+        run: |
+          cargo audit --file server/Cargo.lock --deny warnings
+          cargo audit --file deploy/runtime/supervisor/Cargo.lock --deny warnings
+      - name: npm audit
+        run: npm audit --audit-level=low
 
   # The Rust server (server/): format, lints, unit tests, the end-to-end suite with server apps on
   # the workerd runtime and without it, and the Docker images (built only, never pushed).
@@ -47,15 +71,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
       - name: Install Rust
         run: rustup toolchain install 1.97 --profile minimal --component rustfmt,clippy && rustup default 1.97
-      - uses: actions/cache@v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -145,15 +169,15 @@ jobs:
       BROD_TEST_DATABASE_URL: postgres://postgres:pg@127.0.0.1:55432/postgres
       E2E_DATABASE_URL: postgres://postgres:pg@127.0.0.1:55432/postgres
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
       - name: Install Rust
         run: rustup toolchain install 1.97 --profile minimal && rustup default 1.97
-      - uses: actions/cache@v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
