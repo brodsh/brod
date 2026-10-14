@@ -16,6 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 aes-gcm = "0.10"
+argon2 = { version = "0.5", default-features = false, features = ["alloc", "password-hash"] }
 axum = { version = "0.8", default-features = false, features = ["tokio", "http1", "http2"] }
 base64 = "0.22"
 bytes = "1"

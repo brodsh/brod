@@ -74,13 +74,26 @@ fn pbkdf2(password: &str, salt: &[u8], iterations: u32) -> [u8; 32] {
     out
 }
 
-/// Store a password as "pbkdf2$`<iterations>`$`<salt>`$`<hash>`" (base64url), never the password itself, like hashPassword().
-pub fn hash_password(password: &str) -> String {
-    let salt = random_bytes(16);
-    format!("pbkdf2${PASSWORD_ITERATIONS}${}${}", b64url(&salt), b64url(&pbkdf2(password, &salt, PASSWORD_ITERATIONS)))
+/// Argon2id with the parameters OWASP recommends: 19 MiB of memory, 2 passes, 1 lane.
+fn argon2() -> argon2::Argon2<'static> {
+    let params = argon2::Params::new(19 * 1024, 2, 1, None).expect("fixed Argon2 parameters are valid");
+    argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params)
 }
 
+/// Store a password as an Argon2id PHC string (`$argon2id$v=19$m=19456,t=2,p=1$<salt>$<hash>`), never the password
+/// itself. Slow on purpose (tens of milliseconds); call it off the async threads.
+pub fn hash_password(password: &str) -> String {
+    use argon2::password_hash::{PasswordHasher, SaltString};
+    let salt = SaltString::encode_b64(&random_bytes(16)).expect("16 bytes is a valid salt");
+    argon2().hash_password(password.as_bytes(), &salt).expect("hashing into memory does not fail").to_string()
+}
+
+/// Check a password against an Argon2id hash, or a `pbkdf2$<iterations>$<salt>$<hash>` one from before Argon2.
 pub fn verify_password(password: &str, stored: &str) -> bool {
+    if stored.starts_with("$argon2") {
+        use argon2::password_hash::{PasswordHash, PasswordVerifier};
+        return PasswordHash::new(stored).is_ok_and(|h| argon2().verify_password(password.as_bytes(), &h).is_ok());
+    }
     let parts: Vec<&str> = stored.split('$').collect();
     let [kind, n, salt, hash] = parts.as_slice() else { return false };
     let (Ok(n), Ok(salt)) = (n.parse::<u32>(), URL_SAFE_NO_PAD.decode(salt)) else { return false };
@@ -432,7 +445,14 @@ mod tests {
         assert!(verify_password("open sesame ✓", by_ts));
         assert!(!verify_password("open sesame", by_ts));
         let mine = hash_password("hunter22");
-        assert!(mine.starts_with("pbkdf2$100000$") && verify_password("hunter22", &mine) && !verify_password("hunter23", &mine));
+        assert!(
+            mine.starts_with("$argon2id$v=19$m=19456,t=2,p=1$")
+                && verify_password("hunter22", &mine)
+                && !verify_password("hunter23", &mine)
+        );
+        // Hashes stored before Argon2 keep working.
+        let old = format!("pbkdf2$1000${}${}", b64url(b"0123456789abcdef"), b64url(&pbkdf2("hunter22", b"0123456789abcdef", 1000)));
+        assert!(verify_password("hunter22", &old) && !verify_password("hunter23", &old));
         assert_ne!(mine, hash_password("hunter22"), "every hash has its own salt");
         for bad in ["", "pbkdf2$0$AA$AA", "pbkdf2$999999999$AA$AA", "md5$1$AA$AA", "pbkdf2$1$!!$AA"] {
             assert!(!verify_password("x", bad), "{bad}");

@@ -2,7 +2,9 @@
 // Abuse protection: takedowns and suspended workspaces, rate limits for anonymous and new users, the guardrail that
 // keeps a new workspace's apps inside it for its first day, the flag the deploy-time phishing check (scan.rs) puts on
 // a version, and the operator's API under /v1/admin/ (ADMIN_SECRET).
+use std::collections::HashMap;
 use std::net::IpAddr;
+use std::sync::{Mutex, PoisonError};
 
 use axum::http::Method;
 use axum::response::Response;
@@ -20,6 +22,8 @@ pub const SIGN_IN_LINKS_PER_IP_HOUR: i64 = 20; // on top of the 5 an hour per em
 pub const OAUTH_CLIENTS_PER_IP_HOUR: i64 = 10;
 pub const WORKSPACES_PER_USER_DAY: i64 = 3;
 pub const REPORTS_PER_IP_HOUR: i64 = 10;
+/// Calls one agent connection, or one person's session, may make to the REST API and MCP in a minute.
+pub const CALLS_PER_MINUTE: u32 = 600;
 /// A workspace this young cannot open apps to people outside it (password, signed_in, public).
 pub const NEW_WORKSPACE_MS: i64 = 24 * HOUR;
 pub const HOUR: i64 = 3_600_000;
@@ -141,6 +145,41 @@ pub fn check_workspace_up(conn: &Connection, c: &Caller) -> Result<()> {
 /// The neutral page a visitor gets instead of an app that is down. It says nothing about why.
 pub fn taken_down_page() -> Response {
     notice(410, "This app has been taken down", "This app is no longer available.", "")
+}
+
+// ---------- calls per connection ----------
+
+/// Fixed one-minute windows for REST and MCP calls, kept in memory and keyed by who is calling (the person and the
+/// connection they use). A restart forgets them, which is harmless for a window this short.
+#[derive(Default)]
+pub struct CallLimits(Mutex<HashMap<String, (i64, u32)>>);
+
+impl CallLimits {
+    /// Count one call by `c`; refuse it with 429 once there have been CALLS_PER_MINUTE this minute.
+    pub fn check(&self, c: &Caller) -> Result<()> {
+        self.check_at(&format!("{}:{}", c.user.id, c.actor), now())
+    }
+
+    fn check_at(&self, key: &str, at: i64) -> Result<()> {
+        let window = at / 60_000;
+        let mut calls = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if calls.len() > 10_000 {
+            calls.retain(|_, (w, _)| *w == window);
+        }
+        let entry = calls.entry(key.to_string()).or_insert((window, 0));
+        if entry.0 != window {
+            *entry = (window, 0);
+        }
+        entry.1 += 1;
+        if entry.1 > CALLS_PER_MINUTE {
+            return Err(Problem::new(
+                429,
+                "rate_limited",
+                "Too many calls from this connection in the last minute. Wait a moment and try again.",
+            ));
+        }
+        Ok(())
+    }
 }
 
 // ---------- the new-workspace guardrail ----------
@@ -408,6 +447,18 @@ pub async fn serve(st: &State, req: &mut Req, seg: &[String]) -> Result<Response
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn limits_calls_per_connection_per_minute() {
+        let limits = CallLimits::default();
+        for _ in 0..CALLS_PER_MINUTE {
+            limits.check_at("usr_1:claude", 60_000).unwrap();
+        }
+        assert_eq!(limits.check_at("usr_1:claude", 60_001).unwrap_err().status, 429);
+        // Another connection, and the next minute, start again.
+        limits.check_at("usr_1:cursor", 60_002).unwrap();
+        limits.check_at("usr_1:claude", 120_000).unwrap();
+    }
 
     #[test]
     fn keys_addresses_like_the_typescript() {

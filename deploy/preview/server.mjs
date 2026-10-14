@@ -21,7 +21,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import { chromium } from 'playwright';
-import { SUFFIX, allowed } from './guard.mjs';
+import { SUFFIX, allowedResolved } from './guard.mjs';
 
 const SECRET = process.env.BROD_PREVIEW_SECRET ?? '';
 if (SECRET.length < 16) { console.error('Set BROD_PREVIEW_SECRET to a random value of at least 16 characters.'); process.exit(1); }
@@ -36,7 +36,7 @@ const browser = await chromium.launch({
 });
 
 async function guard(context, sandbox) {
-  await context.route('**/*', route => (allowed(route.request().url(), sandbox) ? route.continue() : route.abort('blockedbyclient')));
+  await context.route('**/*', async route => ((await allowedResolved(route.request().url(), sandbox)) ? route.continue() : route.abort('blockedbyclient')));
 }
 
 /** Open the page and let it settle: the load event, then the network going quiet (or 4 seconds, whichever is first). */

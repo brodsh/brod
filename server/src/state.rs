@@ -21,6 +21,8 @@ pub struct AppState {
     pub previews: crate::preview::Previews,
     /// Server-app requests in flight to the runtime, and apps stopped for stalling it (watchdog.rs).
     pub watchdog: crate::watchdog::Watchdog,
+    /// REST and MCP calls per connection in the current minute (abuse.rs).
+    pub calls: crate::abuse::CallLimits,
 }
 
 pub type State = Arc<AppState>;
@@ -43,6 +45,7 @@ impl AppState {
             analytics: Default::default(),
             previews: Default::default(),
             watchdog: Default::default(),
+            calls: Default::default(),
         })
     }
 }

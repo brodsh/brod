@@ -2,6 +2,7 @@
 // Which URLs a previewed page may load (deploy/preview/server.mjs): its own sandbox, data and blob URLs, and the
 // public internet. Never Brod's private network: private and loopback addresses, single-label names (brod, runtime,
 // postgres) and names under .internal, .local, .localhost and the like.
+import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 
 export const SUFFIX = '.brod-preview.internal';
@@ -36,4 +37,20 @@ export function allowed(url, sandbox) {
   if (kind === 6) return !privateV6(host);
   if (!host.includes('.') || /(^|\.)(localhost|internal|local|lan|home|corp|intranet)$/.test(host)) return false;
   return true;
+}
+
+/**
+ * `allowed`, and for a host name also every address it resolves to: a public name that points at a private address
+ * (rebinding, or a record made for the purpose) is refused too. Chromium resolves the name again itself, so a record
+ * that changes between the two lookups can still slip through; the sandbox network is the second line.
+ */
+export async function allowedResolved(url, sandbox, resolve = host => lookup(host, { all: true, verbatim: true })) {
+  if (!allowed(url, sandbox)) return false;
+  let u;
+  try { u = new URL(url); } catch { return false; }
+  const host = u.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (u.protocol === 'data:' || u.protocol === 'blob:' || host === sandbox || isIP(host)) return true;
+  let addrs;
+  try { addrs = await resolve(host); } catch { return false; }
+  return addrs.length > 0 && addrs.every(({ address, family }) => (family === 6 ? !privateV6(address) : !privateV4(address)));
 }

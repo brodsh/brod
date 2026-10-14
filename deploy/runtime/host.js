@@ -237,6 +237,14 @@ export class AppOutbound extends WorkerEntrypoint {
   }
 }
 
+/** Compare the shared secret in constant time (workerd's crypto.subtle.timingSafeEqual); only the length can show. */
+const encoder = new TextEncoder();
+function sameSecret(given, secret) {
+  if (!secret || !given) return false;
+  const a = encoder.encode(given), b = encoder.encode(secret);
+  return a.byteLength === b.byteLength && crypto.subtle.timingSafeEqual(a, b);
+}
+
 // ---------- loading an app ----------
 
 const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
@@ -294,7 +302,7 @@ const failed = message => new Response(message, { status: 502, headers: { 'x-bro
 
 export default {
   async fetch(request, env, ctx) {
-    if (!env.BROD_RUNTIME_SECRET || request.headers.get('x-brod-runtime-secret') !== env.BROD_RUNTIME_SECRET) return new Response('forbidden', { status: 403 });
+    if (!sameSecret(request.headers.get('x-brod-runtime-secret'), env.BROD_RUNTIME_SECRET)) return new Response('forbidden', { status: 403 });
     const url = new URL(request.url);
     if (url.pathname === '/_runtime/check' && request.method === 'POST') return check(env, await request.json());
     if (url.pathname === '/_runtime/wipe' && request.method === 'POST') {
