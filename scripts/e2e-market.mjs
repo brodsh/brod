@@ -53,7 +53,7 @@ async function workspace(who, name) {
   const b = new Browser(`${who}-${run}@market.test`);
   await b.signIn();
   b.workspace = (await b.api('/v1/workspaces', { json: { name: `${name} ${run}`, accept_terms: true } })).body.workspace;
-  // A new free workspace keeps its apps inside it for a day unless the operator trusts it (src/abuse.ts).
+  // A new free workspace keeps its apps inside it for a day unless the operator trusts it (server/src/abuse.rs).
   await send(`${API}/v1/admin/workspaces/${b.workspace}/trust`, { method: 'POST', headers: { authorization: `Bearer ${process.env.ADMIN_SECRET ?? 'dev-admin-secret'}` } });
   return b;
 }

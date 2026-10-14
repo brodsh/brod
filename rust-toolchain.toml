@@ -1,0 +1,5 @@
+# The Rust version CI and the Docker images use. rustup installs it on first `cargo` run.
+[toolchain]
+channel = "1.97"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

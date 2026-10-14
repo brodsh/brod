@@ -89,8 +89,8 @@ services:
       - "443:443"
       - "443:443/udp"
     environment:
-      BROD_API_HOST: ${BROD_API_HOST:?set BROD_API_HOST in .env, for example brod.sh}
-      APPS_DOMAIN: ${APPS_DOMAIN:?set APPS_DOMAIN in .env, for example apps.brod.sh}
+      BROD_API_HOST: ${BROD_API_HOST:?set BROD_API_HOST in .env, for example brod.example.com}
+      APPS_DOMAIN: ${APPS_DOMAIN:?set APPS_DOMAIN in .env, for example apps.example.com}
       ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
@@ -105,8 +105,8 @@ services:
     restart: unless-stopped
     command: server /data
     environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-brod}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-change-me-please}
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-}
     volumes:
       - minio-data:/data
     expose:
@@ -124,8 +124,8 @@ services:
         until mc alias set local http://minio:9000 "$$S3_ACCESS_KEY_ID" "$$S3_SECRET_ACCESS_KEY"; do sleep 1; done;
         mc mb --ignore-existing local/"$$S3_BUCKET"
     environment:
-      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-brod}
-      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-change-me-please}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
       S3_BUCKET: ${S3_BUCKET:-brod-bundles}
 
   # Optional: Brod's database in Postgres instead of the SQLite file in brod-data. Start with:
@@ -139,7 +139,7 @@ services:
     environment:
       POSTGRES_USER: brod
       POSTGRES_DB: brod
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-please}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     expose:

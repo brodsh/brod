@@ -1,4 +1,4 @@
-// One server, four jobs, split by hostname and path (the fetch handler in src/index.ts):
+// One server, four jobs, split by hostname and path:
 //   <slug>.<workspace>.<APPS_DOMAIN>  -> gateway (signs people in, decides access, serves an app)
 //   <workspace>.<APPS_DOMAIN>         -> redirect to the workspace home page
 //   a proven custom domain            -> the same gateway (domains.rs)

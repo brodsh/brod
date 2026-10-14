@@ -1,5 +1,5 @@
-# Every push and pull request: type check, tests in the Workers runtime, a production build, and the end-to-end suite.
-# A second job checks the Vercel build: Node tests, the Vercel bundle, and the same end-to-end suite served by Node.
+# Every push and pull request: the Rust server's format, lints, unit tests and end-to-end suite (on SQLite and on
+# Postgres), the Node unit tests, and the Docker images (built, never pushed).
 name: CI
 
 on:
@@ -14,58 +14,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
+  # Node unit tests (the preview service's address guard, deploy/preview/guard.mjs).
+  node:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
       - run: npm ci
-      - name: Type check
-        run: npm run check
-      - name: Unit and integration tests
-        run: npm test
-      - name: Build
-        run: npm run build
-      - name: End-to-end tests
-        run: npm run e2e:local
-      - uses: actions/upload-artifact@v4
-        with:
-          name: worker-bundle
-          path: dist/
-          retention-days: 14
+      - run: npm test
 
-  vercel:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - name: Type check
-        run: npm run check
-      - name: Adapter tests in Node.js (libSQL, S3, file store)
-        run: npm run test:node
-      - name: Build the Vercel function
-        run: npm run build:vercel
-      - name: End-to-end tests on Node, files in a folder
-        run: npm run e2e:node
-      - name: End-to-end tests on Node, files in S3 with presigned uploads
-        run: npm run e2e:node:s3
-      - uses: actions/upload-artifact@v4
-        with:
-          name: vercel-output
-          path: .vercel/output/
-          include-hidden-files: true
-          retention-days: 14
-
-  # The Rust server (server/) for self-hosting: format, lints, unit tests, the end-to-end suite with server apps on
+  # The Rust server (server/): format, lints, unit tests, the end-to-end suite with server apps on
   # the workerd runtime and without it, and the Docker images (built only, never pushed).
   rust:
     runs-on: ubuntu-latest
@@ -74,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
       - run: npm ci
       - name: Install Rust
@@ -150,7 +112,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
       - run: npm ci
       - name: Install Rust

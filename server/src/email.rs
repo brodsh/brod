@@ -1,4 +1,5 @@
-// Outgoing email: sign-in links and invitations. Sent through Resend when RESEND_API_KEY is set.
+// Outgoing email: sign-in links and invitations. Sent through Resend when RESEND_API_KEY is set, from EMAIL_FROM
+// (config.rs requires both together).
 // With DEV_MODE=1 messages are logged instead, and the API returns the link so tests can follow it.
 use serde_json::json;
 
@@ -6,8 +7,7 @@ use crate::problem::{Problem, Result};
 use crate::state::State;
 
 pub async fn send(st: &State, to: &str, subject: &str, text: &str) -> Result<()> {
-    if let Some(key) = &st.cfg.resend_api_key {
-        let from = st.cfg.email_from.clone().unwrap_or_else(|| "Brod <no-reply@brod.sh>".into());
+    if let (Some(key), Some(from)) = (&st.cfg.resend_api_key, &st.cfg.email_from) {
         let res = st
             .http
             .post("https://api.resend.com/emails")

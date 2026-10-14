@@ -1,6 +1,6 @@
 // A small in-memory S3-compatible server for tests: path-style buckets, PUT/GET/HEAD/DELETE objects and ListObjectsV2.
 // It checks every request's SigV4 signature (header or presigned query) with its own implementation from the AWS spec,
-// so a signing mistake in src/platform/s3.ts fails the tests instead of passing silently.
+// so a signing mistake in server/src/storage/s3.rs fails the tests instead of passing silently.
 // Usage: node scripts/fake-s3.mjs [port]   (credentials: test-key / test-secret, any bucket name)
 import { createHash, createHmac } from 'node:crypto';
 import http from 'node:http';

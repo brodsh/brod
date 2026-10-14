@@ -1,5 +1,5 @@
 // Small helpers shared by every module: ids, hashing, signing, slugs, emails, content types, escaping, cookies,
-// URI encoding and dates. Each one matches its namesake in src/lib.ts byte for byte.
+// URI encoding and dates.
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hmac::{Hmac, Mac};
@@ -52,7 +52,8 @@ pub fn hmac_b64url(secret: &str, data: &str) -> String {
     b64url(&mac.finalize().into_bytes())
 }
 
-/// The most PBKDF2 iterations a password hash may use, as src/lib.ts (the most Cloudflare Workers allow).
+/// The most PBKDF2 iterations a password hash may use (100,000, the most WebCrypto on Cloudflare Workers allows, so
+/// hashes made by Brod's first version still verify).
 const PASSWORD_ITERATIONS: u32 = 100_000;
 
 /// PBKDF2-HMAC-SHA256 with one 32-byte block, as WebCrypto's deriveBits(256).
@@ -116,7 +117,7 @@ pub fn host_origin(cfg: &Config, host: &str) -> String {
 
 const RESERVED: &[&str] = &["api", "www", "app", "apps", "admin", "mcp", "dashboard", "mail", "status", "docs", "help", "login", "auth"];
 /// Workspace names are the first label under APPS_DOMAIN, so they must not take a name the platform or a visitor
-/// would expect to be ours. Keep in step with RESERVED_WORKSPACES in src/lib.ts.
+/// would expect to be ours.
 const RESERVED_WORKSPACES: &[&str] = &[
     "about",
     "abuse",
@@ -425,7 +426,7 @@ mod tests {
     fn passwords_hash_with_pbkdf2_as_webcrypto_does() {
         // RFC 7914, section 11: PBKDF2-HMAC-SHA256("password", "salt", 4096), first 32 bytes.
         assert_eq!(hex::encode(pbkdf2("password", b"salt", 4096)), "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a");
-        // Made by src/lib.ts's PBKDF2 (WebCrypto) with 1000 iterations.
+        // Made by WebCrypto's PBKDF2 with 1000 iterations, as Brod's first version stored them.
         let by_ts = "pbkdf2$1000$AwoRGB8mLTQ7QklQV15lbA$D_UaNY6a5eoLek8TFeCpHvj9vIr2jO4gd0ds86M1Edw";
         assert!(verify_password("open sesame ✓", by_ts));
         assert!(!verify_password("open sesame", by_ts));
@@ -484,7 +485,7 @@ mod tests {
 
     #[test]
     fn signs_identity_tokens_like_lib_ts() {
-        // Expected values computed with src/lib.ts (signToken('k', { sub: 'usr_1', role: 'editor' })).
+        // Expected values computed independently with WebCrypto HMAC-SHA256 (signToken('k', { sub: 'usr_1', role: 'editor' })).
         let token = sign_token("k", &json!({ "sub": "usr_1", "role": "editor" }));
         let (body, sig) = token.split_once('.').unwrap();
         assert_eq!(body, "eyJzdWIiOiJ1c3JfMSIsInJvbGUiOiJlZGl0b3IifQ");

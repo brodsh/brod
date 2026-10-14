@@ -1,50 +1,27 @@
 {
   "name": "brod",
   "version": "0.2.0",
-  "description": "Brod: a cloud for small software, with a team workspace and an MCP endpoint for agents",
+  "private": true,
+  "description": "Brod: the self-hosted cloud your AI agent deploys team tools to, over MCP. Node is used only for the end-to-end tests.",
+  "license": "ISC",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
-    "dev": "wrangler dev --port 8787",
-    "migrate": "wrangler d1 migrations apply brod --local",
-    "check": "tsc -p . && tsc -p test && tsc -p tsconfig.node.json",
     "test": "vitest run",
-    "test:node": "vitest run --config vitest.node.config.ts",
-    "build": "wrangler deploy --dry-run --outdir dist",
-    "build:vercel": "node scripts/build-vercel.mjs",
-    "gen:home": "node scripts/gen-home.mjs",
-    "gen:og": "node scripts/gen-og.mjs",
-    "e2e": "node scripts/e2e.mjs",
-    "e2e:local": "node scripts/e2e-local.mjs",
-    "e2e:node": "node scripts/e2e-node.mjs",
-    "e2e:node:s3": "node scripts/e2e-node.mjs s3",
+    "test:rust": "cargo test --manifest-path server/Cargo.toml",
     "e2e:rust": "node scripts/e2e-rust.mjs",
     "e2e:rust:static": "node scripts/e2e-rust.mjs static",
     "e2e:rust:s3": "node scripts/e2e-rust.mjs s3",
     "e2e:rust:pg": "node scripts/e2e-rust.mjs pg",
     "e2e:tls": "node scripts/e2e-tls.mjs",
-    "test:rust": "cargo test --manifest-path server/Cargo.toml",
-    "verify": "npm run check && npm test && npm run test:node && npm run build && npm run build:vercel",
-    "deploy": "wrangler d1 migrations apply brod --remote && wrangler deploy",
-    "migrate:libsql": "node --env-file-if-exists=.env scripts/migrate-libsql.mjs",
-    "start:node": "node scripts/build-vercel.mjs && node --env-file-if-exists=.env scripts/serve-node.mjs"
+    "gen:og": "node scripts/gen-og.mjs"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "^1.4.0",
-    "@cloudflare/workers-types": "^5.20261010.1",
     "@modelcontextprotocol/sdk": "^1.32.1",
-    "@types/node": "^22.20.5",
-    "esbuild": "^0.28.2",
     "playwright": "1.56.1",
-    "typescript": "^7.0.2",
     "vitest": "^4.1.11",
-    "wrangler": "^4.149.0"
-  },
-  "private": true,
-  "type": "module",
-  "dependencies": {
-    "@libsql/client": "^0.18.0",
-    "aws4fetch": "^1.0.20"
+    "workerd": "1.20261006.1"
   }
 }

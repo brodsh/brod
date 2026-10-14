@@ -1,5 +1,5 @@
 // Where app files live: under "<app id>/<version>/<path>", in a local folder or an S3-compatible bucket.
-// The same five calls as src/platform/bucket.ts (put, get, head, list, delete); bodies are streamed on the way out.
+// Five calls (put, get, head, list, delete); bodies are streamed on the way out.
 use axum::body::Body;
 use bytes::Bytes;
 
@@ -21,7 +21,7 @@ pub struct ObjectMeta {
 }
 
 impl ObjectMeta {
-    /// The ETag header value, in quotes, like R2's httpEtag.
+    /// The ETag header value, in quotes.
     pub fn http_etag(&self) -> String {
         format!("\"{}\"", self.etag)
     }

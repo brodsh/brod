@@ -1,5 +1,5 @@
 // An error the caller can act on. `code` is stable; `message` is written for a person or an agent.
-// Mirrors the Problem class in src/lib.ts, and renders to the same JSON: {"error": {code, message, ...extra}}.
+// Renders as {"error": {code, message, ...extra}}.
 use axum::response::Response;
 use serde_json::{Map, Value, json};
 
@@ -50,7 +50,6 @@ impl Problem {
         json!({ "error": e })
     }
 
-    /// The same as `problemResponse` in src/lib.ts.
     pub fn response(&self) -> Response {
         if let Some(detail) = &self.internal {
             eprintln!("error: {detail}");

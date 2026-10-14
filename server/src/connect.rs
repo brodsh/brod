@@ -1,5 +1,4 @@
 // Connecting an agent: the connections page, and sign-in for MCP clients with OAuth instead of a pasted token.
-// Mirrors src/connect.ts.
 //
 // The OAuth side is what MCP clients expect (OAuth 2.1 with PKCE): /mcp answers 401 with a pointer to the resource
 // metadata (RFC 9728), which names this server's metadata (RFC 8414); the client registers itself (RFC 7591), sends

@@ -6,7 +6,7 @@
 // The gateway decides access here and forwards the request with the identity headers; the sidecar fetches the code
 // and the decrypted secrets from the internal /_runtime/ endpoints below, and posts logs and file operations back.
 //
-// Without a runtime, deploys with server code are refused with `server_apps_unavailable`, exactly as the Vercel host does.
+// Without a runtime, deploys with server code are refused with `server_apps_unavailable`.
 use crate::db::params;
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method};
@@ -64,7 +64,7 @@ pub async fn check_server(st: &State, server: &ServerInfo, files: &[BundleFile])
             400,
             "server_apps_unavailable",
             format!(
-                "This Brod host serves static apps only: server code ({}) needs the Cloudflare deployment. Remove _worker.js or _worker/ and deploy the static files, or deploy on Cloudflare.",
+                "This Brod server serves static apps only: server code ({}) needs the server-app runtime (BROD_RUNTIME_URL). Remove _worker.js or _worker/ and deploy the static files, or ask the operator to turn on the runtime.",
                 server.main
             ),
         ));

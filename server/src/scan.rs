@@ -1,6 +1,5 @@
 // The deploy-time phishing check: a cheap heuristic scan of a version's HTML and JavaScript, with no outside service.
-// The same algorithm as src/scan.ts, on bytes: every pattern is ASCII, so byte offsets match where the TypeScript
-// counts characters. Tested, like the TypeScript, on small abstract snippets with a made-up brand list.
+// It works on bytes (every pattern is ASCII) and is tested on small abstract snippets with a made-up brand list.
 //
 // A version is flagged when it asks for a password or a card number AND carries enough impersonation signals (a brand
 // name in the title, a heading or a logo, "sign in to your <brand> account", "verify your account", a form that posts to
