@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // The control plane. The REST API, the MCP endpoint and the confirmation pages call only these functions.
 use crate::db::{Connection, params};
 use bytes::Bytes;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Billing, visit counts, analytics, storage and spaces on the Rust server, against the fake Stripe in scripts/fake-stripe.mjs.
 // Run by scripts/e2e-rust.mjs after scripts/e2e.mjs, with Brod started on STRIPE_API_BASE=<fake>.
 // Usage: node scripts/e2e-billing.mjs <api origin> <fake stripe origin>

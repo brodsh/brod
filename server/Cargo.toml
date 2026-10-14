@@ -3,7 +3,7 @@ name = "brod"
 version = "0.2.0"
 edition = "2024"
 description = "Brod: a cloud for small software. The self-hosted server."
-license = "ISC"
+license = "AGPL-3.0-only"
 publish = false
 
 [lib]

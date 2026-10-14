@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // brod: start the server. Configuration comes from the environment and an optional .env file (see deploy/.env.example).
 use std::time::Duration;
 

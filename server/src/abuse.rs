@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Abuse protection: takedowns and suspended workspaces, rate limits for anonymous and new users, the guardrail that
 // keeps a new workspace's apps inside it for its first day, the flag the deploy-time phishing check (scan.rs) puts on
 // a version, and the operator's API under /v1/admin/ (ADMIN_SECRET).

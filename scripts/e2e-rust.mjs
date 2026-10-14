@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Run the end-to-end suite against the Rust server (server/): build the release binary, start it on a fresh data
 // directory with DEV_MODE=1, run scripts/e2e.mjs, stop it.
 // Usage: npm run e2e:rust              (app files in a folder; server apps on a workerd sidecar, deploy/runtime/, run by

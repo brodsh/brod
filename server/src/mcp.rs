@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // MCP endpoint (Streamable HTTP, stateless, JSON responses). Each tool is a thin wrapper over the control plane.
 use axum::response::Response;
 use base64::Engine;

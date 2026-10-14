@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Small helpers shared by every module: ids, hashing, signing, slugs, emails, content types, escaping, cookies,
 // URI encoding and dates.
 use base64::Engine;

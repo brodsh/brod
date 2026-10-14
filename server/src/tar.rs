@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Unpack a .tar, .tar.gz or .zip bundle in memory (and pack a .tar.gz). Handles ustar prefixes, GNU long names and pax path records,
 // and the stored and deflated entries of a zip (what Finder and Explorer make).
 use flate2::read::{DeflateDecoder, MultiGzDecoder};

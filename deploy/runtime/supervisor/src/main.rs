@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! brod-runtime: runs workerd (the server-app runtime, deploy/runtime/) and keeps it answering.
 //!
 //! Open-source workerd runs every app's isolate on one thread and does not enforce the CPU limit Brod asks the Worker

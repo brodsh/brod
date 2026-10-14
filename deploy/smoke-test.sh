@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-only
 # Smoke-test the whole compose stack (Brod, the runtime, Caddy) on this machine, with Caddy's local CA instead of
 # Let's Encrypt and brod.test / *.*.apps.brod.test pointed at 127.0.0.1 by curl. Needs the images built first:
 #   docker compose -f deploy/docker-compose.yml build

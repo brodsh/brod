@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // The preview service's network guard (deploy/preview/guard.mjs): a previewed page reaches its sandbox and the public
 // internet, never the private network the service runs in.
 import { describe, expect, it } from 'vitest';

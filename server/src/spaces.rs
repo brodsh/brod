@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Spaces: a named set of apps and the people who use them, inside a workspace. Adding someone to a space gives them
 // every app in it (people::decide counts them as named on the app), so a team gets its tools in one step.
 // Admins manage spaces and their people; builders put apps in a space.

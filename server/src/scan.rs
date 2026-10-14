@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // The deploy-time phishing check: a cheap heuristic scan of a version's HTML and JavaScript, with no outside service.
 // It works on bytes (every pattern is ASCII) and is tested on small abstract snippets with a made-up brand list.
 //

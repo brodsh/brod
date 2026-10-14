@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // The marketplace: a builder lists one of the workspace's apps, and any workspace on the server installs its own copy
 // and hosts it there, with its own address, sign-in, access, secrets and data.
 //

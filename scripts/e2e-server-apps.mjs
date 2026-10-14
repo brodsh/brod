@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Server apps on the self-hosted runtime (Rust server + workerd sidecar): the cases of test/server.test.ts, over HTTP.
 // Run by scripts/e2e-rust.mjs after scripts/e2e.mjs when the runtime is on. Usage: node scripts/e2e-server-apps.mjs [api origin]
 import http from 'node:http';

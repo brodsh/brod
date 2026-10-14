@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // The gateway. Every visitor request to <slug>.<APPS_DOMAIN> passes through here before it reaches an app's files.
 // It signs people in (through the API host), decides access, gives the app the identity contract under /_brod/,
 // and serves the app: its files from storage, and anything else from its server code when it has some.

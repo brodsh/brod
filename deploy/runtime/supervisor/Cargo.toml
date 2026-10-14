@@ -3,6 +3,7 @@ name = "brod-runtime"
 version = "0.1.0"
 edition = "2024"
 description = "Runs workerd for Brod's server apps and restarts it when an app stalls it, crashes it or makes it too big"
+license = "AGPL-3.0-only"
 publish = false
 
 [[bin]]

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Configuration from environment variables (and a .env file).
 use std::collections::HashMap;
 use std::net::SocketAddr;

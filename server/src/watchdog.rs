@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Server apps that hold the runtime: who was running when it had to be restarted, and stopping them for a while.
 //
 // Open-source workerd runs every app on one thread and does not enforce the CPU limit, so an app stuck in a loop stops

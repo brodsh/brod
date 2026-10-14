@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Outgoing email: sign-in links and invitations. Sent through Resend when RESEND_API_KEY is set, from EMAIL_FROM
 // (config.rs requires both together).
 // With DEV_MODE=1 messages are logged instead, and the API returns the link so tests can follow it.

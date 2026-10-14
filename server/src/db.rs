@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // The metadata database: one SQLite file in WAL mode (the default), or Postgres when BROD_DATABASE_URL is set.
 // Both get the same schema under the same migration names, and a small pool of connections.
 // Database calls block, so every call runs on tokio's blocking pool and never on the async workers.

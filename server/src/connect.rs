@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Connecting an agent: the connections page, and sign-in for MCP clients with OAuth instead of a pasted token.
 //
 // The OAuth side is what MCP clients expect (OAuth 2.1 with PKCE): /mcp answers 401 with a pointer to the resource

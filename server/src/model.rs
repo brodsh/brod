@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Shared types and limits.
 use crate::db::Row;
 use serde::Serialize;

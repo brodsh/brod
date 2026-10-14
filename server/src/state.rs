@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Everything a request handler needs, built once at startup and shared.
 use std::sync::Arc;
 use std::time::Duration;

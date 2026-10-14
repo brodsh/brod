@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // An error the caller can act on. `code` is stable; `message` is written for a person or an agent.
 // Renders as {"error": {code, message, ...extra}}.
 use axum::response::Response;

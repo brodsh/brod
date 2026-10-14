@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // The request as the handlers see it, and the response shapes every module uses: JSON, platform pages, redirects.
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};

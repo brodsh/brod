@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // The REST control-plane API under /v1/: agents with a token, the dashboard with a session.
 use axum::http::Method;
 use axum::response::Response;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // App settings: the values a workspace sets on its copy of an app, such as its name, logo, colours or wording, without
 // touching its code. Brod imposes none of them. Whoever makes the app declares what can be customised in a brod.json
 // file at the top of its bundle, with a label and a default for each:

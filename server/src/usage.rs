@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Usage: page views per app per day, and the storage each app takes.
 //
 // Page views are counted in memory as the gateway serves them and written to the visits table in one transaction every

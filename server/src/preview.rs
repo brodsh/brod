@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Previews made for the marketplace: Brod runs a listing's release itself and screenshots and records it, so every
 // listing shows what the app looks like without its publisher doing anything.
 //
