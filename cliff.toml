@@ -18,6 +18,8 @@ conventional_commits = true
 filter_unconventional = true
 protect_breaking_commits = true
 commit_parsers = [
+  # A merged pull request's title repeats the commits inside it.
+  { message = "\\(#[0-9]+\\)", skip = true },
   { message = "^feat", group = "<!-- 0 -->New" },
   { message = "^fix", group = "<!-- 1 -->Fixed" },
   { message = "^perf", group = "<!-- 2 -->Faster" },
@@ -26,7 +28,9 @@ commit_parsers = [
   { message = "^build|^ci", group = "<!-- 5 -->Build and CI" },
   { message = "^test", group = "<!-- 6 -->Tests" },
   { message = "^chore\\(deps", skip = true },
-  { message = "^chore", group = "<!-- 7 -->Housekeeping" },
+  { message = "^chore|^style", group = "<!-- 7 -->Housekeeping" },
 ]
 tag_pattern = "v[0-9].*"
+# Release candidates get notes of their own, but a release lists everything since the previous release.
+ignore_tags = "-rc"
 sort_commits = "oldest"

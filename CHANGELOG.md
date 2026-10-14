@@ -4,7 +4,7 @@ All notable changes to Brod. The format follows [Keep a Changelog](https://keepa
 [Semantic Versioning](https://semver.org/) (0.x: minor versions may change behaviour). Release notes on GitHub are
 generated from conventional commits.
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-10-14)
 
 The first open-source release.
 
