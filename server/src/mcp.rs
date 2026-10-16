@@ -35,11 +35,11 @@ pub fn tools() -> Value {
             "title": "Deploy an app",
             "description": concat!(
                 "Put a web app online and get its address back, or publish a new version of an existing app. ",
-                "For a small app (up to 1 MB total), pass its files directly in \"files\". ",
+                "For a small app (up to 1 MB total), pass its files directly in \"files\". Every deploy is a complete new version: \"files\" replaces the whole bundle, and a file left out is gone from the new version. To change part of an app, call get_files first and send every file back with your changes. ",
                 "For anything larger, call this WITHOUT \"files\": you get a one-time upload address and a one-line command that uploads the built output folder (such as dist/ or build/). ",
                 "Give \"name\" to create a new app, or \"app\" to add a version to an existing one. New apps start private to their owner; use set_access to share them (with people or groups, the workspace, or anyone who has a password). ",
                 "Static files are served as they are. For server code, include \"_worker.js\" (or a \"_worker/\" folder with index.js): an ES module with ",
-                "`export default { async fetch(request, env, ctx) { ... } }`. Files that exist in the bundle are served directly; every other request goes to fetch. ",
+                "`export default { async fetch(request, env, ctx) { ... } }`. Files that exist in the bundle are served directly (a folder address, \"/\" included, by its index.html); every other request goes to fetch. ",
                 "Inside fetch, env holds the app's secrets (set_secret) plus its own storage: env.DB (SQLite: await env.DB.query(sql, params) returns rows, await env.DB.run(sql, params), ",
                 "await env.DB.batch([{sql, params}]) in one transaction), env.KV (get, put, delete, list; string values) and env.FILES (put(key, body, contentType), get(key) returns a Response or null, delete, list(prefix)). ",
                 "The signed-in person arrives as request headers x-brod-user-id, x-brod-user-email, x-brod-role and x-brod-groups (the platform strips any a visitor sends). ",
@@ -66,7 +66,7 @@ pub fn tools() -> Value {
                         "description": "For an update: the version your files started from. The deploy is refused (stale_base) if the app's current version (staging, else live) is no longer this one, so you never undo someone else's changes.",
                     },
                     "files": {
-                        "type": "array", "description": "The app's files, for small apps. Must include index.html at the top level.",
+                        "type": "array", "description": "The app's files, for small apps. Every file of the app, not only the changed ones: must include index.html and/or _worker.js at the top level.",
                         "items": { "type": "object", "properties": { "path": s("Path inside the app, for example \"index.html\" or \"assets/app.js\"."), "content": s("File content."), "encoding": { "type": "string", "enum": ["utf8", "base64"], "description": "How content is encoded. Default utf8." } }, "required": ["path", "content"] },
                     },
                 },

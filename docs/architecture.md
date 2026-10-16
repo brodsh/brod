@@ -141,7 +141,7 @@ Every connection is served by hyper with HTTP/1.1 or HTTP/2 and a 30-second head
 8. **Paused** apps answer 503.
 9. **Serving** (`serve_version`). Paths with `..` are refused. Files live at `<app id>/<version>/<path>`.
    - With server code: a GET for a file that exists in the bundle is served from storage (except `_worker.js` and
-     `_worker/*`). Every other request goes to `runtime::dispatch`.
+     `_worker/*`), `/` and `<path>/` as their `index.html`. Every other request goes to `runtime::dispatch`.
    - Static: the exact file, then `<path>/index.html`, then `<path>.html`, then the root `index.html` (single-page app
      fallback), then the bundle's `404.html`, then Brod's own 404 page.
 10. **CSP.** `network::protect` adds a Content-Security-Policy built from the version's declared hosts. It is

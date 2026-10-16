@@ -76,6 +76,13 @@ const d = await deploy({ name: 'Counter', files: [{ path: '_worker.js', content:
 check('a server app deploys with inline files', d.status === 201 && d.body.kind === 'server', JSON.stringify(d.body));
 const url = d.body.url;
 check('the server code answers pages', (await admin.open(url + '/')).body.includes('server home'));
+const front = await deploy({ name: 'Front', files: [
+  { path: '_worker.js', content: WORKER }, { path: 'index.html', content: '<html><body>static front</body></html>' },
+  { path: 'docs/index.html', content: '<html><body>docs page</body></html>' },
+] });
+check('"/" serves the bundle\'s index.html before the server code', (await admin.open(front.body.url + '/')).body.includes('static front'));
+check('a folder address serves its index.html', (await admin.go(front.body.url + '/docs/')).body.includes('docs page'));
+check('a folder without index.html goes to the server code', (await admin.go(front.body.url + '/other/')).body.includes('server home'));
 const c1 = JSON.parse((await admin.go(url + '/api/count')).body), c2 = JSON.parse((await admin.go(url + '/api/count')).body);
 check('its own database keeps data between requests', c1.count === 1 && c2.count === 2, JSON.stringify([c1, c2]));
 check('its key-value store works', (await admin.go(url + '/api/kv')).body === 'hej');
