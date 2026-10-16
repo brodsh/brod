@@ -78,9 +78,10 @@ effect on the next request. Each app gets its own SQLite database on the sidecar
 (`BROD_RUNTIME_URL` not set), a deploy with server code is refused with `server_apps_unavailable`. See
 [architecture.md](architecture.md).
 
-- **Routing.** A file that exists in the bundle is served as is. Every other request, with any method, goes to `fetch`.
-  The server code itself is never served. A path must name the file exactly: `/` and folder paths go to `fetch`, not to
-  an `index.html`. Serve the page from `fetch`, or import it from a `_worker/` folder as text
+- **Routing.** A file that exists in the bundle is served as is, and `/` and folder paths serve the folder's
+  `index.html` when the bundle has one. Every other request, with any method, goes to `fetch`, so there is no
+  single-page-app fallback: a path with no file behind it is the server code's to answer. The server code itself is
+  never served. A page can also come from `fetch`, imported from a `_worker/` folder as text
   (`import page from './page.html'`), as [examples/hello-team](../examples/hello-team) does. Files in `_worker/` with
   the extensions `.html`, `.css`, `.txt`, `.md`, `.sql`, `.svg` and `.csv` import as strings.
 - **Identity.** Access is decided before the request reaches the app. The person arrives as `x-brod-user-id`,

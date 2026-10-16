@@ -306,14 +306,13 @@ pub async fn serve_version(
     let base = format!("{}/{version}/", app.id);
 
     if let Some(server) = server {
-        // A file that exists in the bundle is served as is; every other request goes to the server code.
+        // A file that exists in the bundle is served as is, a folder by its index.html; every other request goes to the server code.
+        let file = if path.is_empty() || path.ends_with('/') { format!("{path}index.html") } else { path.clone() };
         if is_get
-            && !path.is_empty()
-            && !path.ends_with('/')
-            && !runtime::is_server_path(&path)
-            && let Some(obj) = st.store.get(&format!("{base}{path}")).await?
+            && !runtime::is_server_path(&file)
+            && let Some(obj) = st.store.get(&format!("{base}{file}")).await?
         {
-            return file_response(st, &req, app, obj, &path).await;
+            return file_response(st, &req, app, obj, &file).await;
         }
         return runtime::dispatch(st, req, app, origin, version, &server, identity).await;
     }

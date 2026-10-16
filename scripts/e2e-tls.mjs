@@ -127,6 +127,10 @@ try {
   const page = await get(`${APP}.${W}.${APPS}`, '/', { ca });
   check('an app\'s address gets its own certificate and serves the app', page.status === 200 && page.body.includes('shop') && page.cert?.subjectaltname?.includes(`${APP}.${W}.${APPS}`), page.cert?.subjectaltname);
 
+  const staging = await get(`${APP}--staging.${W}.${APPS}`, '/', { ca }).catch(e => ({ error: String(e) }));
+  check('an app\'s staging address gets its own certificate', !staging.error && staging.cert?.subjectaltname?.includes(`${APP}--staging.${W}.${APPS}`), staging.error ?? staging.cert?.subjectaltname);
+  check('a staging address of an unknown app gets no certificate', await fails(get(`nope--staging.${W}.${APPS}`, '/', { ca })));
+
   // A custom domain: nothing before it is proven, a certificate after.
   const SHOP = 'shop.example.test';
   const dom = await call('/v1/domains', { json: { domain: SHOP, app: APP }, headers: { 'x-brod-workspace': W } });
