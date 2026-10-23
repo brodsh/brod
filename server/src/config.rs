@@ -51,6 +51,8 @@ pub struct Config {
     pub warnings: Vec<String>,
     /// BROD_GA_ID: a Google Analytics 4 measurement ID for the public landing page (home.rs). None: no Google tag.
     pub ga_id: Option<String>,
+    /// BROD_HEYCATCH_KEY: a HeyCatch publishable project key (hck_pk_...) for the public landing page (home.rs). None: no HeyCatch tag.
+    pub heycatch_key: Option<String>,
     pub google_client_id: Option<String>,
     pub google_client_secret: Option<String>,
     pub listen: SocketAddr,
@@ -317,6 +319,17 @@ impl Config {
         {
             return Err(ConfigError(format!("BROD_GA_ID must be a Google Analytics 4 measurement ID such as G-ABC123XYZ, not {id:?}.")));
         }
+        let heycatch_key = get("BROD_HEYCATCH_KEY");
+        if let Some(key) = &heycatch_key
+            && !(key.len() > "hck_pk_".len()
+                && key.len() <= 64
+                && key.starts_with("hck_pk_")
+                && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+        {
+            return Err(ConfigError(format!(
+                "BROD_HEYCATCH_KEY must be a HeyCatch publishable project key starting with hck_pk_, not {key:?}."
+            )));
+        }
         let network = match get("BROD_NETWORK").as_deref() {
             None | Some("log") => NetworkPolicy::Log,
             Some("enforce") => NetworkPolicy::Enforce,
@@ -376,6 +389,7 @@ impl Config {
             resend_api_key: get("RESEND_API_KEY"),
             email_from: get("EMAIL_FROM"),
             ga_id,
+            heycatch_key,
             google_client_id: get("GOOGLE_CLIENT_ID"),
             google_client_secret: get("GOOGLE_CLIENT_SECRET"),
             listen,
@@ -541,6 +555,16 @@ mod tests {
         assert_eq!(with(&[("BROD_GA_ID", "G-ABC123")]).unwrap().ga_id.as_deref(), Some("G-ABC123"));
         for bad in ["UA-1234-1", "G-", "G-abc'); alert(1)//", "G-AAAAAAAAAAAAAAAAAAAAAAAAAAAA"] {
             assert!(with(&[("BROD_GA_ID", bad)]).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn heycatch_is_off_unless_a_valid_key_is_set() {
+        assert_eq!(with(&[]).unwrap().heycatch_key, None);
+        let key = "hck_pk_3i8uCwh2DpfbL5zOYQ-puh6KVeXhaVug";
+        assert_eq!(with(&[("BROD_HEYCATCH_KEY", key)]).unwrap().heycatch_key.as_deref(), Some(key));
+        for bad in ["hck_pk_", "hck_sk_abc", "abc", "hck_pk_a'); alert(1)//", &format!("hck_pk_{}", "a".repeat(64))] {
+            assert!(with(&[("BROD_HEYCATCH_KEY", bad)]).is_err(), "{bad}");
         }
     }
 }
