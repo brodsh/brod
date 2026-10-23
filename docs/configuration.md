@@ -121,6 +121,7 @@ This page is generated from `.env.example` by `node scripts/config-docs.mjs`. Ed
 | `STRIPE_PRICE_SOLO` |  | The Stripe price id of the Solo plan. |
 | `STRIPE_PRICE_TEAM` |  | The Stripe price id of the Team plan. |
 | `BROD_GA_ID` |  | A Google Analytics 4 measurement ID for the hosted landing page. Unset: no Google tag anywhere. |
+| `BROD_HEYCATCH_KEY` |  | A HeyCatch publishable project key (hck_pk_...) for the hosted landing page. Unset: no HeyCatch tag anywhere. |
 
 ## Development and tests only
 

@@ -35,6 +35,15 @@
   gtag('config', '{{GA_ID}}');
 </script>
 <script async src="https://www.googletagmanager.com/gtag/js?id={{GA_ID}}"></script>{{/analytics}}
+{{#heycatch}}<!-- HeyCatch product analytics, on this public page only. The SDK version is pinned (npm "latest", never a prerelease). -->
+<script type="module">
+  import { analytics } from 'https://esm.sh/@heycatch/sdk@0.8.3';
+  analytics.init({
+    projectKey: '{{HEYCATCH_KEY}}',
+    requestBatching: false,
+    install: { framework: 'web', agent: 'claude-code' },
+  });
+</script>{{/heycatch}}
 <style>
 /* Layout: one left-aligned column on sage paper. The only loud things are the headline and the marigold action;
    the hero is a transcript of the product's one moment, an agent putting an app online. */

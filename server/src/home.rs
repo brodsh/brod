@@ -5,7 +5,7 @@
 //
 // home.html is a template. {{ORIGIN}} and {{APPS_DOMAIN}} name this server, so a self-hosted Brod's landing page
 // tells visitors to connect to it, and {{#analytics}}...{{/analytics}} (the Google tag and its consent banner)
-// is kept only when BROD_GA_ID is set.
+// is kept only when BROD_GA_ID is set; {{#heycatch}}...{{/heycatch}} (the HeyCatch tag) only when BROD_HEYCATCH_KEY is.
 use std::sync::{LazyLock, OnceLock};
 
 use axum::response::Response;
@@ -26,25 +26,37 @@ struct Home {
 static HOME: OnceLock<Home> = OnceLock::new();
 
 /// Fill in the template. `ga_id` is checked by config.rs, so it is safe to put in a script.
-fn render(origin: &str, apps_domain: &str, ga_id: Option<&str>) -> String {
-    let mut out = String::with_capacity(TEMPLATE.len());
-    let mut rest = TEMPLATE;
-    while let Some(start) = rest.find("{{#analytics}}") {
+/// Likewise `heycatch_key`, which keeps {{#heycatch}}...{{/heycatch}} (the HeyCatch tag) when set.
+fn render(origin: &str, apps_domain: &str, ga_id: Option<&str>, heycatch_key: Option<&str>) -> String {
+    let out = section(TEMPLATE, "analytics", ga_id.is_some());
+    let out = section(&out, "heycatch", heycatch_key.is_some());
+    out.replace("{{ORIGIN}}", &esc(origin))
+        .replace("{{APPS_DOMAIN}}", &esc(apps_domain))
+        .replace("{{GA_ID}}", ga_id.unwrap_or(""))
+        .replace("{{HEYCATCH_KEY}}", heycatch_key.unwrap_or(""))
+}
+
+/// Keep or drop every {{#name}}...{{/name}} section of `page`, removing the markers either way.
+fn section(page: &str, name: &str, keep: bool) -> String {
+    let (open, close) = (format!("{{{{#{name}}}}}"), format!("{{{{/{name}}}}}"));
+    let mut out = String::with_capacity(page.len());
+    let mut rest = page;
+    while let Some(start) = rest.find(&open) {
         out.push_str(&rest[..start]);
-        let after = &rest[start + "{{#analytics}}".len()..];
-        let end = after.find("{{/analytics}}").expect("home.html: every {{#analytics}} has a {{/analytics}}");
-        if ga_id.is_some() {
+        let after = &rest[start + open.len()..];
+        let end = after.find(&close).unwrap_or_else(|| panic!("home.html: every {open} has a {close}"));
+        if keep {
             out.push_str(&after[..end]);
         }
-        rest = &after[end + "{{/analytics}}".len()..];
+        rest = &after[end + close.len()..];
     }
     out.push_str(rest);
-    out.replace("{{ORIGIN}}", &esc(origin)).replace("{{APPS_DOMAIN}}", &esc(apps_domain)).replace("{{GA_ID}}", ga_id.unwrap_or(""))
+    out
 }
 
 pub fn page(cfg: &Config, req: &Req) -> Response {
     let home = HOME.get_or_init(|| {
-        let body = render(&cfg.api_origin, &cfg.apps_domain, cfg.ga_id.as_deref());
+        let body = render(&cfg.api_origin, &cfg.apps_domain, cfg.ga_id.as_deref(), cfg.heycatch_key.as_deref());
         let etag = format!("\"{}\"", &sha256_hex(&body)[..16]);
         Home { body, etag }
     });
@@ -103,7 +115,7 @@ mod tests {
 
     #[test]
     fn links_point_at_real_pages() {
-        let page = render(ORIGIN, "apps.example.test", None);
+        let page = render(ORIGIN, "apps.example.test", None, None);
         assert!(page.contains("<title>Brod: a cloud for the small software your team builds with AI</title>"));
         assert!(!page.contains("href=\"/signin\""));
         for anchor in ["how", "apps", "teams", "pricing", "connect"] {
@@ -113,7 +125,7 @@ mod tests {
 
     #[test]
     fn names_this_server_and_never_brod_sh() {
-        let page = render(ORIGIN, "apps.example.test", None);
+        let page = render(ORIGIN, "apps.example.test", None, None);
         assert!(!page.contains("{{"), "a placeholder was left in the page");
         assert!(!page.contains("brod.sh"));
         assert!(page.contains("claude mcp add --transport http brod https://brod.example.test/mcp"));
@@ -122,7 +134,7 @@ mod tests {
 
     #[test]
     fn link_previews_have_a_large_picture() {
-        let page = render(ORIGIN, "apps.example.test", None);
+        let page = render(ORIGIN, "apps.example.test", None, None);
         assert!(page.contains("<meta property=\"og:image\" content=\"https://brod.example.test/og.png\">"));
         assert!(page.contains("<meta name=\"twitter:card\" content=\"summary_large_image\">"));
         assert!(page.contains("<link rel=\"canonical\" href=\"https://brod.example.test/\">"));
@@ -135,20 +147,20 @@ mod tests {
 
     #[test]
     fn start_free_leads_to_sign_up_and_status_is_gone() {
-        let page = render(ORIGIN, "apps.example.test", None);
+        let page = render(ORIGIN, "apps.example.test", None, None);
         assert_eq!(page.matches("href=\"/auth/signup\"").count(), 4);
         assert!(!page.contains("href=\"/healthz\""));
     }
 
     #[test]
     fn no_google_tag_unless_configured() {
-        let page = render(ORIGIN, "apps.example.test", None);
+        let page = render(ORIGIN, "apps.example.test", None, None);
         assert!(!page.contains("googletagmanager") && !page.contains("gtag(") && !page.contains("id=\"consent"));
     }
 
     #[test]
     fn google_analytics_waits_for_consent() {
-        let page = render(ORIGIN, "apps.example.test", Some("G-TEST1234"));
+        let page = render(ORIGIN, "apps.example.test", Some("G-TEST1234"), None);
         assert!(page.contains("googletagmanager.com/gtag/js?id=G-TEST1234"));
         let default = page.find("gtag('consent', 'default'").expect("consent defaults are set");
         let config = page.find("gtag('config', 'G-TEST1234')").expect("the tag is configured");
@@ -168,5 +180,14 @@ mod tests {
         let html = String::from_utf8_lossy(&body);
         assert!(html.contains("<title>Sign in</title>"));
         assert!(!html.contains("googletagmanager"));
+    }
+
+    #[test]
+    fn heycatch_only_when_configured() {
+        let page = render(ORIGIN, "apps.example.test", Some("G-TEST1234"), None);
+        assert!(!page.contains("heycatch") && !page.contains("{{"));
+        let page = render(ORIGIN, "apps.example.test", None, Some("hck_pk_test-Key_1"));
+        assert!(page.contains("projectKey: 'hck_pk_test-Key_1'"));
+        assert!(!page.contains("googletagmanager") && !page.contains("{{"));
     }
 }
