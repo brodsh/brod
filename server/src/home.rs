@@ -104,9 +104,9 @@ mod tests {
     #[test]
     fn links_point_at_real_pages() {
         let page = render(ORIGIN, "apps.example.test", None);
-        assert!(page.contains("<title>Brod: a cloud for the small software your team builds with AI</title>"));
+        assert!(page.contains("<title>Brod: deploy AI-built internal apps to your team</title>"));
         assert!(!page.contains("href=\"/signin\""));
-        for anchor in ["how", "apps", "teams", "pricing", "connect"] {
+        for anchor in ["demo", "apps", "how", "security", "pricing", "connect"] {
             assert!(page.contains(&format!("id=\"{anchor}\"")), "#{anchor} has no target");
         }
     }
@@ -117,7 +117,7 @@ mod tests {
         assert!(!page.contains("{{"), "a placeholder was left in the page");
         assert!(!page.contains("brod.sh"));
         assert!(page.contains("claude mcp add --transport http brod https://brod.example.test/mcp"));
-        assert!(page.contains("https://shift-swap.harborops.apps.example.test"));
+        assert!(page.contains("https://expenses.acme.apps.example.test"));
     }
 
     #[test]
