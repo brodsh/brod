@@ -40,7 +40,6 @@ postgres = "0.19"
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
 ring = "0.17"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "http2", "json"] }
-ring = "0.17"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
