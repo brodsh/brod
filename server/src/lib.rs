@@ -22,6 +22,7 @@ pub mod market;
 pub mod mcp;
 pub mod model;
 pub mod network;
+pub mod nodes;
 pub mod people;
 pub mod preview;
 pub mod problem;

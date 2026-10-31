@@ -251,6 +251,7 @@ dependencies = [
  "postgres",
  "rcgen",
  "reqwest",
+ "ring",
  "rusqlite",
  "rustls",
  "serde",

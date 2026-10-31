@@ -23,6 +23,8 @@ pub struct AppState {
     pub watchdog: crate::watchdog::Watchdog,
     /// REST and MCP calls per connection in the current minute (abuse.rs).
     pub calls: crate::abuse::CallLimits,
+    /// Nodes' live tunnels, challenges and seen signatures (nodes.rs).
+    pub nodes: crate::nodes::Nodes,
 }
 
 pub type State = Arc<AppState>;
@@ -46,6 +48,7 @@ impl AppState {
             previews: Default::default(),
             watchdog: Default::default(),
             calls: Default::default(),
+            nodes: Default::default(),
         })
     }
 }

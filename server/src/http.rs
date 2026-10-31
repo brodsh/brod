@@ -39,6 +39,8 @@ pub struct Req {
     pub via: Via,
     /// In a Mutex only so that a &Req can be held across an await: the body itself is used once.
     pub body: std::sync::Mutex<Body>,
+    /// The connection itself, once a 101 answer is sent, for an HTTP/1.1 Upgrade (only nodes.rs takes it).
+    pub upgrade: Option<hyper::upgrade::OnUpgrade>,
 }
 
 impl Req {
@@ -66,6 +68,7 @@ impl Req {
             peer: None,
             via: Via::Internal,
             body: std::sync::Mutex::new(Body::empty()),
+            upgrade: None,
         }
     }
     pub fn origin(&self) -> String {
