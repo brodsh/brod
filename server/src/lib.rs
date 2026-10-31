@@ -14,6 +14,7 @@ pub mod backups;
 pub mod billing;
 pub mod config;
 pub mod connect;
+pub mod console;
 pub mod containers;
 pub mod control;
 pub mod copy;

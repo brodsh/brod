@@ -323,7 +323,8 @@ impl Settings {
 
 /// Set `key` to `value`, or back to its default with None. Refuses unknown keys, values of the wrong kind and keys
 /// locked by their environment variable. Returns the value stored.
-pub fn write(conn: &Connection, cfg: &Config, key: &str, value: Option<&Value>, by: &str) -> Result<Option<Value>> {
+/// Check that `key` may be set to `value` (None: back to its default) without writing anything.
+pub fn check(cfg: &Config, key: &str, value: Option<&Value>) -> Result<Option<Value>> {
     let Some(s) = setting(key) else {
         return Err(Problem::new(404, "unknown_setting", format!("There is no setting {key:?}.")));
     };
@@ -334,11 +335,14 @@ pub fn write(conn: &Connection, cfg: &Config, key: &str, value: Option<&Value>, 
             format!("{key} is set by the environment variable {}. Change it there and restart Brod.", s.env),
         ));
     }
-    let Some(value) = value else {
+    value.map(|v| normalize(s.kind, v).map_err(|e| Problem::new(400, "bad_setting", format!("{key} {e}.")))).transpose()
+}
+
+pub fn write(conn: &Connection, cfg: &Config, key: &str, value: Option<&Value>, by: &str) -> Result<Option<Value>> {
+    let Some(v) = check(cfg, key, value)? else {
         conn.run("DELETE FROM instance_settings WHERE key = ?", [key])?;
         return Ok(None);
     };
-    let v = normalize(s.kind, value).map_err(|e| Problem::new(400, "bad_setting", format!("{key} {e}.")))?;
     let text = v.to_string();
     tx(conn, |c| {
         if c.run("UPDATE instance_settings SET value = ?, updated_by = ?, updated_at = ? WHERE key = ?", params![text, by, now(), key])?
@@ -392,6 +396,13 @@ pub async fn current(st: &crate::state::State) -> Arc<Settings> {
             st.settings.last()
         }
     }
+}
+
+/// Read the settings from the database now and put them in the cache.
+pub async fn refresh(st: &crate::state::State) -> Result<Arc<Settings>> {
+    let cfg = st.cfg.clone();
+    let s = st.db.call(move |c| Settings::load(c, &cfg)).await?;
+    Ok(st.settings.put(s))
 }
 
 /// Change a setting (see `write`) and refresh the cache.

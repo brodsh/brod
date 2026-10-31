@@ -170,9 +170,11 @@ the whole connection is disconnected. A refresh token lapses after 30 days witho
 
 ## The operator's API
 
-The person who runs the Brod server has a small API under `/v1/admin/`. Every call needs
-`Authorization: Bearer $ADMIN_SECRET`; without it, or when `ADMIN_SECRET` is empty, the answer is `401 unauthorized`.
-Each action is recorded in the workspace's audit log (`GET /v1/events`) as by `Brod operator`.
+The people who run the Brod server (its *operators*) have an API under `/v1/admin/`. A call is accepted with
+`Authorization: Bearer $ADMIN_SECRET` (for scripts), or from an operator signed in to the dashboard (the session
+cookie, same-origin requests only). Anything else answers `401 unauthorized`, or `403 not_operator` for a signed-in
+person who is not an operator. Each action is recorded in the audit log with the operator's email, or
+`Brod operator` when the admin secret was used. See [the admin mode plan](plans/admin-mode.md) for the full design.
 
 | Route | |
 | --- | --- |
@@ -195,6 +197,29 @@ curl -sS -H "$A" -X POST https://brod.example.com/v1/admin/apps/acme/login/resto
 curl -sS -H "$A" -H 'content-type: application/json' -d '{"status":"dismissed","note":"Not abuse"}' https://brod.example.com/v1/admin/reports/rep_0123456789abcdef
 curl -sS -H "$A" -H 'content-type: application/json' -d '{"reason":"Spam"}' https://brod.example.com/v1/admin/workspaces/acme/suspend
 curl -sS -H "$A" -X POST https://brod.example.com/v1/admin/workspaces/acme/trust
+```
+
+### Settings, limits and operators
+
+| Route | |
+| --- | --- |
+| `GET /v1/admin/overview` | Counts of workspaces, users and apps (live, paused, taken down), storage used, open reports, and configuration warnings |
+| `GET /v1/admin/settings` | Every instance setting: `key`, `value`, `default`, `source` (`env`, `database` or `default`), `locked`, `env` and `help` |
+| `PATCH /v1/admin/settings` `{key: value\|null, ...}` | Change settings. `null` goes back to the default. All keys are checked before any is written: unknown key `404 unknown_setting`, set by an environment variable `409 setting_locked`, wrong type `400 bad_setting`. |
+| `GET /v1/admin/workspaces?q=&cursor=` | Workspaces, newest first, 50 at a time, with usage and their effective limits. `q` matches the slug or name. |
+| `GET /v1/admin/workspaces/:workspace/limits` | The workspace's base limits (plan or instance settings), its override and the effective limits |
+| `PATCH /v1/admin/workspaces/:workspace/limits` `{max_running_apps?, max_members?, max_storage_mb?, analytics_days?, note?}` | Change the override. A number or `"unlimited"` sets a field, `null` clears it back to the base. Lowering a limit never stops or deletes anything. |
+| `GET /v1/admin/operators` | The operators |
+| `POST /v1/admin/operators` `{email}` | Make someone with an account an operator (`404 no_account` otherwise) |
+| `DELETE /v1/admin/operators/:user` | Remove an operator. The last one (`409 last_operator`) and the one named by `BROD_ADMIN_EMAIL` (`409 admin_email`) cannot be removed. |
+| `GET /v1/admin/audit?cursor=` | The server-wide audit log of operator actions, newest first |
+
+Limits count running (live) apps only; paused apps are free. Settings are explained in
+[configuration](configuration.md#instance-settings).
+
+```sh
+curl -sS -H "$A" -X PATCH -H 'content-type: application/json' -d '{"limits.max_running_apps":5,"workspaces.creation":"operators"}' https://brod.example.com/v1/admin/settings
+curl -sS -H "$A" -X PATCH -H 'content-type: application/json' -d '{"max_running_apps":"unlimited","note":"Pilot customer"}' https://brod.example.com/v1/admin/workspaces/acme/limits
 ```
 
 A taken-down app answers `410` with a neutral "This app has been taken down" page on every address. Its owner cannot

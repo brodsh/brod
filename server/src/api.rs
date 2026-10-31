@@ -98,6 +98,9 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
     if s(0) == Some("admin") && s(1) == Some("backups") {
         return crate::backups::admin(st, &mut req, &seg).await;
     }
+    if s(0) == Some("admin") && crate::console::handles(&seg) {
+        return crate::console::serve(st, &mut req, &seg).await;
+    }
     if s(0) == Some("admin") {
         return crate::abuse::serve(st, &mut req, &seg).await;
     }
@@ -115,7 +118,9 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
         if s(0) == Some("me") {
             let u = user.clone();
             let ws = st.db.call(move |c| people::my_workspaces(c, &cfg, &u)).await?;
-            return Ok(json(json!({ "user": user, "workspaces": ws })));
+            let id = user.id.clone();
+            let operator = st.db.call(move |c| crate::operator::is_operator(c, &id)).await?;
+            return Ok(json(json!({ "user": user, "workspaces": ws, "operator": operator })));
         }
         let b = req.json_object().await?;
         let (name, accept) = (body_str(&b, "name"), is_true(&b, "accept_terms"));
