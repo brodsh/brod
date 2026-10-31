@@ -11,11 +11,13 @@
 //! The container gets `brod-db.internal` as an extra host pointing at the listener.
 //!
 //! The tunnel's roles are reversed (Brod is the HTTP/2 client), so the node cannot open a stream itself. Instead:
+//! ```text
 //!   GET    /v1/db/accept       a long-lived stream Brod keeps open: one NDJSON line {"conn", "app"} per accepted
 //!                              connection, `app` being the app whose listener accepted it
 //!   POST   /v1/db/conns/<id>   Brod takes the connection: its request body goes to the socket, the socket's bytes come
 //!                              back as the response body (one full-duplex HTTP/2 stream)
 //!   DELETE /v1/db/conns/<id>   Brod refuses it; the socket closes
+//! ```
 //! A connection Brod does not take within 15 s is closed.
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -216,7 +218,7 @@ fn accept_stream(proxy: Proxy) -> Response<Body> {
     Response::builder().status(200).header("content-type", "application/x-ndjson").body(body).expect("response")
 }
 
-/// POST /v1/db/conns/<id>: Brod's request body to the socket, the socket's bytes back as the response body.
+/// `POST /v1/db/conns/<id>`: Brod's request body to the socket, the socket's bytes back as the response body.
 fn pipe(proxy: &Proxy, id: &str, req: Request<Incoming>) -> Response<Body> {
     let Some((_, stream)) = lock(&proxy.0.pending).remove(id) else {
         return fail(404, "not_found", "No such connection: it closed or waited too long.");
@@ -250,7 +252,7 @@ fn pipe(proxy: &Proxy, id: &str, req: Request<Incoming>) -> Response<Body> {
     Response::builder().status(200).header("content-type", "application/octet-stream").body(body).expect("response")
 }
 
-/// Where the listener for an app's bridge goes, given the bridge as Docker describes it (GET /networks/<name>).
+/// Where the listener for an app's bridge goes, given the bridge as Docker describes it (`GET /networks/<name>`).
 pub async fn bind_for(node: &Node, reach: Reach, network: &Value, port_hint: Option<u16>) -> Result<Bind, String> {
     let config =
         network["IPAM"]["Config"].as_array().and_then(|c| c.iter().find(|c| c["Subnet"].as_str().is_some_and(|s| !s.contains(':'))));

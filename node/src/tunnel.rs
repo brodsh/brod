@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! What the node answers over its connection to Brod, once the roles have reversed: Brod is the HTTP/2 client and the
 //! node the server, so only Brod can send these requests.
+//! ```text
 //!   GET  /v1/ping   "pong"
 //!   GET  /v1/info   the node's id, name, version, capabilities and usage (as in a heartbeat)
 //!   POST /v1/echo   the request body streamed straight back, to check the tunnel end to end
 //!   /v1/builds, /v1/images, /v1/containers, /v1/proxy   workloads (work.rs)
 //!   /v1/db/accept, /v1/db/conns/<id>                    the database proxy (db.rs)
+//! ```
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Workloads: what Brod asks the node to do with containers, over the tunnel.
 //!
+//! ```text
 //!   POST   /v1/builds/<id>?platform=linux/arm64   body: the build context (a tar). Builds it with docker buildx into an
 //!                                                  OCI image; answers NDJSON lines {"log": "..."} as the build runs,
 //!                                                  then {"done": true, "ok": bool, "error": "..."}
@@ -23,6 +24,7 @@
 //!   GET    /v1/containers/<name>/logs?since=<cursor>  {"lines": [{stream, at, message}], "cursor"}
 //!   *      /v1/proxy/<name>/<path>                 the request, forwarded to the container
 //!   /v1/db/...                                     the database proxy (db.rs)
+//! ```
 //!
 //! Containers run hardened: read-only root file system with a small tmpfs at /tmp, every capability dropped,
 //! no-new-privileges, a non-root user (10001 unless the image names a non-root USER; root only for a trusted Brod), a
