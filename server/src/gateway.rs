@@ -76,6 +76,8 @@ pub fn identity_for(cfg: &Config, app: &AppRow, workspace_slug: &str, user: &Use
 struct Visit {
     app: AppRow,
     server: Option<String>,
+    /// For a container version (deployments.rs): the node and container serving it, when one is.
+    container: Option<Option<(String, String)>>,
     /// The outside hosts the served version declares (network.rs), for its Content-Security-Policy.
     network: Vec<String>,
     /// The paths of the served version anyone may reach without signing in: declared by it and approved (open_paths.rs).
@@ -187,7 +189,10 @@ async fn serve(st: &State, mut req: Req, at: Where, domain: Option<String>, hit:
         .call(move |c| {
             let version = if staging { "staging_version" } else { "live_version" };
             let sql = format!(
-                "SELECT a.*, v.server, v.network, v.open_paths AS declared_open, w.slug AS wslug FROM apps a JOIN workspaces w ON w.id = a.workspace_id
+                "SELECT a.*, v.server, v.network, v.open_paths AS declared_open, w.slug AS wslug, v.runtime AS vruntime,
+                   (SELECT d.node_id || ' ' || d.container_ref FROM deployments d WHERE d.app_id = a.id AND d.version = v.n AND d.state = 'serving'
+                    ORDER BY d.created_at DESC LIMIT 1) AS serving
+                 FROM apps a JOIN workspaces w ON w.id = a.workspace_id
                  LEFT JOIN versions v ON v.app_id = a.id AND v.n = a.{version} WHERE "
             );
             let map = |r: &crate::db::Row| {
@@ -200,13 +205,16 @@ async fn serve(st: &State, mut req: Req, at: Where, domain: Option<String>, hit:
                         &crate::open_paths::parse(Some(&r.get::<_, String>("open_paths")?)),
                         &crate::open_paths::parse(r.get::<_, Option<String>>("declared_open")?.as_deref()),
                     ),
+                    (r.get::<_, Option<String>>("vruntime")?.as_deref() == Some("container")).then(|| {
+                        r.get::<_, Option<String>>("serving").ok().flatten().and_then(|s| s.split_once(' ').map(|(n, c)| (n.to_string(), c.to_string())))
+                    }),
                 ))
             };
             let row = match &at {
                 Where::Slug { workspace, slug, .. } => c.first(&format!("{sql}w.slug = ? AND a.slug = ?"), [workspace, slug], map)?,
                 Where::Id(id) => c.first(&format!("{sql}a.id = ?"), [id], map)?,
             };
-            let Some((mut app, server, workspace_slug, network, open)) = row else { return Ok(None) };
+            let Some((mut app, server, workspace_slug, network, open, container)) = row else { return Ok(None) };
             // Taken down by the Brod team, or in a suspended workspace: nothing of the app is served, its /_brod/ pages included.
             if crate::abuse::hold_of(c, &app)?.is_some() {
                 return Ok(Some(None));
@@ -223,7 +231,7 @@ async fn serve(st: &State, mut req: Req, at: Where, domain: Option<String>, hit:
             if staging {
                 admit_staging(&app, &mut decision, visitor.as_ref());
             }
-            Ok(Some(Some(Visit { app, server, network, open, visitor, decision, workspace_slug, origin, domain, staging })))
+            Ok(Some(Some(Visit { app, server, container, network, open, visitor, decision, workspace_slug, origin, domain, staging })))
         })
         .await?;
     let Some(v) = visit else {
@@ -234,7 +242,7 @@ async fn serve(st: &State, mut req: Req, at: Where, domain: Option<String>, hit:
     if req.path.starts_with("/_brod/") {
         return special(st, &mut req, v).await;
     }
-    let Visit { app, server, network, open, visitor, decision, workspace_slug, origin, domain, staging } = v;
+    let Visit { app, server, container, network, open, visitor, decision, workspace_slug, origin, domain, staging } = v;
     // Requests to the staging address stay out of the app's analytics.
     if !staging {
         hit.app = Some((app.workspace_id.clone(), app.id.clone()));
@@ -244,7 +252,7 @@ async fn serve(st: &State, mut req: Req, at: Where, domain: Option<String>, hit:
         None => None,
     };
     let is_get = req.method == Method::GET || req.method == Method::HEAD;
-    if server.is_none() && !is_get {
+    if server.is_none() && container.is_none() && !is_get {
         return Ok(notice(405, "Not supported", "This app is a static site and only answers page requests.", ""));
     }
     if app.live_version.is_none() && !staging {
@@ -258,7 +266,10 @@ async fn serve(st: &State, mut req: Req, at: Where, domain: Option<String>, hit:
         }
         let Some(version) = app.live_version else { return Ok(not_found(&st.cfg.api_origin)) };
         req.path = path;
-        let mut res = serve_version(st, req, &app, version, server, &origin, None).await?;
+        let mut res = match container {
+            Some(serving) => crate::deployments::dispatch(st, req, &app, &origin, version, serving, None).await?,
+            None => serve_version(st, req, &app, version, server, &origin, None).await?,
+        };
         crate::network::protect(&st.cfg, &mut res, &network);
         return Ok(res);
     }
@@ -297,11 +308,14 @@ async fn serve(st: &State, mut req: Req, at: Where, domain: Option<String>, hit:
         hit.view = Some(crate::analytics::page_view(&st.cfg, &req, &app.workspace_id, &app.id, who, visitor.is_some(), &path));
     }
 
-    let identity = match &server {
-        Some(_) => visitor.as_ref().map(|v| identity_for(&st.cfg, &app, &workspace_slug, &v.user, &decision)),
-        None => None,
+    let identity = match server.is_some() || container.is_some() {
+        true => visitor.as_ref().map(|v| identity_for(&st.cfg, &app, &workspace_slug, &v.user, &decision)),
+        false => None,
     };
-    let mut res = serve_version(st, req, &app, version, server, &origin, identity).await?;
+    let mut res = match container {
+        Some(serving) => crate::deployments::dispatch(st, req, &app, &origin, version, serving, identity).await?,
+        None => serve_version(st, req, &app, version, server, &origin, identity).await?,
+    };
     // The page may only reach its own address and the hosts its version declares (network.rs).
     crate::network::protect(&st.cfg, &mut res, &network);
     Ok(res)

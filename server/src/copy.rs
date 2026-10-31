@@ -40,6 +40,7 @@ pub const TABLES: &[&str] = &[
     "visits",
     "nodes",
     "node_join_tokens",
+    "deployments",
     "visit_visitors",
     "page_views",
     "app_events",

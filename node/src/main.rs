@@ -14,9 +14,12 @@
 //! node next to Brod in docker-compose.yml): BROD_URL and BROD_NODE_JOIN_TOKEN_FILE (or BROD_NODE_JOIN_TOKEN); the node
 //! waits for a token there and joins once. BROD_URL also overrides the address `join` saved. BROD_NODE_NAME names it.
 mod brod;
+mod docker;
+mod firewall;
 mod identity;
 mod sys;
 mod tunnel;
+mod work;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -46,6 +49,7 @@ pub struct Node {
     pub brod: Brod,
     pub name: String,
     pub dir: PathBuf,
+    pub work: work::Work,
 }
 
 fn main() -> ExitCode {
@@ -147,7 +151,7 @@ async fn run(dir: &Path) -> Result<(), String> {
     let j = joined(dir).await?;
     let me = Identity::load_or_create(dir)?;
     let url = std::env::var("BROD_URL").ok().filter(|u| !u.trim().is_empty()).unwrap_or(j.brod);
-    let node = Arc::new(Node { me, brod: Brod::parse(&url)?, name: j.name, dir: dir.to_path_buf() });
+    let node = Arc::new(Node { me, brod: Brod::parse(&url)?, name: j.name, dir: dir.to_path_buf(), work: work::Work::default() });
     log!("{} ({}) for {}; state in {}", node.me.id, node.name, node.brod.url, dir.display());
     tokio::spawn(heartbeats(node.clone()));
     tokio::select! {

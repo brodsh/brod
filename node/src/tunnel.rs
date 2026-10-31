@@ -4,29 +4,22 @@
 //!   GET  /v1/ping   "pong"
 //!   GET  /v1/info   the node's id, name, version, capabilities and usage (as in a heartbeat)
 //!   POST /v1/echo   the request body streamed straight back, to check the tunnel end to end
-//! Workloads (containers) come later.
+//!   /v1/builds, /v1/images, /v1/containers, /v1/proxy   workloads (work.rs)
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bytes::Bytes;
-use http_body_util::{BodyExt, Full, combinators::BoxBody};
+use http_body_util::BodyExt;
 use hyper::body::Incoming;
 use hyper::{Method, Request, Response};
 
 use crate::Node;
-
-type Body = BoxBody<Bytes, hyper::Error>;
-
-fn full(status: u16, content_type: &str, body: impl Into<Bytes>) -> Response<Body> {
-    Response::builder()
-        .status(status)
-        .header("content-type", content_type)
-        .body(Full::new(body.into()).map_err(|never: Infallible| match never {}).boxed())
-        .expect("response")
-}
+use crate::work::{Body, BoxError, full};
 
 async fn handle(node: Arc<Node>, req: Request<Incoming>) -> Result<Response<Body>, Infallible> {
+    if crate::work::handles(req.uri().path()) {
+        return Ok(crate::work::handle(node, req).await);
+    }
     Ok(match (req.method(), req.uri().path()) {
         (&Method::GET, "/v1/ping") => full(200, "text/plain", "pong"),
         (&Method::GET, "/v1/info") => {
@@ -36,7 +29,7 @@ async fn handle(node: Arc<Node>, req: Request<Incoming>) -> Result<Response<Body
             full(200, "application/json", v.to_string())
         }
         (&Method::POST, "/v1/echo") => {
-            let mut res = Response::new(req.into_body().boxed());
+            let mut res = Response::new(req.into_body().map_err(|e| -> BoxError { Box::new(e) }).boxed());
             if let Ok(v) = "application/octet-stream".parse() {
                 res.headers_mut().insert("content-type", v);
             }

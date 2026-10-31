@@ -440,19 +440,31 @@ pub fn get_status(conn: &Connection, cfg: &Config, c: &Caller, slug: &str) -> Re
     require_role(c, "builder", "see app versions")?;
     let app = get_app(conn, c, slug)?;
     let versions = conn.all(
-        "SELECT n, note, actor, file_count, bytes, created_at, server, based_on FROM versions WHERE app_id = ? ORDER BY n DESC LIMIT 50",
+        "SELECT n, note, actor, file_count, bytes, created_at, server, based_on, runtime FROM versions WHERE app_id = ? ORDER BY n DESC LIMIT 50",
         [&app.id],
         |r| {
             let n: i64 = r.get(0)?;
             let server: Option<String> = r.get(6)?;
+            let kind = if r.get::<_, String>(8)? == "container" {
+                "container"
+            } else if server.is_some() {
+                "server"
+            } else {
+                "static"
+            };
             Ok(json!({
-                "version": n, "live": Some(n) == app.live_version, "staging": Some(n) == app.staging_version, "kind": if server.is_some() { "server" } else { "static" },
+                "version": n, "live": Some(n) == app.live_version, "staging": Some(n) == app.staging_version, "kind": kind,
                 "based_on": r.get::<_, Option<i64>>(7)?, "note": r.get::<_, String>(1)?, "by": r.get::<_, String>(2)?, "files": r.get::<_, i64>(3)?, "bytes": r.get::<_, i64>(4)?, "at": iso(r.get(5)?),
             }))
         },
     )?;
     let mut m = described(conn, cfg, c, &app)?;
     m.insert("versions".into(), Value::Array(versions));
+    // Container apps: their latest deployments, with state and node (deployments.rs).
+    let deployments = crate::deployments::recent(conn, &app.id)?;
+    if deployments.as_array().is_some_and(|d| !d.is_empty()) {
+        m.insert("deployments".into(), deployments);
+    }
     // Names only: secret values are never returned.
     m.insert("secrets".into(), secrets::list(conn, &app.id)?);
     // What the app lets this workspace customise (its brod.json), and the values set on it.
@@ -659,7 +671,7 @@ fn new_slug(conn: &Connection, c: &Caller, name: &str) -> Result<String> {
     Ok(format!("{base}-{}", random_id("", 4)))
 }
 
-fn check_rate(conn: &Connection, c: &Caller) -> Result<()> {
+pub(crate) fn check_rate(conn: &Connection, c: &Caller) -> Result<()> {
     let n = conn.count(
         "SELECT COUNT(*) AS n FROM events WHERE workspace_id = ? AND action = 'deploy' AND at > ?",
         params![c.workspace.id, now() - 3_600_000],
@@ -705,6 +717,8 @@ pub struct DeployTarget {
     pub environment: Option<String>,
     /// The version the deploy's files started from, as given; see `base`.
     pub base_version: Option<Value>,
+    /// Container settings given with the deploy ("runtime", "port", "health", "cpu", "memory_mb"; containers.rs).
+    pub options: Option<Map<String, Value>>,
 }
 
 impl DeployTarget {
@@ -716,10 +730,11 @@ impl DeployTarget {
             note: s("note"),
             environment: s("environment"),
             base_version: present(o, "base_version").cloned(),
+            options: crate::containers::options_from(o),
         }
     }
     /// "base_version": the version a deploy's files started from. Only for an existing app.
-    fn base(&self) -> Result<Option<i64>> {
+    pub(crate) fn base(&self) -> Result<Option<i64>> {
         let n = match &self.base_version {
             None | Some(Value::Null) => return Ok(None),
             Some(Value::String(v)) if v.is_empty() => return Ok(None),
@@ -740,14 +755,14 @@ impl DeployTarget {
         Ok(Some(n as i64))
     }
     /// Refuse an environment Brod does not know, before anything is uploaded.
-    fn check_environment(&self) -> Result<()> {
+    pub(crate) fn check_environment(&self) -> Result<()> {
         match self.environment.as_deref().map(|e| js_trim(e).to_lowercase()) {
             None => Ok(()),
             Some(e) if matches!(e.as_str(), "" | "staging" | "production" | "live") => Ok(()),
             Some(_) => Err(Problem::new(400, "bad_environment", "\"environment\" is \"staging\" or \"production\".")),
         }
     }
-    fn app_slug(&self) -> Option<&str> {
+    pub(crate) fn app_slug(&self) -> Option<&str> {
         self.app.as_deref().filter(|a| !a.is_empty())
     }
 }
@@ -755,7 +770,7 @@ impl DeployTarget {
 /// Whether a deploy goes to staging instead of live. An agent updating an app that already has a live version deploys
 /// to staging unless it asks for production, so the person can try the change before visitors see it. A person, and
 /// any first version, goes live unless staging is asked for.
-fn deploy_to_staging(c: &Caller, app: &AppRow, created: bool, o: &DeployTarget) -> bool {
+pub(crate) fn deploy_to_staging(c: &Caller, app: &AppRow, created: bool, o: &DeployTarget) -> bool {
     match o.environment.as_deref().map(|e| js_trim(e).to_lowercase()).as_deref() {
         Some("staging") => true,
         Some("production") | Some("live") => false,
@@ -772,7 +787,7 @@ pub fn current_version(app: &AppRow) -> Option<i64> {
  * The refusal for a deploy whose files started from an older version than the app's current one: deploying them would
  * silently undo what someone else deployed since. It names who changed what, so the agent can tell the person.
  */
-fn stale_base(conn: &Connection, app_id: &str, base: i64) -> Result<Problem> {
+pub(crate) fn stale_base(conn: &Connection, app_id: &str, base: i64) -> Result<Problem> {
     let Some(app) = conn.first("SELECT * FROM apps WHERE id = ?", [app_id], AppRow::from_row)? else {
         return Ok(Problem::new(404, "not_found", "The app was deleted during the deploy."));
     };
@@ -812,7 +827,7 @@ fn stale_base(conn: &Connection, app_id: &str, base: i64) -> Result<Problem> {
 }
 
 /// Resolve which app a deploy targets, creating it (inside the plan allowance) when it is new.
-fn target_app(conn: &Connection, cfg: &Config, c: &Caller, o: &DeployTarget) -> Result<(AppRow, bool)> {
+pub(crate) fn target_app(conn: &Connection, cfg: &Config, c: &Caller, o: &DeployTarget) -> Result<(AppRow, bool)> {
     if let Some(slug) = o.app_slug() {
         return Ok((get_app(conn, c, slug)?, false));
     }
@@ -866,6 +881,13 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFi
             .await?;
     }
     o.check_environment()?;
+    // A Dockerfile at the top makes the bundle a container app's source (containers.rs, deployments.rs).
+    if let Some(archive) = crate::containers::archive_of(&files) {
+        return crate::deployments::deploy(st, c, o, archive).await;
+    }
+    if crate::containers::wants_container(o.options.as_ref()) {
+        return Err(Problem::new(400, "bad_container", "\"runtime\": \"container\" needs a Dockerfile at the top of the bundle."));
+    }
     let base = o.base()?;
     let files = normalise(files)?;
     let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
@@ -1176,7 +1198,7 @@ pub async fn download(st: &State, id: &str) -> Result<(String, Vec<u8>)> {
 }
 
 /// Note that this person is working on the app (getting its files or deploying it). Others are told, never blocked.
-fn mark_editing(conn: &Connection, c: &Caller, app_id: &str, base: Option<i64>) -> Result<()> {
+pub(crate) fn mark_editing(conn: &Connection, c: &Caller, app_id: &str, base: Option<i64>) -> Result<()> {
     let t = now();
     conn.run(
         "INSERT INTO editing (app_id, user_id, email, actor, base_version, since, last_at) VALUES (?,?,?,?,?,?,?) \
@@ -1260,7 +1282,7 @@ pub fn create_upload(conn: &Connection, cfg: &Config, c: &Caller, o: &DeployTarg
     }
     let id = random_id("up_", 20);
     conn.run(
-        "INSERT INTO uploads (id, workspace_id, user_id, actor, app_slug, name, note, expires_at, environment, base_version) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO uploads (id, workspace_id, user_id, actor, app_slug, name, note, expires_at, environment, base_version, options) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         params![
             id,
             c.workspace.id,
@@ -1271,7 +1293,8 @@ pub fn create_upload(conn: &Connection, cfg: &Config, c: &Caller, o: &DeployTarg
             o.note.clone().unwrap_or_default(),
             now() + limits::UPLOAD_TTL_MS,
             o.environment,
-            base
+            base,
+            o.options.as_ref().map(|m| Value::Object(m.clone()).to_string())
         ],
     )?;
     let upload_url = format!("{}/v1/uploads/{id}", cfg.api_origin);
@@ -1294,6 +1317,7 @@ pub fn claim_upload(conn: &Connection, id: &str) -> Result<(Caller, DeployTarget
         used_at: Option<i64>,
         environment: Option<String>,
         base_version: Option<i64>,
+        options: Option<String>,
     }
     let u = conn.first("SELECT * FROM uploads WHERE id = ?", [id], |r| {
         Ok(Up {
@@ -1307,6 +1331,7 @@ pub fn claim_upload(conn: &Connection, id: &str) -> Result<(Caller, DeployTarget
             used_at: r.get("used_at")?,
             environment: r.get("environment")?,
             base_version: r.get("base_version")?,
+            options: r.get("options")?,
         })
     })?;
     let u = match u {
@@ -1334,7 +1359,8 @@ pub fn claim_upload(conn: &Connection, id: &str) -> Result<(Caller, DeployTarget
     }
     let caller = Caller { workspace, user, role, actor: u.actor, agent: true, read_only: false };
     let base_version = u.base_version.map(|b| json!(b));
-    Ok((caller, DeployTarget { app: u.app_slug, name: u.name, note: Some(u.note), environment: u.environment, base_version }))
+    let options = u.options.and_then(|o| serde_json::from_str::<Map<String, Value>>(&o).ok());
+    Ok((caller, DeployTarget { app: u.app_slug, name: u.name, note: Some(u.note), environment: u.environment, base_version, options }))
 }
 
 pub fn release_upload(conn: &Connection, id: &str) -> Result<()> {
@@ -1529,7 +1555,7 @@ fn approve_open_paths(conn: &Connection, cfg: &Config, c: &Caller, slug: &str, a
 
 /// After a deploy: approve the new version's undeclared-before open paths when a person deployed it, or ask a person
 /// to when an agent did. None when the version declares no open paths and the app has none approved.
-fn deployed_open_paths(conn: &Connection, cfg: &Config, c: &Caller, app: &AppRow, n: i64) -> Result<Option<Value>> {
+pub(crate) fn deployed_open_paths(conn: &Connection, cfg: &Config, c: &Caller, app: &AppRow, n: i64) -> Result<Option<Value>> {
     let declared = declared_open_paths(conn, &app.id, n)?;
     let approved = approved_open_paths(conn, &app.id)?;
     if declared.is_empty() && approved.is_empty() {

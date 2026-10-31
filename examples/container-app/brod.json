@@ -1,0 +1,5 @@
+{
+  "port": 3000,
+  "health": "/healthz",
+  "open_paths": ["/public/*"]
+}

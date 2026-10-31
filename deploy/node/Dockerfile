@@ -37,17 +37,26 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cp "target/$(cat /triple)/release/brod-node" /brod-node; \
     mkdir -p /state
 
-# glibc and libgcc only: no shell, no package manager. The CA roots are built into the binary.
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
+# The docker CLI and its buildx plugin: the node builds app images with buildx (node/src/work.rs). Both are static Go
+# binaries, copied from the official image.
+FROM docker:29-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb AS docker
+
+# Debian slim rather than distroless: the node runs iptables to keep app containers off private networks and the cloud
+# metadata service (node/src/firewall.rs).
+FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates iptables && rm -rf /var/lib/apt/lists/*
 LABEL org.opencontainers.image.title="Brod node" \
       org.opencontainers.image.description="Runs workloads for Brod. Dials Brod; needs no open port." \
       org.opencontainers.image.source="https://github.com/brodsh/brod" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
+COPY --from=docker /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
 COPY --from=build /brod-node /usr/local/bin/brod-node
 COPY --from=build /state /var/lib/brod-node
 ENV BROD_NODE_DIR=/var/lib/brod-node
 VOLUME /var/lib/brod-node
-# Root: the Docker socket it is given is root's. (Containers come in phase 2; see docs/plans/vnext-multi-node-runtime.md, D4.)
+# Root: the Docker socket it is given is root's, and iptables needs it. App containers never run as root
+# (docs/apps.md, Container apps).
 USER root
 ENTRYPOINT ["/usr/local/bin/brod-node"]
 CMD ["run"]

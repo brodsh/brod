@@ -16,8 +16,12 @@ pub fn arch() -> &'static str {
 
 /// "docker" when the Docker socket is there, else "none". BROD_NODE_DOCKER_SOCKET overrides the path.
 pub fn engine() -> &'static str {
-    let socket = std::env::var("BROD_NODE_DOCKER_SOCKET").unwrap_or_else(|_| "/var/run/docker.sock".into());
-    if Path::new(&socket).exists() { "docker" } else { "none" }
+    if Path::new(&docker_socket()).exists() { "docker" } else { "none" }
+}
+
+/// The Docker socket: BROD_NODE_DOCKER_SOCKET, default /var/run/docker.sock.
+pub fn docker_socket() -> String {
+    std::env::var("BROD_NODE_DOCKER_SOCKET").ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "/var/run/docker.sock".into())
 }
 
 pub fn capabilities() -> Value {

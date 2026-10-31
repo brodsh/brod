@@ -157,39 +157,12 @@ pub async fn dispatch(
     if let Some(p) = st.watchdog.paused(&app.id) {
         return Ok(paused(p.left.as_secs()));
     }
-    let mut headers = HeaderMap::new();
-    for (k, v) in req.headers.iter() {
-        let name = k.as_str();
-        if name.starts_with("x-brod-") || name == "cookie" || name == "content-length" || HOP_BY_HOP.contains(&name) {
-            continue;
-        }
-        headers.append(k.clone(), v.clone());
-    }
-    let cookies: Vec<&str> = req
-        .header("cookie")
-        .unwrap_or("")
-        .split(';')
-        .map(str::trim)
-        .filter(|c| !c.is_empty() && !c.starts_with(&format!("{APP_COOKIE}=")) && !c.starts_with(&format!("__Host-{APP_COOKIE}=")))
-        .collect();
+    let mut headers = forward_headers(&req, identity);
     let set = |h: &mut HeaderMap, k: &str, v: &str| {
         if let (Ok(n), Ok(v)) = (HeaderName::try_from(k), HeaderValue::try_from(v)) {
             h.insert(n, v);
         }
     };
-    if !cookies.is_empty() {
-        set(&mut headers, "cookie", &cookies.join("; "));
-    }
-    if let Some((identity, token)) = identity {
-        let s = |k: &str| identity["user"][k].as_str().unwrap_or("").to_string();
-        set(&mut headers, "x-brod-user-id", &s("id"));
-        set(&mut headers, "x-brod-user-email", &s("email"));
-        set(&mut headers, "x-brod-user-name", &encode_uri_component(&s("name")));
-        set(&mut headers, "x-brod-role", identity["role"].as_str().unwrap_or(""));
-        let groups: Vec<&str> = identity["groups"].as_array().map(|g| g.iter().filter_map(|x| x.as_str()).collect()).unwrap_or_default();
-        set(&mut headers, "x-brod-groups", &groups.join(","));
-        set(&mut headers, "x-brod-identity", &token);
-    }
     let url = format!("{}{}{}", origin, req.path, if req.query.is_empty() { String::new() } else { format!("?{}", req.query) });
     set(&mut headers, "x-brod-runtime-secret", &rt.secret);
     set(&mut headers, "x-brod-runtime-app", &app.id);
@@ -234,8 +207,67 @@ pub async fn dispatch(
         return Ok(failed());
     }
     let status = res.status().as_u16();
+    let (h, html) = answer_headers(app, version, res.headers());
+    let pairs: Vec<(&str, String)> = h.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+    if req.method == Method::HEAD {
+        return Ok(response(status, Body::empty(), &pairs));
+    }
+    if app.access == "public" && html && st.cfg.abuse_checks {
+        let page = read_capped(Body::from_stream(res.bytes_stream()), crate::tar::FILE_BYTES * 2, "The page").await?;
+        return Ok(response(status, bytes_body(crate::gateway::append_to_body(&page, crate::gateway::REPORT_LINK)), &pairs));
+    }
+    // The request stays in flight until its body has been passed on: an app can stall the runtime mid-stream too.
+    let body = res.bytes_stream().inspect(move |_| {
+        let _ = &ticket;
+    });
+    Ok(response(status, Body::from_stream(body), &pairs))
+}
+
+/// The headers an app's server gets for a request (its server code here, or its container): the visitor's, less Brod's
+/// own (x-brod-*), the hop-by-hop ones and Brod's session cookie, plus who is signed in (x-brod-user-*, x-brod-role,
+/// x-brod-groups, and the signed x-brod-identity token) when someone is.
+pub fn forward_headers(req: &Req, identity: Option<(Value, String)>) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    for (k, v) in req.headers.iter() {
+        let name = k.as_str();
+        if name.starts_with("x-brod-") || name == "cookie" || name == "content-length" || HOP_BY_HOP.contains(&name) {
+            continue;
+        }
+        headers.append(k.clone(), v.clone());
+    }
+    let cookies: Vec<&str> = req
+        .header("cookie")
+        .unwrap_or("")
+        .split(';')
+        .map(str::trim)
+        .filter(|c| !c.is_empty() && !c.starts_with(&format!("{APP_COOKIE}=")) && !c.starts_with(&format!("__Host-{APP_COOKIE}=")))
+        .collect();
+    let set = |h: &mut HeaderMap, k: &str, v: &str| {
+        if let (Ok(n), Ok(v)) = (HeaderName::try_from(k), HeaderValue::try_from(v)) {
+            h.insert(n, v);
+        }
+    };
+    if !cookies.is_empty() {
+        set(&mut headers, "cookie", &cookies.join("; "));
+    }
+    if let Some((identity, token)) = identity {
+        let s = |k: &str| identity["user"][k].as_str().unwrap_or("").to_string();
+        set(&mut headers, "x-brod-user-id", &s("id"));
+        set(&mut headers, "x-brod-user-email", &s("email"));
+        set(&mut headers, "x-brod-user-name", &encode_uri_component(&s("name")));
+        set(&mut headers, "x-brod-role", identity["role"].as_str().unwrap_or(""));
+        let groups: Vec<&str> = identity["groups"].as_array().map(|g| g.iter().filter_map(|x| x.as_str()).collect()).unwrap_or_default();
+        set(&mut headers, "x-brod-groups", &groups.join(","));
+        set(&mut headers, "x-brod-identity", &token);
+    }
+    headers
+}
+
+/// The headers of an app server's answer as Brod passes them on, and whether it is a page: hop-by-hop headers go,
+/// x-brod-app and x-brod-version are Brod's, and a private app's answers are never kept by shared caches.
+pub fn answer_headers(app: &AppRow, version: i64, from: &HeaderMap) -> (Vec<(String, String)>, bool) {
     let mut h: Vec<(String, String)> = Vec::new();
-    for (k, v) in res.headers() {
+    for (k, v) in from {
         if HOP_BY_HOP.contains(&k.as_str()) || k.as_str() == "content-length" {
             continue;
         }
@@ -247,8 +279,7 @@ pub async fn dispatch(
     h.retain(|(k, _)| k != "x-brod-app" && k != "x-brod-version");
     h.push(("x-brod-app".into(), app.slug.clone()));
     h.push(("x-brod-version".into(), version.to_string()));
-    let is_public = app.access == "public";
-    if !is_public {
+    if app.access != "public" {
         // A private app's answers are for one person: never let a shared cache keep them.
         let cc = header(&h, "cache-control").unwrap_or_default();
         let has_private = cc.split(|c: char| !c.is_ascii_alphanumeric() && c != '-').any(|w| w == "private" || w == "no-store");
@@ -259,19 +290,7 @@ pub async fn dispatch(
         h.push(("vary".into(), "cookie".into()));
     }
     let html = header(&h, "content-type").is_some_and(|c| c.starts_with("text/html"));
-    let pairs: Vec<(&str, String)> = h.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
-    if req.method == Method::HEAD {
-        return Ok(response(status, Body::empty(), &pairs));
-    }
-    if is_public && html && st.cfg.abuse_checks {
-        let page = read_capped(Body::from_stream(res.bytes_stream()), crate::tar::FILE_BYTES * 2, "The page").await?;
-        return Ok(response(status, bytes_body(crate::gateway::append_to_body(&page, crate::gateway::REPORT_LINK)), &pairs));
-    }
-    // The request stays in flight until its body has been passed on: an app can stall the runtime mid-stream too.
-    let body = res.bytes_stream().inspect(move |_| {
-        let _ = &ticket;
-    });
-    Ok(response(status, Body::from_stream(body), &pairs))
+    (h, html)
 }
 
 /// The page for a request the watchdog stopped (the runtime was restarted under it).

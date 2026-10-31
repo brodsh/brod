@@ -10,7 +10,7 @@ use crate::model::{Caller, js_to_number};
 use crate::people;
 use crate::problem::{Problem, Result};
 use crate::state::State;
-use crate::tar::{self, BUNDLE_BYTES, BundleFile};
+use crate::tar::{self, BUNDLE_BYTES};
 use crate::util::decode_uri_component;
 
 fn created(v: Value) -> Response {
@@ -19,10 +19,31 @@ fn created(v: Value) -> Response {
 
 /// Unpack an uploaded archive and deploy it with the upload address's caller. A refused deploy leaves the address usable.
 async fn deploy_upload(st: &State, id: String, archive: Vec<u8>) -> Result<Response> {
-    let files: Vec<BundleFile> = tokio::task::spawn_blocking(move || tar::unpack(&archive)).await.map_err(Problem::internal)??;
+    // A tar with a Dockerfile at its top is a container app's source (deployments.rs); it may be up to 200 MB.
+    let (archive, container) = tokio::task::spawn_blocking(move || {
+        let container = crate::containers::survey(&archive).ok().flatten().is_some_and(|s| s.dockerfile);
+        (archive, container)
+    })
+    .await
+    .map_err(Problem::internal)?;
+    if !container && archive.len() > BUNDLE_BYTES {
+        return Err(Problem::new(
+            413,
+            "too_large",
+            "The bundle is larger than 25 MB (200 MB for a container app's source with a Dockerfile).",
+        ));
+    }
     let id2 = id.clone();
     let (caller, target) = st.db.call(move |c| control::claim_upload(c, &id2)).await?;
-    match control::deploy(st, &caller, target, files).await {
+    let result = if container {
+        crate::deployments::deploy(st, &caller, target, archive).await
+    } else {
+        match tokio::task::spawn_blocking(move || tar::unpack(&archive)).await.map_err(Problem::internal)? {
+            Ok(files) => control::deploy(st, &caller, target, files).await,
+            Err(e) => Err(e),
+        }
+    };
+    match result {
         Ok(v) => Ok(created(v)),
         Err(e) => {
             st.db.call(move |c| control::release_upload(c, &id)).await?;
@@ -48,10 +69,11 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
     // A one-time upload address is its own credential, so it is checked before sign-in.
     if s(0) == Some("uploads") && s(1).is_some() && s(2).is_none() && m == Method::PUT {
         let declared: u64 = req.header("content-length").and_then(|v| v.trim().parse().ok()).unwrap_or(0);
-        if declared > BUNDLE_BYTES as u64 {
-            return Err(Problem::new(413, "too_large", "The bundle is larger than 25 MB."));
+        let cap = if st.cfg.containers == crate::config::Containers::Off { BUNDLE_BYTES } else { crate::containers::ARCHIVE_BYTES };
+        if declared > cap as u64 {
+            return Err(Problem::new(413, "too_large", format!("The bundle is larger than {} MB.", cap / 1024 / 1024)));
         }
-        let archive = req.bytes(BUNDLE_BYTES, "The bundle").await?;
+        let archive = req.bytes(cap, "The bundle").await?;
         return deploy_upload(st, seg[1].clone(), archive).await;
     }
 
@@ -453,6 +475,20 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
                         let list = req.json_object().await?.get("open_paths").cloned().unwrap_or(Value::Null);
                         return Ok(json(db(Box::new(move |conn, cfg, c| control::set_open_paths(conn, cfg, c, &slug, &list))).await?));
                     }
+                    if action == "deployments" && m == Method::GET {
+                        let id = s(3).map(String::from);
+                        return Ok(json(
+                            db(Box::new(move |conn, _, c| match id {
+                                Some(id) => crate::deployments::get_deployment(conn, c, &slug, Some(&id)),
+                                None => {
+                                    people::require_role(c, "builder", "see app deployments")?;
+                                    let app = control::get_app(conn, c, &slug)?;
+                                    Ok(json!({ "deployments": crate::deployments::recent(conn, &app.id)? }))
+                                }
+                            }))
+                            .await?,
+                        ));
+                    }
                     if action == "access" && m == Method::GET {
                         return Ok(json(
                             db(Box::new(move |conn, _, c| {
@@ -466,7 +502,7 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
                         match action {
                             "rollback" => {
                                 let version = js_to_number(req.json_object().await?.get("version"));
-                                return Ok(json(db(Box::new(move |conn, cfg, c| control::rollback(conn, cfg, c, &slug, version))).await?));
+                                return Ok(json(crate::deployments::rollback(st, &c, &slug, version).await?));
                             }
                             "access" => {
                                 let b: Map<String, Value> = req.json_object().await?;
