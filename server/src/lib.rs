@@ -8,6 +8,7 @@ pub mod admin;
 pub mod analytics;
 pub mod api;
 pub mod app;
+pub mod app_mcp;
 pub mod auth;
 pub mod backups;
 pub mod billing;

@@ -205,3 +205,16 @@ last one hour. Refresh tokens rotate on every use, and reusing an old one discon
 
 A request without a valid token gets `401` with a `WWW-Authenticate` header that points the client at the metadata, as
 the MCP specification describes.
+
+## Apps that are MCP servers
+
+The same OAuth server signs people in to an app's own MCP endpoint ([app MCP](apps.md#app-mcp)). The app declares
+`"mcp": "/api/mcp"` in its `brod.json` and handles that path, reading the caller with `currentUser()` from
+`@brod/auth`. A client is given only `https://<app host>/api/mcp`: it gets `401` there with a pointer to the
+endpoint's protected-resource metadata, registers, and signs the person in at Brod with `resource` set to that address
+(RFC 8707). The consent page names the app and its workspace; nobody who cannot open the app gets that far.
+
+Tokens issued this way work only at that one address and are checked against the app's access on every request. They
+never work on Brod's own `/mcp`, and Brod's own tokens never work at an app. A sign-in without `resource`, or with
+Brod's own `/mcp` as the resource, is a Brod connection exactly as above. `get_auth_integration` explains this to an
+agent writing the app.

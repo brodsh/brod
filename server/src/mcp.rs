@@ -43,7 +43,8 @@ pub fn tools() -> Value {
                 "Inside fetch, env holds the app's secrets (set_secret) plus its own storage: env.DB (SQLite: await env.DB.query(sql, params) returns rows, await env.DB.run(sql, params), ",
                 "await env.DB.batch([{sql, params}]) in one transaction), env.KV (get, put, delete, list; string values) and env.FILES (put(key, body, contentType), get(key) returns a Response or null, delete, list(prefix)). ",
                 "The signed-in person arrives as request headers x-brod-user-id, x-brod-user-email, x-brod-role and x-brod-groups (the platform strips any a visitor sends), plus x-brod-identity, a signed JWT (get_auth_integration explains how to verify it). ",
-                "Apps are private: paths that must work without sign-in (webhooks, an MCP endpoint with its own auth) go in the \"open_paths\" list of a brod.json at the top of the bundle; new ones stay closed until the owner opens the result's confirm_url. ",
+                "Apps are private: paths that must work without sign-in (webhooks) go in the \"open_paths\" list of a brod.json at the top of the bundle; new ones stay closed until the owner opens the result's confirm_url. ",
+                "To give an app its own MCP server, put \"mcp\": \"/api/mcp\" in brod.json and handle that path in the server code: MCP clients connect with just the address and Brod signs the person in, so the handler reads them like any request (never add a token of your own). ",
                 "Never build a login or user table. A version whose server code does not start is refused, and the live version stays. Use get_logs to see console output and errors. ",
                 "STAGING: when you update an app that already has a live version, ask the person first whether to try it on staging before it goes live (recommended) or to publish straight away. ",
                 "Updates to a live app go to staging unless \"environment\" is \"production\": the result's staging_url serves the new version to the app's builders only, while visitors keep the live one. ",
@@ -232,8 +233,8 @@ pub fn tools() -> Value {
         {
             "name": "get_auth_integration", "title": "Identity and access for an app's code",
             "description": concat!("How an app's code learns who is signed in and how to trust it: the identity contract (the x-brod-identity JWT, its claims, the JWKS URL and env vars), ",
-                "how access works (private by default, the gateway signs people in, open paths are anonymous), and a short verification snippet for a framework (the @brod/auth package for Next.js, Node and Workers). ",
-                "Call this before writing code that reads the user, checks roles, or exposes a webhook. Never build a login or user table."),
+                "how access works (private by default, the gateway signs people in, open paths are anonymous, an app's own MCP endpoint is signed in by Brod), and a short verification snippet for a framework (the @brod/auth package for Next.js, Node and Workers). ",
+                "Call this before writing code that reads the user, checks roles, exposes a webhook or serves MCP. Never build a login or user table."),
             "inputSchema": {
                 "type": "object",
                 "properties": {

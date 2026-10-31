@@ -36,6 +36,7 @@ pub const TABLES: &[&str] = &[
     "app_logs",
     "oauth_clients",
     "oauth_codes",
+    "app_tokens",
     "stripe_events",
     "visits",
     "nodes",
