@@ -75,8 +75,9 @@ Use the Streamable HTTP transport at `/mcp` with the header `Authorization: Bear
 | `get_files` | The files of an app's current version (or a named one), to change them. |
 | `get_status` | One app: access, roles, who it is shared with, versions, what is on staging, custom domains, secret names, open paths (approved, open, waiting). |
 | `get_logs` | An app's activity (deploys, access changes, refusals) and, for server apps, recent requests with console output and errors. |
-| `get_deployment` | A [container app](apps.md#container-apps)'s deployment: its state (building, serving, failed) and the last 50 lines of its log. A failed one answers `build_failed` or `deployment_failed`. |
+| `get_deployment` | A [container app](apps.md#container-apps)'s deployment: its state (building, serving, failed) and the last 50 lines of its log. A failed one answers `build_failed`, `migration_failed` or `deployment_failed`. |
 | `set_secret` | Store or remove an encrypted secret the app's server code reads as `env.NAME`. Values cannot be read back. |
+| `restore_database` | Replace a container app's database with one of its backups (the latest by default). Needs a person. |
 | `publish_staging` | Make the version on staging live, or discard it. |
 | `rollback` | Serve an earlier version. Takes effect on the next request. |
 | `set_access` | Change who can open an app: `private`, `people`, `workspace`, `password`, `signed_in` or `public`, and grants by person, group or email domain. |
@@ -85,6 +86,8 @@ Use the Streamable HTTP transport at `/mcp` with the header `Authorization: Bear
 | `set_domain` | Serve an app (or every app, with `*.`) at a custom domain, and check its DNS records. |
 | `set_open_paths` | Replace the list of [open paths](apps.md#open-paths) a person approved for an app. Removing applies at once; adding needs a person. |
 | `get_auth_integration` | How an app proves who a visitor is: the identity JWT, its claims, issuer, audience and JWKS, the access model, and verification snippets. Takes `framework` (`nextjs`, `node`, `python`, `go`, `rust`, `workerd`), `runtime` and `app` (for the exact audience), all optional. |
+| `request_database` | Give a [container app](apps.md#databases) a Postgres database of its own; its next deploy gets `DATABASE_URL`. Calling it again changes nothing. |
+| `backup_database` | Back up a container app's database now. |
 | `get_workspace` | The workspace's groups, default roles and access modes, and how an app reads the signed-in person. |
 
 A read-only connection (OAuth scope `brod:read`, or a token made read-only) sees only `list_apps`, `get_files`,
@@ -172,15 +175,16 @@ next request gets version 1. Nothing is rebuilt.
 
 ## What needs a person
 
-An agent can deploy, roll back, pause, read logs and narrow access on its own. Four kinds of change wait for a person
-to open a `confirm_url` and confirm. They are one list in the code, `control::NEEDS_A_PERSON`:
+An agent can deploy, roll back, pause, read logs, narrow access, create a database and back it up on its own. Five
+kinds of change wait for a person to open a `confirm_url` and confirm. They are one list in the code, `control::NEEDS_A_PERSON`:
 
 - widening access: a more open mode, new grants, or a new password;
 - inviting someone;
 - deleting an app (REST only; there is no MCP tool for it);
 - opening paths that skip sign-in ([open paths](apps.md#open-paths)), from `set_open_paths` or from a deploy whose
   `brod.json` declares paths nobody approved. That deploy still goes live; the new paths stay closed, and the result
-  carries `open_paths.pending` and a `confirm_url`.
+  carries `open_paths.pending` and a `confirm_url`;
+- replacing an app's database with a backup (`restore_database`).
 
 The link expires after 24 hours. Until it is confirmed, nothing changes. A person doing the same thing (in the
 dashboard, or through the REST API with their session) needs no confirmation.
