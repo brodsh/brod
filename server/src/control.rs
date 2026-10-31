@@ -460,6 +460,8 @@ pub fn get_status(conn: &Connection, cfg: &Config, c: &Caller, slug: &str) -> Re
     // Where the app may send data (its brod.json), and what it reached without declaring.
     m.insert("network".into(), crate::network::for_app(conn, cfg, &app)?);
     m.insert("domains".into(), crate::domains::app_domains(conn, cfg, &app)?);
+    // Paths anyone may reach without signing in, and the ones waiting for a person to approve them.
+    m.insert("open_paths".into(), open_paths_of(conn, cfg, &app)?);
     // Who else got its files or deployed it lately: a warning to pass on, never a lock.
     m.extend(editing_notice(conn, c, &app)?);
     Ok(m)
@@ -870,6 +872,7 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFi
     let server = runtime::find_server(&paths)?;
     let settings = crate::settings::from_bundle(&files)?;
     let network = crate::network::from_bundle(&files)?;
+    let declared_open = crate::open_paths::from_bundle(&files)?;
     if let Some(s) = &server {
         runtime::check_server(st, s, &files).await?;
     }
@@ -951,7 +954,7 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFi
                     }
                 }
                 x.run(
-                    "INSERT INTO versions (app_id, n, note, actor, file_count, bytes, created_at, server, scan, settings, network, based_on) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO versions (app_id, n, note, actor, file_count, bytes, created_at, server, scan, settings, network, based_on, open_paths) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     params![
                         app.id,
                         n,
@@ -964,7 +967,8 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFi
                         serde_json::to_string(&scan.reasons)?,
                         settings,
                         network,
-                        base
+                        base,
+                        declared_open
                     ],
                 )?;
                 let from = base.map(|b| format!(" (from v{b})")).unwrap_or_default();
@@ -1003,6 +1007,7 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFi
                 }
             }
             mark_editing(conn, &c2, &app.id, Some(n))?;
+            let open = deployed_open_paths(conn, &cfg, &c2, &app, n)?;
             let mut m = described(conn, &cfg, &c2, &app)?;
             m.insert("version".into(), json!(n));
             m.insert("based_on".into(), json!(base));
@@ -1012,6 +1017,12 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFi
             m.insert("bytes".into(), json!(bytes));
             m.insert("created".into(), json!(created));
             m.insert("kind".into(), json!(kind));
+            if let Some(open) = open {
+                if let Some(url) = open.get("confirm_url") {
+                    m.insert("confirm_url".into(), url.clone());
+                }
+                m.insert("open_paths".into(), open);
+            }
             if staging {
                 let url = staging_url(&cfg, &c2.workspace.slug, &app.slug);
                 m.insert("staging_url".into(), json!(url));
@@ -1333,6 +1344,22 @@ pub fn release_upload(conn: &Connection, id: &str) -> Result<()> {
 
 // ---------- confirmations ----------
 
+/// What an agent may not do on its own: each of these, asked for with an agent's token, changes nothing and returns a
+/// confirm_url for a person to open (needs_confirmation). A person signed in to Brod makes the same change directly.
+/// The other direction never waits: narrowing access, removing grants or open paths applies at once. The key is the
+/// confirmation's kind. docs/security.md and docs/mcp.md ("What needs a person") list the same.
+pub const NEEDS_A_PERSON: [(&str, &str); 4] = [
+    ("access", "widening who can open an app: a more open access mode, new grants, or a new password (set_access)"),
+    ("invite", "inviting someone into the workspace or to an app (invite)"),
+    ("delete", "deleting an app with all its versions and data (delete_app)"),
+    ("open_paths", "opening paths of an app to anyone without sign-in (open_paths in brod.json on deploy_app, set_open_paths)"),
+];
+
+/// Whether this caller must get a person to confirm an action of this kind.
+pub fn needs_a_person(c: &Caller, kind: &str) -> bool {
+    c.agent && NEEDS_A_PERSON.iter().any(|(k, _)| *k == kind)
+}
+
 /// An agent asked for a change a person must confirm. Nothing changes until they do.
 fn needs_confirmation(
     conn: &Connection,
@@ -1343,6 +1370,9 @@ fn needs_confirmation(
     payload: &Value,
     summary: &str,
 ) -> Result<Value> {
+    if !NEEDS_A_PERSON.iter().any(|(k, _)| *k == kind) {
+        return Err(Problem::internal(format!("a confirmation of a kind the policy does not list: {kind}")));
+    }
     let id = random_id("cf_", 16);
     let app_id = app.map(|a| a.id.clone());
     tx(conn, |x| {
@@ -1434,6 +1464,11 @@ pub async fn confirm(st: &State, user: &User, id: &str) -> Result<Value> {
         }
         "invite" => invite(st, &c, payload).await,
         "delete" => delete_app(st, &c, &slug).await,
+        "open_paths" => {
+            let (c, cfg) = (c.clone(), st.cfg.clone());
+            let add = payload.get("add").cloned().unwrap_or(json!([]));
+            st.db.call(move |conn| approve_open_paths(conn, &cfg, &c, &slug, &add)).await
+        }
         _ => return Err(Problem::new(400, "bad_confirmation", "Unknown request.")),
     };
     if result.is_err() {
@@ -1442,6 +1477,153 @@ pub async fn confirm(st: &State, user: &User, id: &str) -> Result<Value> {
         st.db.call(move |conn| conn.run("UPDATE confirmations SET done_at = NULL, done_by = NULL WHERE id = ?", [id]).map(|_| ())).await?;
     }
     result
+}
+
+// ---------- open paths ----------
+
+fn approved_open_paths(conn: &Connection, app_id: &str) -> Result<Vec<crate::open_paths::OpenPath>> {
+    let stored: Option<String> = conn.first("SELECT open_paths FROM apps WHERE id = ?", [app_id], |r| r.get(0))?;
+    Ok(crate::open_paths::parse(stored.as_deref()))
+}
+
+fn declared_open_paths(conn: &Connection, app_id: &str, n: i64) -> Result<Vec<crate::open_paths::OpenPath>> {
+    let stored: Option<String> =
+        conn.first("SELECT open_paths FROM versions WHERE app_id = ? AND n = ?", params![app_id, n], |r| r.get(0))?.flatten();
+    Ok(crate::open_paths::parse(stored.as_deref()))
+}
+
+fn path_list(list: &[crate::open_paths::OpenPath]) -> Value {
+    Value::Array(list.iter().map(crate::open_paths::OpenPath::to_json).collect())
+}
+
+fn labels(list: &[crate::open_paths::OpenPath]) -> String {
+    list.iter().map(|e| e.label()).collect::<Vec<_>>().join(", ")
+}
+
+/// Refuse opening paths of an app to anyone where opening the app itself to anyone would be refused.
+fn check_may_open(conn: &Connection, cfg: &Config, c: &Caller, app: &AppRow) -> Result<()> {
+    abuse::check_up(conn, app)?;
+    if cfg.abuse_checks {
+        abuse::check_can_open_outside(conn, c, "public")?;
+    }
+    abuse::check_not_flagged(conn, app, "public")
+}
+
+/// Add approved open paths: what a person confirmed, or what a person asked for directly.
+fn approve_open_paths(conn: &Connection, cfg: &Config, c: &Caller, slug: &str, add: &Value) -> Result<Value> {
+    require_role(c, "builder", "change an app's open paths")?;
+    let app = get_app(conn, c, slug)?;
+    let add = crate::open_paths::parse_list(add, "\"open_paths\"")?;
+    let approved = approved_open_paths(conn, &app.id)?;
+    let new = crate::open_paths::uncovered(&approved, &add);
+    if !new.is_empty() {
+        check_may_open(conn, cfg, c, &app)?;
+        let all = crate::open_paths::union(&approved, &new)?;
+        tx(conn, |x| {
+            x.run("UPDATE apps SET open_paths = ? WHERE id = ?", params![crate::open_paths::to_json(&all), app.id])?;
+            event(x, &c.workspace.id, &c.actor, Some(&app.id), "open_paths", &format!("opened {} without sign-in", labels(&new)))
+        })?;
+    }
+    Ok(json!({ "app": app.slug, "open_paths": open_paths_of(conn, cfg, &app)? }))
+}
+
+/// After a deploy: approve the new version's undeclared-before open paths when a person deployed it, or ask a person
+/// to when an agent did. None when the version declares no open paths and the app has none approved.
+fn deployed_open_paths(conn: &Connection, cfg: &Config, c: &Caller, app: &AppRow, n: i64) -> Result<Option<Value>> {
+    let declared = declared_open_paths(conn, &app.id, n)?;
+    let approved = approved_open_paths(conn, &app.id)?;
+    if declared.is_empty() && approved.is_empty() {
+        return Ok(None);
+    }
+    let pending = crate::open_paths::uncovered(&approved, &declared);
+    if pending.is_empty() {
+        let open = crate::open_paths::effective(&approved, &declared);
+        return Ok(Some(json!({ "declared": path_list(&declared), "open": path_list(&open), "approved": path_list(&approved) })));
+    }
+    if !needs_a_person(c, "open_paths") {
+        // A person deploying approves what their own version declares, unless the app may not be opened that far.
+        let approved = match approve_open_paths(conn, cfg, c, &app.slug, &path_list(&pending)) {
+            Ok(_) => approved_open_paths(conn, &app.id)?,
+            Err(e) if !e.is_internal() => {
+                let open = crate::open_paths::effective(&approved, &declared);
+                return Ok(Some(json!({
+                    "declared": path_list(&declared), "open": path_list(&open), "approved": path_list(&approved), "pending": path_list(&pending),
+                    "message": format!("{} stay closed: {}", labels(&pending), e.message),
+                })));
+            }
+            Err(e) => return Err(e),
+        };
+        let open = crate::open_paths::effective(&approved, &declared);
+        return Ok(Some(json!({ "declared": path_list(&declared), "open": path_list(&open), "approved": path_list(&approved) })));
+    }
+    let summary = format!("Open {} on {} to anyone, without sign-in", labels(&pending), app.slug);
+    let asked = needs_confirmation(conn, cfg, c, Some(app), "open_paths", &json!({ "add": path_list(&pending) }), &summary)?;
+    let open = crate::open_paths::effective(&approved, &declared);
+    Ok(Some(json!({
+        "declared": path_list(&declared), "open": path_list(&open), "approved": path_list(&approved), "pending": path_list(&pending),
+        "needs_confirmation": true, "confirm_url": asked["confirm_url"],
+        "message": format!(
+            "v{n} is deployed, but its new open paths ({}) stay closed until the owner confirms: give them confirm_url. Until then those paths ask visitors to sign in like the rest of the app. It expires in 24 hours.",
+            labels(&pending)
+        ),
+    })))
+}
+
+/// An app's open paths for get_status: what is approved, what the live and staging versions declare and actually open,
+/// and the requests waiting for a person.
+pub fn open_paths_of(conn: &Connection, cfg: &Config, app: &AppRow) -> Result<Value> {
+    let approved = approved_open_paths(conn, &app.id)?;
+    let version = |n: Option<i64>| -> Result<Value> {
+        let Some(n) = n else { return Ok(Value::Null) };
+        let declared = declared_open_paths(conn, &app.id, n)?;
+        let open = crate::open_paths::effective(&approved, &declared);
+        let pending = crate::open_paths::uncovered(&approved, &declared);
+        Ok(json!({ "version": n, "declared": path_list(&declared), "open": path_list(&open), "not_approved": path_list(&pending) }))
+    };
+    let waiting = conn.all(
+        "SELECT id, payload, expires_at FROM confirmations WHERE app_id = ? AND kind = 'open_paths' AND done_at IS NULL AND expires_at > ? ORDER BY created_at",
+        params![app.id, now()],
+        |r| {
+            let payload: Value = serde_json::from_str(&r.get::<_, String>(1)?).unwrap_or(Value::Null);
+            Ok(json!({ "paths": payload["add"], "confirm_url": format!("{}/confirm/{}", cfg.api_origin, r.get::<_, String>(0)?), "expires_at": iso(r.get(2)?) }))
+        },
+    )?;
+    Ok(json!({
+        "approved": path_list(&approved),
+        "live": version(app.live_version)?,
+        "staging": version(app.staging_version)?,
+        "awaiting_confirmation": waiting,
+    }))
+}
+
+/// Set an app's approved open paths to `list`. Narrowing (dropping entries, or a narrower path or fewer methods) applies
+/// at once; whatever it would newly open waits for a person when an agent asks (NEEDS_A_PERSON).
+pub fn set_open_paths(conn: &Connection, cfg: &Config, c: &Caller, slug: &str, list: &Value) -> Result<Value> {
+    require_role(c, "builder", "change an app's open paths")?;
+    let app = get_app(conn, c, slug)?;
+    let wanted = crate::open_paths::parse_list(list, "\"open_paths\"")?;
+    let approved = approved_open_paths(conn, &app.id)?;
+    let (kept, added): (Vec<_>, Vec<_>) = wanted.into_iter().partition(|w| approved.iter().any(|a| a.covers(w)));
+    if kept != approved {
+        let closed: Vec<_> = approved.iter().filter(|a| !kept.contains(a)).cloned().collect();
+        tx(conn, |x| {
+            x.run("UPDATE apps SET open_paths = ? WHERE id = ?", params![crate::open_paths::to_json(&kept), app.id])?;
+            let what = if closed.is_empty() { "narrowed open paths".to_string() } else { format!("closed {}", labels(&closed)) };
+            event(x, &c.workspace.id, &c.actor, Some(&app.id), "open_paths", &what)
+        })?;
+    }
+    if added.is_empty() {
+        return Ok(json!({ "app": app.slug, "open_paths": open_paths_of(conn, cfg, &app)? }));
+    }
+    if needs_a_person(c, "open_paths") {
+        check_may_open(conn, cfg, c, &app)?;
+        crate::open_paths::union(&kept, &added)?;
+        let summary = format!("Open {} on {} to anyone, without sign-in", labels(&added), app.slug);
+        let mut out = needs_confirmation(conn, cfg, c, Some(&app), "open_paths", &json!({ "add": path_list(&added) }), &summary)?;
+        out["open_paths"] = open_paths_of(conn, cfg, &app)?;
+        return Ok(out);
+    }
+    approve_open_paths(conn, cfg, c, &app.slug, &path_list(&added))
 }
 
 // ---------- changing an app ----------
@@ -1675,7 +1857,7 @@ pub fn set_access(
         }
         abuse::check_not_flagged(conn, &app, &access)?;
     }
-    if c.agent && widening {
+    if widening && needs_a_person(c, "access") {
         let mut parts = Vec::new();
         if access != app.access {
             let how = if access == "password" { " (anyone with the address and the password can open it)" } else { "" };
@@ -1810,7 +1992,7 @@ pub async fn delete_app(st: &State, c: &Caller, slug: &str) -> Result<Value> {
             require_role(&c2, "builder", "delete apps")?;
             let app = get_app(conn, &c2, &s)?;
             abuse::check_up(conn, &app)?; // a taken-down app is kept for the Brod team's review
-            if c2.agent {
+            if needs_a_person(&c2, "delete") {
                 let summary = format!("Delete {}, all its versions, and its data", app.slug);
                 return Ok((app.clone(), Some(needs_confirmation(conn, &cfg, &c2, Some(&app), "delete", &json!({}), &summary)?)));
             }
@@ -1869,7 +2051,7 @@ pub async fn invite(st: &State, c: &Caller, o: Map<String, Value>) -> Result<Val
 
 /// Invite someone. From an agent this waits for a person to confirm, because it widens who can get in.
 pub async fn invite_from(st: &State, c: &Caller, o: Map<String, Value>) -> Result<Value> {
-    if !c.agent {
+    if !needs_a_person(c, "invite") {
         return invite(st, c, o).await;
     }
     let (c2, cfg) = (c.clone(), st.cfg.clone());
@@ -1984,6 +2166,62 @@ mod tests {
         let workspace = conn.first("SELECT * FROM workspaces WHERE id = 'ws_t'", (), Workspace::from_row).unwrap().unwrap();
         let user = User { id: "usr_t".into(), email: "b@tok.test".into(), name: "B".into(), email_verified_at: None };
         Caller { workspace, user, role: "builder".into(), actor: "b@tok.test".into(), agent: false, read_only: false }
+    }
+
+    #[test]
+    fn the_approval_policy_names_what_needs_a_person() {
+        let kinds: Vec<&str> = NEEDS_A_PERSON.iter().map(|(k, _)| *k).collect();
+        assert_eq!(kinds, ["access", "invite", "delete", "open_paths"]);
+        let db = crate::db::test_db();
+        let mut c = tokio::runtime::Runtime::new().unwrap().block_on(db.call(|conn| Ok(builder(conn)))).unwrap();
+        assert!(!needs_a_person(&c, "open_paths"), "a person never waits for themselves");
+        c.agent = true;
+        assert!(kinds.iter().all(|k| needs_a_person(&c, k)));
+        assert!(!needs_a_person(&c, "rollback"));
+    }
+
+    #[tokio::test]
+    async fn open_paths_narrow_at_once_and_widen_only_with_a_person() {
+        let db = crate::db::test_db();
+        db.call(|conn| {
+            let cfg = Config::for_tests();
+            let person = builder(conn);
+            conn.run(
+                "INSERT INTO apps (id, workspace_id, owner_id, slug, name, created_at, live_version) VALUES ('app_o','ws_t','usr_t','hooks','Hooks',1,1)",
+                (),
+            )?;
+            conn.run(
+                "INSERT INTO versions (app_id, n, note, actor, file_count, bytes, created_at, open_paths) VALUES ('app_o',1,'','t',1,1,1,?)",
+                [r#"["/api/webhooks/*",{"path":"/api/mcp","methods":["POST"]}]"#],
+            )?;
+            let mut agent = person.clone();
+            agent.agent = true;
+            agent.actor = "claude".into();
+            // An agent asking to open paths gets a confirm_url; nothing opens.
+            let asked = set_open_paths(conn, &cfg, &agent, "hooks", &json!(["/api/webhooks/*"]))?;
+            assert_eq!(asked["needs_confirmation"], true);
+            assert!(asked["confirm_url"].as_str().unwrap().contains("/confirm/cf_"));
+            assert_eq!(asked["open_paths"]["approved"], json!([]));
+            assert_eq!(asked["open_paths"]["live"]["open"], json!([]));
+            assert_eq!(asked["open_paths"]["awaiting_confirmation"][0]["paths"], json!(["/api/webhooks/*"]));
+            // What a person approves opens, but only as far as the live version declares it.
+            let done = approve_open_paths(conn, &cfg, &person, "hooks", &json!(["/api/webhooks/*", "/admin"]))?;
+            assert_eq!(done["open_paths"]["approved"], json!(["/api/webhooks/*", "/admin"]));
+            assert_eq!(done["open_paths"]["live"]["open"], json!(["/api/webhooks/*"]));
+            assert_eq!(done["open_paths"]["live"]["not_approved"], json!([{ "path": "/api/mcp", "methods": ["POST"] }]));
+            // Narrowing by an agent applies at once, with no confirmation.
+            let narrowed = set_open_paths(conn, &cfg, &agent, "hooks", &json!(["/api/webhooks/stripe"]))?;
+            assert!(narrowed.get("needs_confirmation").is_none());
+            assert_eq!(narrowed["open_paths"]["approved"], json!(["/api/webhooks/stripe"]));
+            // Widening again (a prefix where an exact path was) waits; the narrowing part still applies.
+            let wider = set_open_paths(conn, &cfg, &agent, "hooks", &json!(["/api/webhooks/*"]))?;
+            assert_eq!(wider["needs_confirmation"], true);
+            assert_eq!(wider["open_paths"]["approved"], json!([]));
+            assert_eq!(set_open_paths(conn, &cfg, &agent, "hooks", &json!(["/*"])).unwrap_err().code, "bad_open_paths");
+            Ok(())
+        })
+        .await
+        .unwrap();
     }
 
     #[test]

@@ -437,6 +437,19 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
                         let name = one(s(3));
                         return Ok(json(db(Box::new(move |conn, cfg, c| control::set_secret(conn, cfg, c, &slug, &name, None))).await?));
                     }
+                    if action == "open-paths" && s(3).is_none() && m == Method::GET {
+                        return Ok(json(
+                            db(Box::new(move |conn, cfg, c| {
+                                let app = control::get_app(conn, c, &slug)?;
+                                Ok(json!({ "app": app.slug, "open_paths": control::open_paths_of(conn, cfg, &app)? }))
+                            }))
+                            .await?,
+                        ));
+                    }
+                    if action == "open-paths" && s(3).is_none() && (m == Method::PUT || m == Method::POST) {
+                        let list = req.json_object().await?.get("open_paths").cloned().unwrap_or(Value::Null);
+                        return Ok(json(db(Box::new(move |conn, cfg, c| control::set_open_paths(conn, cfg, c, &slug, &list))).await?));
+                    }
                     if action == "access" && m == Method::GET {
                         return Ok(json(
                             db(Box::new(move |conn, _, c| {
