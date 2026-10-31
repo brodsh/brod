@@ -39,7 +39,7 @@ pub struct Spec {
     /// are not undone by a rollback.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub migrate: Option<String>,
-    /// The image's manifest digest in Brod's registry (apps/<app id>@<digest>), once pushed.
+    /// The image's manifest digest in Brod's registry (`apps/<app id>@<digest>`), once pushed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
     /// The image id (its config digest), which is what a node loads and runs.

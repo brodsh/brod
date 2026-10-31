@@ -17,7 +17,7 @@ concurrency:
 jobs:
   # Node unit tests (the preview service's address guard, deploy/preview/guard.mjs), and the generated config docs.
   node:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -33,7 +33,7 @@ jobs:
   # The @brod/auth identity SDK (sdk/js): typecheck, unit tests and the ESM + CommonJS builds, on the oldest and the
   # current supported Node. Never published from CI. The interop test against a real Brod runs in the rust job.
   sdk:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     strategy:
       matrix:
@@ -60,7 +60,7 @@ jobs:
 
   # No secret anywhere in the history (.gitleaks.toml allows only the tests' placeholder values).
   secrets:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -77,7 +77,7 @@ jobs:
   # Dependency policy (deny.toml): licenses compatible with AGPL-3.0, no known advisories, crates.io only; then
   # cargo audit against the same RustSec database.
   dependencies:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -101,7 +101,7 @@ jobs:
   # The Rust server (server/): format, lints, unit tests, the end-to-end suite with server apps on
   # the workerd runtime and without it, and the Docker images (built only, never pushed).
   rust:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -205,7 +205,7 @@ jobs:
   # The Rust server with its database in Postgres (BROD_DATABASE_URL): the unit tests, the SQLite-to-Postgres copy,
   # and the same end-to-end suite.
   rust-postgres:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     services:
       postgres:
