@@ -298,7 +298,7 @@ func User(r *http.Request, keys map[string]ed25519.PublicKey) (jwt.MapClaims, er
 }"#,
         ),
         "rust" => plain(
-            "cargo add jsonwebtoken serde_json",
+            "cargo add jsonwebtoken --features rust_crypto && cargo add serde_json",
             r#"use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header, jwk::JwkSet};
 
 /// The signed-in person's claims, or None for an anonymous request (an open path, or a public app).
