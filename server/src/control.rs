@@ -1555,7 +1555,7 @@ fn approve_open_paths(conn: &Connection, cfg: &Config, c: &Caller, slug: &str, a
 
 /// After a deploy: approve the new version's undeclared-before open paths when a person deployed it, or ask a person
 /// to when an agent did. None when the version declares no open paths and the app has none approved.
-fn deployed_open_paths(conn: &Connection, cfg: &Config, c: &Caller, app: &AppRow, n: i64) -> Result<Option<Value>> {
+pub(crate) fn deployed_open_paths(conn: &Connection, cfg: &Config, c: &Caller, app: &AppRow, n: i64) -> Result<Option<Value>> {
     let declared = declared_open_paths(conn, &app.id, n)?;
     let approved = approved_open_paths(conn, &app.id)?;
     if declared.is_empty() && approved.is_empty() {

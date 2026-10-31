@@ -224,14 +224,17 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, archive: Vec<u8>) -
     std::fs::create_dir_all(&dir).map_err(Problem::internal)?;
     let context = dir.join(format!("{id}.tar"));
     let ctx_path = context.clone();
-    let (spec, ctx) = tokio::task::spawn_blocking(move || -> Result<(Spec, containers::Context)> {
+    let (spec, ctx, declared_open) = tokio::task::spawn_blocking(move || -> Result<(Spec, containers::Context, Option<String>)> {
         let survey = containers::survey(&archive)?
             .filter(|s| s.dockerfile)
             .ok_or_else(|| Problem::new(400, "bad_container", "A container app's source needs a Dockerfile at the top of the archive."))?;
         let spec = containers::spec_of(survey.manifest.as_deref(), options.as_ref())?;
+        // brod.json's open_paths work as for any app (open_paths.rs).
+        let manifest = survey.manifest.clone().map(|bytes| crate::tar::BundleFile { path: crate::settings::MANIFEST.to_string(), bytes });
+        let declared_open = crate::open_paths::from_bundle(manifest.as_slice())?;
         let ignore = containers::Ignore::parse(survey.dockerignore.as_deref().unwrap_or(""));
         let ctx = containers::write_context(&archive, &ignore, &ctx_path)?;
-        Ok((spec, ctx))
+        Ok((spec, ctx, declared_open))
     })
     .await
     .map_err(Problem::internal)?
@@ -266,8 +269,8 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, archive: Vec<u8>) -
             let environment = if staging { "staging" } else { "live" };
             tx(conn, |x| {
                 x.run(
-                    "INSERT INTO versions (app_id, n, note, actor, file_count, bytes, created_at, scan, based_on, runtime, spec) VALUES (?,?,?,?,?,?,?,'[]',?,'container',?)",
-                    params![app.id, n, note, c2.actor, ctx.files as i64, ctx.bytes as i64, now(), base, spec2.to_json()],
+                    "INSERT INTO versions (app_id, n, note, actor, file_count, bytes, created_at, scan, based_on, runtime, spec, open_paths) VALUES (?,?,?,?,?,?,?,'[]',?,'container',?,?)",
+                    params![app.id, n, note, c2.actor, ctx.files as i64, ctx.bytes as i64, now(), base, spec2.to_json(), declared_open],
                 )?;
                 x.run(
                     "INSERT INTO deployments (id, app_id, version, environment, node_id, state, cpu, memory_mb, actor, created_at, updated_at) VALUES (?,?,?,?,?,'scheduled',?,?,?,?,?)",
@@ -278,7 +281,14 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, archive: Vec<u8>) -
                 Ok(())
             })?;
             control::mark_editing(conn, &c2, &app.id, Some(n))?;
+            let open = control::deployed_open_paths(conn, &cfg, &c2, &app, n)?;
             let mut m = control::described(conn, &cfg, &c2, &app)?;
+            if let Some(open) = open {
+                if let Some(url) = open.get("confirm_url") {
+                    m.insert("confirm_url".into(), url.clone());
+                }
+                m.insert("open_paths".into(), open);
+            }
             m.insert("version".into(), json!(n));
             m.insert("based_on".into(), json!(base));
             m.extend(control::editing_notice(conn, &c2, &app)?);
