@@ -45,11 +45,56 @@ An app reads the signed-in person from its own address:
 - `Brod.me()` reads `GET /_brod/me`. Without a signed-in person it answers `401` with the error code `signed_out`, and
   `Brod.me()` returns `null`.
 - `Brod.signIn()` and `Brod.signOut()` send the person to sign in or out (`/_brod/signin`, `/_brod/signout`).
-- `token` is the same identity signed with a key for this app: base64url JSON, a dot, and an HMAC-SHA256 signature.
-  It is valid for 5 minutes. Pass it to a server that needs proof of who the person is.
+- `token` is the same identity as a signed JWT for this app, valid for 5 minutes. Pass it to a server that needs proof
+  of who the person is. See [Verifying the identity token](#verifying-the-identity-token).
 - Server apps get the same identity as request headers. See [Server apps](#server-apps).
 
 Do not build a login page or a user table. Brod signs people in and decides who may open the app.
+
+### Verifying the identity token
+
+The token in `/_brod/me` and in the `x-brod-identity` header is a compact JWT signed with Ed25519
+(`server/src/identity.rs`). Anything can verify it with the server's public keys; nothing but Brod can make one.
+
+- **Header.** `{ "alg": "EdDSA", "typ": "JWT", "kid": "<key id>" }`. The key id is the key's RFC 7638 thumbprint.
+- **Claims.**
+
+  | Claim | Value |
+  | --- | --- |
+  | `iss` | The server's public address (`BROD_PUBLIC_URL`), e.g. `https://brod.example.com` |
+  | `aud` | `brod:app:<app id>`. A token for one app is refused by another. |
+  | `sub` | The person's user id |
+  | `email`, `name` | The person |
+  | `workspace` | `{ "id", "slug" }` |
+  | `role`, `groups` | The person's role in this app and their groups |
+  | `iat`, `exp` | Issued at and expiry, in seconds. `exp` is `iat + 300`. |
+  | `jti` | A random id, different on every token |
+
+- **Keys.** `GET <issuer>/.well-known/jwks.json` answers a JWKS with one `OKP` / `Ed25519` key. Fetch it once and
+  cache it; refetch when a token names a `kid` you do not have.
+- **Server code learns the values from its environment.** Server apps get `env.BROD_ISSUER`, `env.BROD_APP_ID` and
+  `env.BROD_IDENTITY_JWKS` (the JWKS as a JSON string), so they can verify without a network call. The audience is
+  `brod:app:` followed by `env.BROD_APP_ID`.
+
+To verify one: split it on `.`, base64url-decode the header and check `alg` is `EdDSA`, find the key with that `kid`
+in the JWKS, verify the Ed25519 signature over `<header>.<payload>` with the key's `x` (32 bytes, base64url), then
+check `iss`, `aud` and `exp`. With `jose` in Node:
+
+```js
+import { createRemoteJWKSet, jwtVerify } from 'jose';
+const jwks = createRemoteJWKSet(new URL('https://brod.example.com/.well-known/jwks.json'));
+const { payload } = await jwtVerify(token, jwks, {
+  issuer: 'https://brod.example.com',
+  audience: 'brod:app:app_…',
+  algorithms: ['EdDSA'],
+});
+```
+
+Agents can ask the `get_auth_integration` tool for this contract and ready-made snippets for Next.js, Node, Python,
+Go, Rust and workerd. A `@brod/auth` package that wraps it is planned.
+
+The signing key is `IDENTITY_SIGNING_KEY`. A self-hosted server generates one on first start; a hosted server refuses
+to start without one. Changing it invalidates tokens already handed out, which matters little at five minutes.
 
 ## Server apps
 
@@ -85,8 +130,9 @@ effect on the next request. Each app gets its own SQLite database on the sidecar
   the extensions `.html`, `.css`, `.txt`, `.md`, `.sql`, `.svg` and `.csv` import as strings.
 - **Identity.** Access is decided before the request reaches the app. The person arrives as `x-brod-user-id`,
   `x-brod-user-email`, `x-brod-user-name` (URI-encoded), `x-brod-role`, `x-brod-groups` (comma-separated) and
-  `x-brod-identity` (the signed token). The gateway strips any `x-brod-*` header a visitor sends, and the app's session
-  cookie.
+  `x-brod-identity` (the signed JWT, see [Verifying the identity token](#verifying-the-identity-token)). The gateway
+  strips any `x-brod-*` header a visitor sends, and the app's session cookie. Requests to an
+  [open path](#open-paths) carry none of these.
 - **Storage, one set per app.** No app can reach another app's storage.
   - `env.DB` is the app's own SQLite database. `query(sql, params)` returns rows, `run(sql, params)` returns
     `{ changes }`, and `batch([{ sql, params }])` runs the statements in one transaction.
@@ -362,6 +408,50 @@ the app may only talk to its own address. The list is checked at deploy (`400 ba
   server's policy, and every undeclared host the app reached or tried to, from its server code or a browser, with
   counts and whether it was blocked. Only the app's own workspace sees this.
 
+## Open paths
+
+Some routes must answer callers who cannot sign in: a payment provider's webhook, an MCP endpoint with its own tokens,
+a health check. An app lists them as `open_paths` in its `brod.json` (`server/src/open_paths.rs`):
+
+```json
+{
+  "open_paths": [
+    "/api/webhooks/*",
+    { "path": "/api/mcp", "methods": ["POST"] }
+  ]
+}
+```
+
+- **Entries.** A string or `{ "path", "methods" }`. At most 10. A path is exact (`/api/mcp` matches only
+  `/api/mcp`, not `/api/mcpx` or `/api/mcp/x`), or ends in `/*` to cover everything below it
+  (`/api/webhooks/*` matches `/api/webhooks` and `/api/webhooks/stripe`, not `/api/webhooksx`). Paths are
+  case-sensitive and up to 200 characters. `GET` also allows `HEAD`. Without `methods`, every method is open.
+- **Refused patterns.** `/`, `/*`, a `*` anywhere but a trailing `/*`, `..` or `.` segments, `//`, `%` (no encoded
+  characters), and anything under `/_brod`. A bad list refuses the deploy with `400 bad_open_paths`.
+- **Matching.** The gateway decodes the request path once and refuses to match a path with an encoded slash or
+  backslash, a `..` segment, or one that changes on a second decode. It collapses `//`. The app receives the same
+  normalised path that matched. So `/api/mcp/../admin`, `/api%2fmcp` and `//api/mcp` never open `/admin` or
+  `/api/mcp`.
+- **What an open path skips.** Sign-in and the access mode. The request reaches the app with no identity: every
+  `x-brod-*` header and the session cookie are stripped, and `/_brod/me` is not open. Takedowns, suspension and
+  pausing still apply. Open paths work for static files and server code, on the app's address and on its staging
+  address.
+
+**Approval.** An open path makes part of an app public, so it needs a person ([mcp.md](mcp.md#what-needs-a-person)).
+
+- When an agent deploys a `brod.json` with paths nobody approved, the deploy still goes live, but those paths stay
+  closed: they get the app's usual access check, as every other path does. The result has `open_paths.pending` and a `confirm_url`. A person
+  in the workspace opens it and confirms.
+- When a person deploys (the dashboard, a CLI or REST call with their session), the declared paths are approved,
+  unless the [new-workspace hold](#access) refuses making the app public yet.
+- An approval is kept per app. A path is open when the served version declares it and an approved entry covers it,
+  so removing a path from `brod.json` closes it at the next deploy, and a later version may declare it again without
+  another confirmation.
+- `set_open_paths` (or `PUT /v1/apps/<slug>/open-paths`) replaces the approved list. Removing entries applies at once;
+  adding them asks for a confirmation when an agent does it.
+- `get_status` shows `open_paths`: what is approved, what the live and staging versions declare, what is open and what
+  waits for a confirmation.
+
 ## Limits
 
 | What | Limit |
@@ -376,6 +466,7 @@ the app may only talk to its own address. The list is checked at deploy (`400 ba
 | Server app logs | kept 7 days; `get_logs` shows the last 50 requests |
 | Settings | 30 per app; images up to 1 MB |
 | Outside hosts | 30 per app |
+| Open paths | 10 per app, 200 characters each |
 | Custom domains | 50 per workspace |
 
 Plans differ by mode. On a self-hosted server there are no plans: no limit on running apps, people or storage. On a

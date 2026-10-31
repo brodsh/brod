@@ -42,9 +42,21 @@ header equal to `BROD_PUBLIC_URL`. Platform pages send `X-Frame-Options: DENY`.
 Agent tokens can expire and can be read-only. OAuth access tokens last an hour; refresh tokens rotate on each use,
 and reusing the previous one disconnects the client.
 
-**Agents acting beyond what a person intended.** An agent can deploy and narrow access on its own. Widening access,
-inviting someone and deleting an app wait until a person opens a confirmation link ([docs/mcp.md](mcp.md#what-needs-a-person)).
+**Agents acting beyond what a person intended.** An agent can deploy and narrow access on its own. Four things wait
+until a person opens a confirmation link: widening access, inviting someone, deleting an app, and opening paths that
+skip sign-in ([docs/mcp.md](mcp.md#what-needs-a-person)). They are one list in the code (`control::NEEDS_A_PERSON`).
+An agent deploy that declares new open paths still goes live, with those paths closed until a person confirms.
 Updates to a live app go to a staging address first unless the agent is told otherwise.
+
+**Forged identities.** Apps learn who a visitor is from the `x-brod-*` headers, which the gateway sets after stripping
+any a visitor sent, and from an Ed25519-signed JWT (`x-brod-identity`, `/_brod/me`) that names one app as its
+audience and lasts five minutes. Anything can verify it against `/.well-known/jwks.json`; only the holder of
+`IDENTITY_SIGNING_KEY` can make one.
+
+**Open paths used as a way around sign-in.** Paths an app opens ([docs/apps.md](apps.md#open-paths)) are exact or a
+`/*` prefix, never `/` or everything. Requests with encoded slashes, dot segments or double encoding never match, and
+the app receives the same normalised path that matched, so `/api/mcp/../admin` cannot reach `/admin`. Open-path
+requests carry no identity, no session cookie and no `x-brod-*` header.
 
 **Guessing and flooding.** Rate limits, kept in the database:
 
@@ -62,8 +74,8 @@ Updates to a live app go to a staging address first unless the agent is told oth
 size (10 MB) and total size (60 MB unpacked). Files are served with a `Content-Type` from their extension and
 `X-Content-Type-Options: nosniff`.
 
-**Weak configuration.** In hosted mode Brod refuses to start without `SECRETS_KEY`, or with a secret shorter than 32
-characters or one of the example values from its own docs. In self-hosted mode it generates any secret that is not set
+**Weak configuration.** In hosted mode Brod refuses to start without `SECRETS_KEY` or `IDENTITY_SIGNING_KEY`, or with a
+secret shorter than 32 characters or one of the example values from its own docs. In self-hosted mode it generates any secret that is not set
 and warns about weak ones.
 
 **The sidecars.** The runtime sees only its own secret, from a volume that holds nothing else, and compares it in
@@ -102,7 +114,7 @@ Be clear about these before you put Brod in front of people:
 
 1. Run Brod behind HTTPS before anyone else uses it.
 2. Back up `secrets.env` with the database ([backups](deploy-production.md#backups)). Losing `SECRETS_KEY` loses every
-   app secret.
+   app secret. Losing `IDENTITY_SIGNING_KEY` changes the JWKS, so services that cached it must fetch it again.
 3. Keep the `brod-data` volume and `.env` readable only by you.
 4. Upgrade when a release has a security fix. Watch the repository's releases.
 5. Give the builder role only to people you would let run code on your network.

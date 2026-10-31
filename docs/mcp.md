@@ -73,7 +73,7 @@ Use the Streamable HTTP transport at `/mcp` with the header `Authorization: Bear
 | `deploy_app` | Deploy a new app or a new version: files inline (up to 1 MB), or a one-time upload address for a bigger build. Returns the address. |
 | `list_apps` | The workspace's apps: address, status, who can open each, live version. |
 | `get_files` | The files of an app's current version (or a named one), to change them. |
-| `get_status` | One app: access, roles, who it is shared with, versions, what is on staging, custom domains, secret names. |
+| `get_status` | One app: access, roles, who it is shared with, versions, what is on staging, custom domains, secret names, open paths (approved, open, waiting). |
 | `get_logs` | An app's activity (deploys, access changes, refusals) and, for server apps, recent requests with console output and errors. |
 | `set_secret` | Store or remove an encrypted secret the app's server code reads as `env.NAME`. Values cannot be read back. |
 | `publish_staging` | Make the version on staging live, or discard it. |
@@ -82,10 +82,12 @@ Use the Streamable HTTP transport at `/mcp` with the header `Authorization: Bear
 | `set_paused` | Pause or resume an app. |
 | `invite` | Invite someone into the workspace, or as a guest to one app. |
 | `set_domain` | Serve an app (or every app, with `*.`) at a custom domain, and check its DNS records. |
+| `set_open_paths` | Replace the list of [open paths](apps.md#open-paths) a person approved for an app. Removing applies at once; adding needs a person. |
+| `get_auth_integration` | How an app proves who a visitor is: the identity JWT, its claims, issuer, audience and JWKS, the access model, and verification snippets. Takes `framework` (`nextjs`, `node`, `python`, `go`, `rust`, `workerd`), `runtime` and `app` (for the exact audience), all optional. |
 | `get_workspace` | The workspace's groups, default roles and access modes, and how an app reads the signed-in person. |
 
 A read-only connection (OAuth scope `brod:read`, or a token made read-only) sees only `list_apps`, `get_files`,
-`get_status`, `get_logs` and `get_workspace`.
+`get_status`, `get_logs`, `get_auth_integration` and `get_workspace`.
 
 The server also sends instructions with `initialize`. They tell the agent to ask before changing a live app, to deploy
 updates to staging first, and to pass `base_version` so it never overwrites someone else's work.
@@ -169,14 +171,18 @@ next request gets version 1. Nothing is rebuilt.
 
 ## What needs a person
 
-An agent can deploy, roll back, pause, read logs and narrow access on its own. Three kinds of change wait for a person
-to open a `confirm_url` and confirm:
+An agent can deploy, roll back, pause, read logs and narrow access on its own. Four kinds of change wait for a person
+to open a `confirm_url` and confirm. They are one list in the code, `control::NEEDS_A_PERSON`:
 
 - widening access: a more open mode, new grants, or a new password;
 - inviting someone;
-- deleting an app (REST only; there is no MCP tool for it).
+- deleting an app (REST only; there is no MCP tool for it);
+- opening paths that skip sign-in ([open paths](apps.md#open-paths)), from `set_open_paths` or from a deploy whose
+  `brod.json` declares paths nobody approved. That deploy still goes live; the new paths stay closed, and the result
+  carries `open_paths.pending` and a `confirm_url`.
 
-The link expires after 24 hours. Until it is confirmed, nothing changes.
+The link expires after 24 hours. Until it is confirmed, nothing changes. A person doing the same thing (in the
+dashboard, or through the REST API with their session) needs no confirmation.
 
 ## Tokens and OAuth
 
