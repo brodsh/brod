@@ -29,7 +29,7 @@ COPY migrations migrations
 COPY migrations-pg migrations-pg
 COPY server/Cargo.toml server/Cargo.lock server/rustfmt.toml server/
 COPY server/src server/src
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/src/server/target,id=brod-target-$TARGETARCH \
     set -eu; \
     if [ "$TARGETARCH" = "$BUILDARCH" ]; then unset CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER CC_x86_64_unknown_linux_gnu CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER CC_aarch64_unknown_linux_gnu; fi; \
