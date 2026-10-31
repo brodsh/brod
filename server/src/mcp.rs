@@ -42,7 +42,8 @@ pub fn tools() -> Value {
                 "`export default { async fetch(request, env, ctx) { ... } }`. Files that exist in the bundle are served directly; every other request goes to fetch. ",
                 "Inside fetch, env holds the app's secrets (set_secret) plus its own storage: env.DB (SQLite: await env.DB.query(sql, params) returns rows, await env.DB.run(sql, params), ",
                 "await env.DB.batch([{sql, params}]) in one transaction), env.KV (get, put, delete, list; string values) and env.FILES (put(key, body, contentType), get(key) returns a Response or null, delete, list(prefix)). ",
-                "The signed-in person arrives as request headers x-brod-user-id, x-brod-user-email, x-brod-role and x-brod-groups (the platform strips any a visitor sends). ",
+                "The signed-in person arrives as request headers x-brod-user-id, x-brod-user-email, x-brod-role and x-brod-groups (the platform strips any a visitor sends), plus x-brod-identity, a signed JWT (get_auth_integration explains how to verify it). ",
+                "Apps are private: paths that must work without sign-in (webhooks, an MCP endpoint with its own auth) go in the \"open_paths\" list of a brod.json at the top of the bundle; new ones stay closed until the owner opens the result's confirm_url. ",
                 "Never build a login or user table. A version whose server code does not start is refused, and the live version stays. Use get_logs to see console output and errors. ",
                 "STAGING: when you update an app that already has a live version, ask the person first whether to try it on staging before it goes live (recommended) or to publish straight away. ",
                 "Updates to a live app go to staging unless \"environment\" is \"production\": the result's staging_url serves the new version to the app's builders only, while visitors keep the live one. ",
@@ -167,6 +168,44 @@ pub fn tools() -> Value {
             "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true },
         },
         {
+            "name": "set_open_paths", "title": "Open paths without sign-in",
+            "description": concat!("Set which paths of an app anyone may reach without signing in, such as a webhook receiver or an MCP endpoint that does its own authentication. ",
+                "Each entry is an exact path (\"/api/mcp\") or a prefix (\"/api/webhooks/*\"), optionally limited to methods: { \"path\": \"/api/mcp\", \"methods\": [\"POST\"] }. At most 10; \"/\" and \"/*\" are refused (use set_access for that). ",
+                "A path is open only while the served version also declares it in the \"open_paths\" list of its brod.json, so deploying with open_paths is the usual way to ask; this tool changes the approved list. ",
+                "Requests on an open path reach the app anonymously: no sign-in, no x-brod-identity, no x-brod-user-* headers. ",
+                "Narrowing (removing entries, fewer methods) applies at once. Opening anything new does NOT apply yet: the result has a confirm_url the owner must open and confirm. Give them that link. get_status shows approved and pending open paths."),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "app": app_arg(),
+                    "open_paths": {
+                        "type": "array", "maxItems": 10, "description": "The full list of approved open paths after this call; [] closes them all.",
+                        "items": { "anyOf": [
+                            { "type": "string", "description": "\"/api/mcp\" or \"/api/webhooks/*\"." },
+                            { "type": "object", "properties": { "path": s("\"/api/mcp\" or \"/api/webhooks/*\"."), "methods": { "type": "array", "items": { "type": "string", "enum": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] } } }, "required": ["path"] },
+                        ] },
+                    },
+                },
+                "required": ["app", "open_paths"],
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true },
+        },
+        {
+            "name": "get_auth_integration", "title": "Identity and access for an app's code",
+            "description": concat!("How an app's code learns who is signed in and how to trust it: the identity contract (the x-brod-identity JWT, its claims, the JWKS URL and env vars), ",
+                "how access works (private by default, the gateway signs people in, open paths are anonymous), and a short verification snippet for a framework. ",
+                "Call this before writing code that reads the user, checks roles, or exposes a webhook. Never build a login or user table."),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "framework": { "type": "string", "enum": crate::identity::FRAMEWORKS, "description": "The app's framework. Default: snippets for all of them." },
+                    "runtime": { "type": "string", "enum": ["workerd", "container"], "description": "Where the code runs: \"workerd\" for _worker.js server apps (the default)." },
+                    "app": s("An existing app's slug, to get its exact token audience."),
+                },
+            },
+            "annotations": { "readOnlyHint": true },
+        },
+        {
             "name": "get_workspace", "title": "Workspace and identity",
             "description": concat!("Read the workspace an app will live in: its groups, the default app roles, the access modes, plan slots, and how an app reads the signed-in person (the identity contract). ",
                 "Call this before building an app that needs sign-in or roles: apps never keep their own user table."),
@@ -221,7 +260,7 @@ fn atob(s: &str) -> Option<Vec<u8>> {
 }
 
 /// The tools a read-only connection may call: they look and change nothing.
-pub const READ_TOOLS: [&str; 5] = ["list_apps", "get_files", "get_status", "get_logs", "get_workspace"];
+pub const READ_TOOLS: [&str; 6] = ["list_apps", "get_files", "get_status", "get_logs", "get_auth_integration", "get_workspace"];
 
 /// The tools this caller may use: all of them, or only the reading ones for a read-only connection.
 fn tools_for(c: &Caller) -> Value {
@@ -321,6 +360,36 @@ async fn call(st: &State, c: &Caller, name: &str, a: &Map<String, Value>) -> Res
             control::invite_from(st, c, o).await
         }
         "set_domain" => crate::domains::set_domain(st, c, a).await,
+        "set_open_paths" => {
+            let slug = str_arg("app");
+            let list = a.get("open_paths").cloned().unwrap_or(Value::Null);
+            st.db.call(move |conn| control::set_open_paths(conn, &cfg, &c2, &slug, &list)).await
+        }
+        "get_auth_integration" => {
+            let framework = match a.get("framework") {
+                None | Some(Value::Null) => None,
+                Some(v) => {
+                    let f = js_string(v).to_lowercase();
+                    if !crate::identity::FRAMEWORKS.contains(&f.as_str()) {
+                        return Err(Problem::new(
+                            400,
+                            "bad_framework",
+                            format!("\"framework\" is one of {}.", crate::identity::FRAMEWORKS.join(", ")),
+                        ));
+                    }
+                    Some(f)
+                }
+            };
+            let runtime = if crate::model::truthy(a.get("runtime")) { Some(str_arg("runtime")) } else { None };
+            let audience = match a.get("app") {
+                None | Some(Value::Null) => None,
+                Some(_) => {
+                    let slug = str_arg("app");
+                    Some(st.db.call(move |conn| control::get_app(conn, &c2, &slug)).await.map(|app| crate::identity::audience(&app.id))?)
+                }
+            };
+            Ok(crate::identity::integration(&cfg, framework.as_deref(), runtime.as_deref(), audience))
+        }
         "get_workspace" => st.db.call(move |conn| people::describe_workspace(conn, &cfg, &c2)).await,
         _ => Err(Problem::new(404, "unknown_tool", format!("There is no tool called \"{name}\"."))),
     }
@@ -352,7 +421,8 @@ async fn handle(st: &State, c: &Caller, m: &Value) -> Option<Value> {
                     "Sharing more widely and inviting people need the owner to confirm: pass on the confirm_url you get back. ",
                     "Once an app is live, ask before changing it whether to deploy to staging first: updates go to its staging address, the person tests there, and publish_staging makes it live. ",
                     "Other people may change the same app: before changing one, call get_files for its current version, and pass base_version (the version your files started from) to deploy_app, so a deploy never undoes someone else's. ",
-                    "When a result has a \"warning\" that someone else is working on the app, tell the person."),
+                    "When a result has a \"warning\" that someone else is working on the app, tell the person. ",
+                    "Before writing code that reads the signed-in person or must work without sign-in (a webhook), call get_auth_integration."),
             })))
         }
         "ping" => Some(reply(json!({}))),
@@ -461,6 +531,8 @@ mod tests {
                 "set_paused",
                 "invite",
                 "set_domain",
+                "set_open_paths",
+                "get_auth_integration",
                 "get_workspace"
             ]
         );

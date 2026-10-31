@@ -122,6 +122,223 @@ pub fn generate() -> String {
     hex::encode(crate::util::random_bytes(32))
 }
 
+/// The frameworks get_auth_integration has a snippet for.
+pub const FRAMEWORKS: [&str; 6] = ["nextjs", "node", "python", "go", "rust", "workerd"];
+
+/// One framework's install line and verification code. `{ISS}` and `{JWKS_URL}` are filled in by `integration`.
+fn snippet(framework: &str) -> (&'static str, &'static str) {
+    match framework {
+        "nextjs" => (
+            "npm install jose",
+            r#"// lib/brod.ts: the signed-in person, from the token the Brod gateway adds to every request.
+import { headers } from 'next/headers';
+import { createLocalJWKSet, createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
+
+const jwks = process.env.BROD_IDENTITY_JWKS
+  ? createLocalJWKSet(JSON.parse(process.env.BROD_IDENTITY_JWKS))
+  : createRemoteJWKSet(new URL('{JWKS_URL}'));
+
+export async function brodUser(): Promise<JWTPayload | null> {
+  const token = (await headers()).get('x-brod-identity');
+  if (!token) return null; // anonymous: an open path, or a public app with nobody signed in
+  const { payload } = await jwtVerify(token, jwks, {
+    issuer: process.env.BROD_ISSUER ?? '{ISS}',
+    audience: `brod:app:${process.env.BROD_APP_ID}`,
+    algorithms: ['EdDSA'],
+  });
+  return payload; // { sub, email, name, role, groups, workspace: { id, slug } }
+}"#,
+        ),
+        "node" => (
+            "npm install jose",
+            r#"import { createLocalJWKSet, createRemoteJWKSet, jwtVerify } from 'jose';
+
+const jwks = process.env.BROD_IDENTITY_JWKS
+  ? createLocalJWKSet(JSON.parse(process.env.BROD_IDENTITY_JWKS))
+  : createRemoteJWKSet(new URL('{JWKS_URL}'));
+
+// req: a Node http.IncomingMessage (Express, Fastify and Hono expose the same header).
+export async function brodUser(req) {
+  const token = req.headers['x-brod-identity'];
+  if (!token) return null; // anonymous: an open path, or a public app with nobody signed in
+  const { payload } = await jwtVerify(token, jwks, {
+    issuer: process.env.BROD_ISSUER ?? '{ISS}',
+    audience: `brod:app:${process.env.BROD_APP_ID}`,
+    algorithms: ['EdDSA'],
+  });
+  return payload; // { sub, email, name, role, groups, workspace: { id, slug } }
+}"#,
+        ),
+        "python" => (
+            "pip install \"pyjwt[crypto]\"",
+            r#"import json, os
+import jwt  # PyJWT
+
+ISSUER = os.environ.get("BROD_ISSUER", "{ISS}")
+AUDIENCE = f"brod:app:{os.environ['BROD_APP_ID']}"
+_inline = os.environ.get("BROD_IDENTITY_JWKS")
+_keys = {k["kid"]: jwt.PyJWK(k) for k in json.loads(_inline)["keys"]} if _inline else None
+_remote = None if _inline else jwt.PyJWKClient("{JWKS_URL}")
+
+def brod_user(headers):
+    """The signed-in person, or None for an anonymous request (an open path, or a public app)."""
+    token = headers.get("x-brod-identity")
+    if not token:
+        return None
+    if _keys is not None:
+        key = _keys[jwt.get_unverified_header(token)["kid"]].key
+    else:
+        key = _remote.get_signing_key_from_jwt(token).key
+    return jwt.decode(token, key, algorithms=["EdDSA"], audience=AUDIENCE, issuer=ISSUER)"#,
+        ),
+        "go" => (
+            "go get github.com/golang-jwt/jwt/v5",
+            r#"package brod
+
+import (
+	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"os"
+
+	"github.com/golang-jwt/jwt/v5"
+)
+
+// Keys reads the key set Brod passes in BROD_IDENTITY_JWKS (or fetch {JWKS_URL} and decode it the same way).
+func Keys() (map[string]ed25519.PublicKey, error) {
+	var set struct{ Keys []struct{ Kid, X string } }
+	if err := json.Unmarshal([]byte(os.Getenv("BROD_IDENTITY_JWKS")), &set); err != nil {
+		return nil, err
+	}
+	keys := map[string]ed25519.PublicKey{}
+	for _, k := range set.Keys {
+		x, err := base64.RawURLEncoding.DecodeString(k.X)
+		if err != nil {
+			return nil, err
+		}
+		keys[k.Kid] = ed25519.PublicKey(x)
+	}
+	return keys, nil
+}
+
+// User returns the signed-in person's claims, or nil for an anonymous request (an open path, or a public app).
+func User(r *http.Request, keys map[string]ed25519.PublicKey) (jwt.MapClaims, error) {
+	token := r.Header.Get("X-Brod-Identity")
+	if token == "" {
+		return nil, nil
+	}
+	claims := jwt.MapClaims{}
+	_, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (any, error) {
+		kid, _ := t.Header["kid"].(string)
+		if k, ok := keys[kid]; ok {
+			return k, nil
+		}
+		return nil, errors.New("unknown key")
+	}, jwt.WithValidMethods([]string{"EdDSA"}), jwt.WithIssuer("{ISS}"),
+		jwt.WithAudience("brod:app:"+os.Getenv("BROD_APP_ID")), jwt.WithExpirationRequired())
+	if err != nil {
+		return nil, err
+	}
+	return claims, nil
+}"#,
+        ),
+        "rust" => (
+            "cargo add jsonwebtoken serde_json",
+            r#"use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header, jwk::JwkSet};
+
+/// The signed-in person's claims, or None for an anonymous request (an open path, or a public app).
+/// `jwks` is BROD_IDENTITY_JWKS parsed once (or the JSON from {JWKS_URL}).
+pub fn brod_user(token: Option<&str>, jwks: &JwkSet) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
+    let Some(token) = token else { return Ok(None) };
+    let kid = decode_header(token)?.kid.ok_or("no kid")?;
+    let jwk = jwks.find(&kid).ok_or("unknown key")?;
+    let mut v = Validation::new(Algorithm::EdDSA);
+    v.set_issuer(&["{ISS}"]);
+    v.set_audience(&[format!("brod:app:{}", std::env::var("BROD_APP_ID")?)]);
+    Ok(Some(decode::<serde_json::Value>(token, &DecodingKey::from_jwk(jwk)?, &v)?.claims))
+}"#,
+        ),
+        _ => (
+            "Bundle jose into _worker.js (esbuild), or use the x-brod-user-* headers directly (see the note below).",
+            r#"import { createLocalJWKSet, jwtVerify } from 'jose';
+
+export default {
+  async fetch(request, env) {
+    const token = request.headers.get('x-brod-identity');
+    let user = null; // anonymous: an open path, or a public app with nobody signed in
+    if (token) {
+      ({ payload: user } = await jwtVerify(token, createLocalJWKSet(JSON.parse(env.BROD_IDENTITY_JWKS)), {
+        issuer: env.BROD_ISSUER,
+        audience: `brod:app:${env.BROD_APP_ID}`,
+        algorithms: ['EdDSA'],
+      }));
+    }
+    return Response.json({ hello: user?.name ?? 'stranger' });
+  },
+};"#,
+        ),
+    }
+}
+
+/// What get_auth_integration returns: the identity contract, how access works, and how to verify the token in one
+/// framework (or all of them). `audience` is the app's own when the caller named an app.
+pub fn integration(cfg: &crate::config::Config, framework: Option<&str>, runtime: Option<&str>, audience: Option<String>) -> Value {
+    let jwks_url = format!("{}/.well-known/jwks.json", cfg.api_origin);
+    let fill = |code: &str| code.replace("{ISS}", &cfg.api_origin).replace("{JWKS_URL}", &jwks_url);
+    let chosen: Vec<&str> = match framework {
+        Some(f) => vec![f],
+        None => FRAMEWORKS.to_vec(),
+    };
+    let mut snippets = serde_json::Map::new();
+    for f in chosen {
+        let (install, code) = snippet(f);
+        snippets.insert(f.into(), json!({ "install": install, "code": fill(code) }));
+    }
+    let workerd_note = "Inside a Brod server app (_worker.js on workerd) the gateway is the only way in and strips any x-brod-* header a visitor sends, so the x-brod-user-id, x-brod-user-email, x-brod-user-name (URI-encoded), x-brod-role and x-brod-groups headers can be used as they are. Verify the token when identity must be trusted beyond that: when you pass it on to another service, or in code that could also be reached some other way.";
+    json!({
+        "identity": {
+            "header": "x-brod-identity",
+            "browser": "GET /_brod/me on the app's own address returns { user, role, groups, app, workspace, token }; token is the same JWT. 401 when nobody allowed is signed in.",
+            "format": "A compact JWT (JWS) signed with Ed25519: header { alg: \"EdDSA\", typ: \"JWT\", kid }.",
+            "issuer": cfg.api_origin,
+            "audience": audience.unwrap_or_else(|| "brod:app:<app id> (BROD_APP_ID)".into()),
+            "jwks_url": jwks_url,
+            "lifetime_seconds": crate::model::limits::IDENTITY_TTL_SEC,
+            "claims": {
+                "iss": "Brod's public URL.", "aud": "brod:app:<app id>: refuse any other, so a token made for one app never works in another.",
+                "sub": "The person's user id (stable).", "email": "Their email address.", "name": "Their display name.",
+                "workspace": "{ id, slug } of the app's workspace.", "role": "Their role in this app (null when the app gives them none, as on a public app).",
+                "groups": "Their workspace groups.", "iat": "Issued at (seconds).", "exp": "Expires at: 5 minutes after iat.", "jti": "A unique id per token.",
+            },
+            "env": {
+                "BROD_ISSUER": "The expected iss.", "BROD_APP_ID": "The app's id: the audience is brod:app:<BROD_APP_ID>.",
+                "BROD_IDENTITY_JWKS": "The JWK set as JSON, so verification needs no network call.",
+            },
+            "env_note": match runtime {
+                Some("container") => "Container apps are coming; they will get the same env vars. Until then, hard-code the issuer and audience and fetch the key set from jwks_url.",
+                _ => "Brod sets these in env for server apps (_worker.js).",
+            },
+            "how_to_verify": [
+                "Read the x-brod-identity header. No header: the request is anonymous.",
+                "Check the signature with alg EdDSA only, using the key whose kid matches, from BROD_IDENTITY_JWKS or jwks_url.",
+                "Check iss equals BROD_ISSUER, aud equals brod:app:<BROD_APP_ID>, and exp is in the future.",
+                "Use sub as the user id. Never keep passwords or a user table: Brod signs people in.",
+            ],
+        },
+        "access": {
+            "default": "Apps are private by default: only the owner (and workspace admins) can open them until set_access shares them.",
+            "gateway": "The Brod gateway signs people in and decides access before any request reaches the app's code, then adds the identity. An app never sees a request from someone it was not shared with.",
+            "open_paths": "Paths that must work without sign-in (webhooks, an MCP endpoint with its own auth) go in brod.json: { \"open_paths\": [\"/api/webhooks/*\", { \"path\": \"/api/mcp\", \"methods\": [\"POST\"] }] }. They open once a person approves them (deploy_app returns a confirm_url when an agent adds one; set_open_paths changes them).",
+            "anonymous": "Requests on an open path, and to a public app from someone not signed in, carry no x-brod-identity and no x-brod-user-* headers. Treat them as untrusted and authenticate them yourself (a webhook signature, an API key).",
+        },
+        "workerd_note": workerd_note,
+        "snippets": snippets,
+        "package": "@brod/auth, a small package that does this in one call for Node, Next.js and Workers, is coming. Until then use the snippets.",
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +414,23 @@ mod tests {
             assert!(e.starts_with("IDENTITY_SIGNING_KEY"), "{e}");
         }
         assert_eq!(generate().len(), 64);
+    }
+
+    #[test]
+    fn the_auth_integration_fills_in_this_server() {
+        let cfg = crate::config::Config::for_tests();
+        let all = integration(&cfg, None, None, Some("brod:app:app_1".into()));
+        assert_eq!(all["identity"]["jwks_url"], "http://localhost:8787/.well-known/jwks.json");
+        assert_eq!(all["identity"]["audience"], "brod:app:app_1");
+        assert_eq!(all["snippets"].as_object().unwrap().keys().collect::<Vec<_>>(), FRAMEWORKS);
+        for (f, s) in all["snippets"].as_object().unwrap() {
+            let code = s["code"].as_str().unwrap();
+            assert!(!code.contains("{ISS}") && !code.contains("{JWKS_URL}"), "{f}");
+            assert!(code.contains("EdDSA") && code.contains("x-brod-identity") || code.contains("X-Brod-Identity") || f == "rust", "{f}");
+        }
+        let one = integration(&cfg, Some("python"), Some("container"), None);
+        assert_eq!(one["snippets"].as_object().unwrap().len(), 1);
+        assert!(one["snippets"]["python"]["code"].as_str().unwrap().contains("audience=AUDIENCE"));
+        assert!(one["package"].as_str().unwrap().contains("@brod/auth"));
     }
 }
