@@ -78,6 +78,8 @@ struct Visit {
     server: Option<String>,
     /// The outside hosts the served version declares (network.rs), for its Content-Security-Policy.
     network: Vec<String>,
+    /// The paths of the served version anyone may reach without signing in: declared by it and approved (open_paths.rs).
+    open: Vec<crate::open_paths::OpenPath>,
     visitor: Option<SessionUser>,
     decision: Decision,
     workspace_slug: String,
@@ -185,7 +187,7 @@ async fn serve(st: &State, mut req: Req, at: Where, domain: Option<String>, hit:
         .call(move |c| {
             let version = if staging { "staging_version" } else { "live_version" };
             let sql = format!(
-                "SELECT a.*, v.server, v.network, w.slug AS wslug FROM apps a JOIN workspaces w ON w.id = a.workspace_id
+                "SELECT a.*, v.server, v.network, v.open_paths AS declared_open, w.slug AS wslug FROM apps a JOIN workspaces w ON w.id = a.workspace_id
                  LEFT JOIN versions v ON v.app_id = a.id AND v.n = a.{version} WHERE "
             );
             let map = |r: &crate::db::Row| {
@@ -194,13 +196,17 @@ async fn serve(st: &State, mut req: Req, at: Where, domain: Option<String>, hit:
                     r.get::<_, Option<String>>("server")?,
                     r.get::<_, String>("wslug")?,
                     crate::network::parse(r.get::<_, Option<String>>("network")?),
+                    crate::open_paths::effective(
+                        &crate::open_paths::parse(Some(&r.get::<_, String>("open_paths")?)),
+                        &crate::open_paths::parse(r.get::<_, Option<String>>("declared_open")?.as_deref()),
+                    ),
                 ))
             };
             let row = match &at {
                 Where::Slug { workspace, slug, .. } => c.first(&format!("{sql}w.slug = ? AND a.slug = ?"), [workspace, slug], map)?,
                 Where::Id(id) => c.first(&format!("{sql}a.id = ?"), [id], map)?,
             };
-            let Some((mut app, server, workspace_slug, network)) = row else { return Ok(None) };
+            let Some((mut app, server, workspace_slug, network, open)) = row else { return Ok(None) };
             // Taken down by the Brod team, or in a suspended workspace: nothing of the app is served, its /_brod/ pages included.
             if crate::abuse::hold_of(c, &app)?.is_some() {
                 return Ok(Some(None));
@@ -217,7 +223,7 @@ async fn serve(st: &State, mut req: Req, at: Where, domain: Option<String>, hit:
             if staging {
                 admit_staging(&app, &mut decision, visitor.as_ref());
             }
-            Ok(Some(Some(Visit { app, server, network, visitor, decision, workspace_slug, origin, domain, staging })))
+            Ok(Some(Some(Visit { app, server, network, open, visitor, decision, workspace_slug, origin, domain, staging })))
         })
         .await?;
     let Some(v) = visit else {
@@ -228,7 +234,7 @@ async fn serve(st: &State, mut req: Req, at: Where, domain: Option<String>, hit:
     if req.path.starts_with("/_brod/") {
         return special(st, &mut req, v).await;
     }
-    let Visit { app, server, network, visitor, decision, workspace_slug, origin, domain, staging } = v;
+    let Visit { app, server, network, open, visitor, decision, workspace_slug, origin, domain, staging } = v;
     // Requests to the staging address stay out of the app's analytics.
     if !staging {
         hit.app = Some((app.workspace_id.clone(), app.id.clone()));
@@ -243,6 +249,18 @@ async fn serve(st: &State, mut req: Req, at: Where, domain: Option<String>, hit:
     }
     if app.live_version.is_none() && !staging {
         return Ok(not_found(&st.cfg.api_origin));
+    }
+    // An open path: anyone, without signing in, and always anonymously (open_paths.rs). Takedowns and suspensions were
+    // handled above; a paused app stays paused.
+    if let Some(path) = crate::open_paths::match_request(&open, &req.path, req.method.as_str()) {
+        if app.status == "paused" {
+            return Ok(notice(503, "Paused", "The owner has paused this app.", ""));
+        }
+        let Some(version) = app.live_version else { return Ok(not_found(&st.cfg.api_origin)) };
+        req.path = path;
+        let mut res = serve_version(st, req, &app, version, server, &origin, None).await?;
+        crate::network::protect(&st.cfg, &mut res, &network);
+        return Ok(res);
     }
     if !decision.allowed {
         let ret = if req.query.is_empty() { req.path.clone() } else { format!("{}?{}", req.path, req.query) };

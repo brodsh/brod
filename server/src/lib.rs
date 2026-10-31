@@ -23,6 +23,7 @@ pub mod market;
 pub mod mcp;
 pub mod model;
 pub mod network;
+pub mod open_paths;
 pub mod people;
 pub mod preview;
 pub mod problem;
