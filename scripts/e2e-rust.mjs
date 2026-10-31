@@ -70,6 +70,20 @@ if (pg) {
   env.BROD_DATABASE_URL = url.toString();
 }
 
+// The runtime and the preview service start children of their own (workerd, Chromium). Each runs in its own process
+// group, and the whole group is stopped on every way out, a failed suite or Ctrl-C included, so no workerd is left
+// listening on E2E_RUNTIME_PORT.
+const groups = [];
+const signalGroup = (p, signal) => { try { process.kill(-p.pid, signal); } catch { /* already gone */ } };
+async function stopGroup(p) {
+  if (!p) return;
+  signalGroup(p, 'SIGTERM');
+  if (p.exitCode === null && p.signalCode === null) await Promise.race([new Promise(r => p.once('exit', r)), new Promise(r => setTimeout(r, 5000))]);
+  signalGroup(p, 'SIGKILL');
+}
+process.on('exit', () => { for (const p of groups) signalGroup(p, 'SIGKILL'); });
+for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => process.exit(130));
+
 let runtime, rtLog = '';
 if (withRuntime) {
   Object.assign(env, { BROD_RUNTIME_URL: `http://127.0.0.1:${RT_PORT}`, BROD_RUNTIME_SECRET: RT_SECRET });
@@ -80,14 +94,16 @@ if (withRuntime) {
   // The supervisor restarts workerd when an app stalls it or makes it run out of memory (scripts/e2e-server-apps.mjs
   // checks both); a short stall limit and a small memory limit keep those checks quick.
   runtime = spawn(supervisor, [workerd, 'serve', 'deploy/runtime/config.capnp', '--experimental', '-s', `http=127.0.0.1:${RT_PORT}`, '-e', `brod=127.0.0.1:${PORT}`, '-d', `data=${join(state, 'runtime')}`],
-    { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, BROD_RUNTIME_SECRET: RT_SECRET, BROD_INTERNAL_URL: `http://127.0.0.1:${PORT}`, RUNTIME_PORT: RT_PORT, RUNTIME_STALL_MS: '2000', RUNTIME_MEMORY_MB: '768' } });
+    { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, BROD_RUNTIME_SECRET: RT_SECRET, BROD_INTERNAL_URL: `http://127.0.0.1:${PORT}`, RUNTIME_PORT: RT_PORT, RUNTIME_STALL_MS: '2000', RUNTIME_MEMORY_MB: '768' } });
+  groups.push(runtime);
   runtime.stdout.on('data', d => (rtLog += d)); runtime.stderr.on('data', d => (rtLog += d));
 }
 
 let preview, pvLog = '';
 if (withPreviews) {
-  preview = spawn(process.execPath, ['deploy/preview/server.mjs'], { stdio: ['ignore', 'pipe', 'pipe'],
+  preview = spawn(process.execPath, ['deploy/preview/server.mjs'], { detached: true, stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, BROD_PREVIEW_SECRET: PV_SECRET, BROD_INTERNAL_URL: `http://127.0.0.1:${PORT}`, PREVIEW_LISTEN: `127.0.0.1:${PV_PORT}` } });
+  groups.push(preview);
   preview.stdout.on('data', d => (pvLog += d)); preview.stderr.on('data', d => (pvLog += d));
 }
 
@@ -140,8 +156,7 @@ try {
   console.error(e.message);
 } finally {
   server.kill('SIGTERM');
-  runtime?.kill('SIGTERM');
-  preview?.kill('SIGTERM');
+  await Promise.all([stopGroup(runtime), stopGroup(preview)]);
   fake?.server.close();
   stripe.server.close();
   dns.close();
