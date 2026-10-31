@@ -1037,7 +1037,7 @@ mod tests {
         let db = test_db();
         let names = db.call(|c| c.all("SELECT name FROM d1_migrations ORDER BY id", (), |r| r.get::<_, String>(0))).await.unwrap();
         assert_eq!(names, MIGRATIONS.iter().map(|(n, _)| *n).collect::<Vec<_>>());
-        assert_eq!(names.last().map(String::as_str), Some("0021_nodes.sql"));
+        assert_eq!(names.last().map(String::as_str), Some("0022_deployments.sql"));
         db.call(|c| migrate(c).map_err(Problem::internal)).await.unwrap();
         let path = db.call(|c| Ok(c.sqlite_path())).await.unwrap();
         let Some(path) = path else {

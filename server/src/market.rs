@@ -608,6 +608,7 @@ pub async fn install(st: &State, c: &Caller, key: &str, o: Map<String, Value>) -
         name: Some(name),
         note: Some(format!("Installed {} release {n} from the marketplace", l.name)),
         base_version: None,
+        options: None,
     };
     let mut out = control::deploy(st, c, target, files).await?;
     let (c3, slug, l2, roles2) = (c.clone(), out["app"].as_str().unwrap_or("").to_string(), l.clone(), roles.clone());
@@ -717,6 +718,7 @@ pub async fn update_install(st: &State, c: &Caller, slug: &str, o: Map<String, V
         // A builder chose to deploy this release, so it goes live as it always has.
         environment: Some("production".into()),
         base_version: None,
+        options: None,
     };
     let mut out = control::deploy(st, c, target, files).await?;
     let (c3, l2) = (c.clone(), l.clone());

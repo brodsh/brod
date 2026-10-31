@@ -50,7 +50,11 @@ pub fn tools() -> Value {
                 "Give the person the staging_url to test, and call publish_staging only once they say it is ready. Staging and live share the app's data (env.DB, env.KV, env.FILES) and secrets. ",
                 "SEVERAL PEOPLE: others may update the same app. When updating, pass \"base_version\": the version your files started from (the \"version\" your last deploy_app returned, or \"current_version\" from get_status when you began). ",
                 "If someone deployed since, nothing is deployed and the error stale_base says who changed what: call get_files for the current version, add your changes to it, and deploy again; do not deploy over their work unless the person says to. ",
-                "If the result has a \"warning\", someone else is also working on the app: tell the person."
+                "If the result has a \"warning\", someone else is also working on the app: tell the person. ",
+                "CONTAINERS (when this Brod runs them): a source folder with a Dockerfile at its top is built into an image on a node and run as a container. Upload the SOURCE folder (not built output) with the upload command; ",
+                ".dockerignore is honoured and node_modules/, .git/ and .next/ are left out. The app listens on \"port\" (default 8080, also in $PORT) and must answer \"health\" (default \"/\") below 500. ",
+                "Its environment holds the app's secrets plus BROD_ISSUER, BROD_APP_ID and BROD_IDENTITY_JWKS; the signed-in person arrives in the same x-brod-* headers. It runs as a non-root user on a read-only file system (write to /tmp only). ",
+                "The deploy returns at once with a \"deployment\": call get_deployment until it is \"serving\" or \"failed\"; what is live keeps serving until the new version is healthy."
             ),
             "inputSchema": {
                 "type": "object",
@@ -66,6 +70,11 @@ pub fn tools() -> Value {
                         "type": "integer", "minimum": 1,
                         "description": "For an update: the version your files started from. The deploy is refused (stale_base) if the app's current version (staging, else live) is no longer this one, so you never undo someone else's changes.",
                     },
+                    "runtime": { "type": "string", "enum": ["container"], "description": "\"container\" to insist the bundle is a container app's source (a Dockerfile at its top is enough on its own)." },
+                    "port": { "type": "integer", "minimum": 1, "maximum": 65535, "description": "Container apps: the port the app listens on. Default 8080, or \"port\" in brod.json." },
+                    "health": s("Container apps: the path Brod checks before sending traffic, such as \"/healthz\" (healthy: any status below 500). Default \"/\"."),
+                    "cpu": { "type": "number", "minimum": 0.1, "maximum": 16, "description": "Container apps: CPUs. Default 0.5." },
+                    "memory_mb": { "type": "integer", "minimum": 64, "maximum": 65536, "description": "Container apps: memory in MB. Default 512." },
                     "files": {
                         "type": "array", "description": "The app's files, for small apps. Must include index.html at the top level.",
                         "items": { "type": "object", "properties": { "path": s("Path inside the app, for example \"index.html\" or \"assets/app.js\"."), "content": s("File content."), "encoding": { "type": "string", "enum": ["utf8", "base64"], "description": "How content is encoded. Default utf8." } }, "required": ["path", "content"] },
@@ -92,6 +101,12 @@ pub fn tools() -> Value {
             "description": concat!("Show one app's recent activity (deploys, rollbacks, access changes, sign-in refusals, pauses, and which connection or person made each) ",
                 "and, for server apps, its last 50 requests with their console output and exceptions (kept 7 days). Use \"search\" to find requests whose logs, errors or path contain some text."),
             "inputSchema": { "type": "object", "properties": { "app": app_arg(), "search": s("Only requests whose logs, exceptions or path contain this text.") }, "required": ["app"] },
+            "annotations": { "readOnlyHint": true },
+        },
+        {
+            "name": "get_deployment", "title": "Deployment status",
+            "description": "Follow a container app's deployment (deploy_app or rollback returns its id): its state (scheduled, building, pulling, starting, healthy, serving; draining and stopped once replaced) and the last 50 lines of its log. A failed one returns the error build_failed or deployment_failed with the log lines that say why; what was live stays live.",
+            "inputSchema": { "type": "object", "properties": { "app": app_arg(), "deployment": s("The deployment id. Default: the app's newest deployment.") }, "required": ["app"] },
             "annotations": { "readOnlyHint": true },
         },
         {
@@ -260,7 +275,8 @@ fn atob(s: &str) -> Option<Vec<u8>> {
 }
 
 /// The tools a read-only connection may call: they look and change nothing.
-pub const READ_TOOLS: [&str; 6] = ["list_apps", "get_files", "get_status", "get_logs", "get_auth_integration", "get_workspace"];
+pub const READ_TOOLS: [&str; 7] =
+    ["list_apps", "get_files", "get_status", "get_logs", "get_deployment", "get_auth_integration", "get_workspace"];
 
 /// The tools this caller may use: all of them, or only the reading ones for a read-only connection.
 fn tools_for(c: &Caller) -> Value {
@@ -309,6 +325,10 @@ async fn call(st: &State, c: &Caller, name: &str, a: &Map<String, Value>) -> Res
             let search = if crate::model::truthy(a.get("search")) { Some(str_arg("search")) } else { None };
             st.db.call(move |conn| control::get_logs(conn, &c2, &slug, search.as_deref())).await
         }
+        "get_deployment" => {
+            let (slug, id) = (str_arg("app"), str_arg("deployment"));
+            st.db.call(move |conn| crate::deployments::get_deployment(conn, &c2, &slug, Some(&id))).await
+        }
         "set_secret" => {
             let remove = matches!(a.get("remove"), Some(Value::Bool(true)));
             let value = match a.get("value") {
@@ -333,7 +353,7 @@ async fn call(st: &State, c: &Caller, name: &str, a: &Map<String, Value>) -> Res
         "rollback" => {
             let slug = str_arg("app");
             let version = js_to_number(a.get("version"));
-            st.db.call(move |conn| control::rollback(conn, &cfg, &c2, &slug, version)).await
+            crate::deployments::rollback(st, c, &slug, version).await
         }
         "set_access" => {
             let slug = str_arg("app");
@@ -524,6 +544,7 @@ mod tests {
                 "get_files",
                 "get_status",
                 "get_logs",
+                "get_deployment",
                 "set_secret",
                 "publish_staging",
                 "rollback",

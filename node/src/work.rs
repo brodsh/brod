@@ -721,10 +721,16 @@ async fn logs(node: &Node, name: &str, since: Option<&str>) -> Result<Value, Str
 
 // ---------- the proxy ----------
 
+/// Mark an answer as the node's own, so Brod can tell it from the app's.
+fn node_error(mut r: Response<Body>) -> Response<Body> {
+    r.headers_mut().insert("x-brod-node-error", hyper::header::HeaderValue::from_static("1"));
+    r
+}
+
 async fn proxy(node: &Node, name: &str, req: Request<Incoming>) -> Response<Body> {
     let a = match address(node, name).await {
         Ok(a) => a,
-        Err(e) => return fail(502, "container_unreachable", e),
+        Err(e) => return node_error(fail(502, "container_unreachable", e)),
     };
     let (mut parts, body) = req.into_parts();
     let prefix = format!("/v1/proxy/{name}");
@@ -748,7 +754,7 @@ async fn proxy(node: &Node, name: &str, req: Request<Incoming>) -> Response<Body
         Ok(res) => res.map(|b| b.map_err(|e| -> BoxError { Box::new(e) }).boxed()),
         Err(e) => {
             lock(&node.work.addresses).remove(name);
-            fail(502, "container_unreachable", format!("The app's container did not answer: {e}"))
+            node_error(fail(502, "container_unreachable", format!("The app's container did not answer: {e}")))
         }
     }
 }
