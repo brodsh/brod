@@ -372,7 +372,14 @@ pub async fn internal(st: &State, mut req: Req) -> Result<Response> {
             modules.insert(p.clone(), json!(STANDARD.encode(bytes)));
         }
         let secrets: Map<String, Value> = secrets.into_iter().map(|(k, v)| (k, json!(v))).collect();
-        return Ok(json(json!({ "main": server.main, "modules": modules, "secrets": secrets, "settings": settings,
+        // What server code needs to check the identity token itself (identity.rs). Secret names starting with BROD_ are
+        // reserved (secrets.rs), so an app's secrets never shadow these.
+        let env = json!({
+            "BROD_ISSUER": st.cfg.api_origin,
+            "BROD_APP_ID": app_id,
+            "BROD_IDENTITY_JWKS": st.cfg.identity_key.jwks().to_string(),
+        });
+        return Ok(json(json!({ "main": server.main, "modules": modules, "secrets": secrets, "settings": settings, "env": env,
             "network": { "policy": policy, "allow": network } })));
     }
     if path == "/_runtime/network" && req.method == Method::POST {

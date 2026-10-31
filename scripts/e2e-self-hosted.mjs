@@ -63,7 +63,7 @@ try {
   run = await start();
   const log = () => run.out.log;
   check('the log names the mode', log().includes('(self-hosted)'), log());
-  check('secrets are generated and kept in the data folder', /config: ADMIN_SECRET, IDENTITY_SECRET, SECRETS_KEY, BROD_RUNTIME_SECRET generated/.test(log()));
+  check('secrets are generated and kept in the data folder', /config: ADMIN_SECRET, IDENTITY_SECRET, SECRETS_KEY, BROD_RUNTIME_SECRET, IDENTITY_SIGNING_KEY generated/.test(log()));
   const mode = statSync(join(state, 'data', 'secrets.env')).mode & 0o777;
   check('the secrets file is readable by its owner only', mode === 0o600, mode.toString(8));
   check('migrations are applied with one clear line', /database: applied \d+ new migrations \(0001_init\.sql to \S+\); schema up to date/.test(log()));

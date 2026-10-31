@@ -19,7 +19,7 @@ use crate::state::State;
 use crate::storage::Object;
 use crate::util::{
     STAGING_SUFFIX, app_url, cookie, decode_uri_component, encode_uri_component, esc, hmac_b64url, host_origin, js_slice, js_trim, now,
-    random_id, safe_equal, set_cookie, sha256_hex, sign_token, staging_url, verify_password,
+    random_id, safe_equal, set_cookie, sha256_hex, staging_url, verify_password,
 };
 
 pub const APP_COOKIE: &str = "brod_session";
@@ -36,11 +36,6 @@ window.Brod = {
 
 pub const REPORT_LINK: &str = "<a href=\"/_brod/report\" style=\"position:fixed;right:8px;bottom:8px;font:12px system-ui,sans-serif;opacity:.6;color:inherit;background:transparent;z-index:2147483647\">Report</a>";
 
-/// The key an app uses to check identity tokens. Each app has its own, derived from the platform secret.
-pub fn app_identity_key(cfg: &Config, app_id: &str) -> String {
-    hmac_b64url(&cfg.identity_secret, &format!("identity:{app_id}"))
-}
-
 fn sign_in_url(cfg: &Config, app: &AppRow, workspace_slug: &str, domain: Option<&str>, staging: bool, ret: &str) -> String {
     let host = domain.map(|d| format!("&host={}", encode_uri_component(d))).unwrap_or_default();
     let suffix = if staging { STAGING_SUFFIX } else { "" };
@@ -53,18 +48,28 @@ fn app_return(r: Option<String>) -> String {
     }
 }
 
-/// The identity contract: who is signed in, their role in this app, and a token signed with the app's key.
+/// The identity contract: who is signed in and their role in this app, and the same as a JWT for this app alone,
+/// signed with Brod's Ed25519 key (identity.rs) and checkable against /.well-known/jwks.json.
 pub fn identity_for(cfg: &Config, app: &AppRow, workspace_slug: &str, user: &User, d: &Decision) -> (Value, String) {
     let t = now() / 1000;
     let identity = json!({
         "user": { "id": user.id, "email": user.email, "name": user.name },
         "role": d.role, "groups": d.groups, "app": app.slug, "workspace": workspace_slug,
     });
-    let mut payload = identity.clone();
-    payload["iat"] = json!(t);
-    payload["exp"] = json!(t + limits::IDENTITY_TTL_SEC);
-    let token = sign_token(&app_identity_key(cfg, &app.id), &payload);
-    (identity, token)
+    let claims = json!({
+        "iss": cfg.api_origin,
+        "aud": crate::identity::audience(&app.id),
+        "sub": user.id,
+        "email": user.email,
+        "name": user.name,
+        "workspace": { "id": app.workspace_id, "slug": workspace_slug },
+        "role": d.role,
+        "groups": d.groups,
+        "iat": t,
+        "exp": t + limits::IDENTITY_TTL_SEC,
+        "jti": random_id("", 16),
+    });
+    (identity, cfg.identity_key.sign(&claims))
 }
 
 /// Everything the gateway reads from the database for one request, in one trip to the blocking pool.
@@ -669,7 +674,7 @@ mod tests {
     }
 
     #[test]
-    fn identity_tokens_verify_with_the_per_app_key() {
+    fn identity_tokens_are_jwts_for_one_app() {
         let cfg = Config::for_tests();
         let user = User { id: "usr_1".into(), email: "a@b.co".into(), name: "Ana".into(), email_verified_at: Some(1) };
         let app = AppRow {
@@ -697,12 +702,19 @@ mod tests {
         let d = Decision { allowed: true, sign_in_needed: false, role: Some("owner".into()), groups: vec!["finance".into()], member: None };
         let (identity, token) = identity_for(&cfg, &app, "acme", &user, &d);
         assert_eq!(identity["role"], "owner");
-        let (body, sig) = token.split_once('.').unwrap();
-        assert_eq!(sig, hmac_b64url(&app_identity_key(&cfg, "app_1"), body));
-        use base64::Engine;
-        let payload: Value = serde_json::from_slice(&base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(body).unwrap()).unwrap();
-        let keys: Vec<&String> = payload.as_object().unwrap().keys().collect();
-        assert_eq!(keys, ["user", "role", "groups", "app", "workspace", "iat", "exp"]);
-        assert_eq!(payload["exp"].as_i64().unwrap() - payload["iat"].as_i64().unwrap(), 300);
+        let now = crate::util::now() / 1000;
+        let claims = cfg.identity_key.verify(&token, "http://localhost:8787", "brod:app:app_1", now).unwrap();
+        let keys: Vec<&String> = claims.as_object().unwrap().keys().collect();
+        assert_eq!(keys, ["iss", "aud", "sub", "email", "name", "workspace", "role", "groups", "iat", "exp", "jti"]);
+        assert_eq!(claims["workspace"], json!({ "id": "ws", "slug": "acme" }));
+        assert_eq!(
+            (claims["sub"].as_str(), claims["role"].as_str(), claims["groups"][0].as_str()),
+            (Some("usr_1"), Some("owner"), Some("finance"))
+        );
+        assert_eq!(claims["exp"].as_i64().unwrap() - claims["iat"].as_i64().unwrap(), 300);
+        assert_eq!(cfg.identity_key.verify(&token, "http://localhost:8787", "brod:app:app_2", now), Err("wrong aud"));
+        let (_, again) = identity_for(&cfg, &app, "acme", &user, &d);
+        let jti = |t: &str| cfg.identity_key.verify(t, "http://localhost:8787", "brod:app:app_1", now).unwrap()["jti"].clone();
+        assert_ne!(jti(&token), jti(&again), "every token has its own id");
     }
 }

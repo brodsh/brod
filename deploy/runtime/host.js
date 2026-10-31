@@ -5,6 +5,7 @@
 // Loader (keyed by app:version:secrets-revision), so a rollback or a secret change takes effect on the next request.
 // The app sees only what it is handed in `env`: its secrets and capabilities scoped to itself by `props`:
 //   env.SETTINGS  the settings its workspace chose for it (brod.json), defaults filled in
+//   env.BROD_ISSUER, env.BROD_APP_ID, env.BROD_IDENTITY_JWKS  what it needs to verify the x-brod-identity JWT itself
 // Its own fetch() goes through AppOutbound, which lets through only the hosts its brod.json declares (or logs them).
 //   env.DB     its own SQLite database (a Durable Object per app, on disk)
 //   env.KV     a small key-value store in the same object
@@ -273,6 +274,8 @@ function serverFor(env, ctx, appId, version, rev) {
       modules: modulesOf(code.modules),
       env: {
         ...code.secrets,
+        // BROD_ISSUER, BROD_APP_ID and BROD_IDENTITY_JWKS, to check x-brod-identity (secrets cannot use BROD_ names).
+        ...code.env,
         SETTINGS: code.settings ?? {},
         DB: ctx.exports.AppDatabase({ props }), KV: ctx.exports.AppKV({ props }), FILES: ctx.exports.AppFiles({ props }),
       },

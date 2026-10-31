@@ -18,6 +18,7 @@ pub mod email;
 pub mod gateway;
 pub mod home;
 pub mod http;
+pub mod identity;
 pub mod market;
 pub mod mcp;
 pub mod model;

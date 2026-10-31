@@ -4,7 +4,6 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hmac::{Hmac, Mac};
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 use unicode_normalization::UnicodeNormalization;
@@ -98,13 +97,6 @@ pub fn verify_password(password: &str, stored: &str) -> bool {
     let [kind, n, salt, hash] = parts.as_slice() else { return false };
     let (Ok(n), Ok(salt)) = (n.parse::<u32>(), URL_SAFE_NO_PAD.decode(salt)) else { return false };
     *kind == "pbkdf2" && !hash.is_empty() && n > 0 && n <= PASSWORD_ITERATIONS && safe_equal(&b64url(&pbkdf2(password, &salt, n)), hash)
-}
-
-/// A compact signed token: base64url(JSON payload) + "." + HMAC-SHA256 signature.
-pub fn sign_token(secret: &str, payload: &Value) -> String {
-    let body = b64url(payload.to_string().as_bytes());
-    let sig = hmac_b64url(secret, &body);
-    format!("{body}.{sig}")
 }
 
 pub fn is_local(apps_domain: &str) -> bool {
@@ -502,15 +494,5 @@ mod tests {
         // An unprefixed cookie that an app planted on HTTPS is ignored.
         assert_eq!(cookie(Some("brod_platform=planted"), "https://brod.sh", "brod_platform"), "");
         assert_eq!(cookie(Some("brod_platform=planted; __Host-brod_platform=real"), "https://brod.sh", "brod_platform"), "real");
-    }
-
-    #[test]
-    fn signs_identity_tokens_like_lib_ts() {
-        // Expected values computed independently with WebCrypto HMAC-SHA256 (signToken('k', { sub: 'usr_1', role: 'editor' })).
-        let token = sign_token("k", &json!({ "sub": "usr_1", "role": "editor" }));
-        let (body, sig) = token.split_once('.').unwrap();
-        assert_eq!(body, "eyJzdWIiOiJ1c3JfMSIsInJvbGUiOiJlZGl0b3IifQ");
-        assert_eq!(sig, hmac_b64url("k", body));
-        assert_ne!(sig, hmac_b64url("other", body));
     }
 }

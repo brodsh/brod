@@ -29,6 +29,8 @@ pub struct Config {
     pub api_host: String,
     pub admin_secret: String,
     pub identity_secret: String,
+    /// IDENTITY_SIGNING_KEY: the Ed25519 key that signs the identity tokens apps receive (identity.rs).
+    pub identity_key: crate::identity::IdentityKey,
     pub secrets_key: String,
     pub dev_mode: bool,
     pub resend_api_key: Option<String>,
@@ -193,7 +195,7 @@ impl Config {
         if hosted && get("APPS_DOMAIN").is_none() {
             need.push("APPS_DOMAIN");
         }
-        need.extend(["ADMIN_SECRET", "IDENTITY_SECRET"].into_iter().filter(|k| get(k).is_none()));
+        need.extend(["ADMIN_SECRET", "IDENTITY_SECRET", "IDENTITY_SIGNING_KEY"].into_iter().filter(|k| get(k).is_none()));
         // Hosted, app secrets must be readable after every restart, so their key cannot be left to chance.
         if hosted && get("SECRETS_KEY").is_none() {
             need.push("SECRETS_KEY");
@@ -209,6 +211,7 @@ impl Config {
                 need.join(", ")
             )));
         }
+        let identity_key = crate::identity::IdentityKey::parse(&get("IDENTITY_SIGNING_KEY").unwrap_or_default()).map_err(ConfigError)?;
         let api_origin = public_url.unwrap_or_default().trim_end_matches('/').to_string();
         if !(api_origin.starts_with("http://") || api_origin.starts_with("https://")) {
             return Err(ConfigError(format!("BROD_PUBLIC_URL must start with http:// or https://, not {api_origin:?}.")));
@@ -339,6 +342,9 @@ impl Config {
             }
             warnings.push(msg);
         }
+        if hosted && get("DEV_MODE").as_deref() != Some("1") && get("IDENTITY_SIGNING_KEY").as_deref() == Some(TEST_SIGNING_KEY) {
+            return Err(ConfigError("IDENTITY_SIGNING_KEY is the published test key. Generate one: openssl rand -hex 32".into()));
+        }
         let admin_email = get("BROD_ADMIN_EMAIL").map(|e| crate::util::norm_email(&e));
         if let Some(e) = &admin_email
             && !crate::util::is_email(e)
@@ -371,6 +377,7 @@ impl Config {
             api_host,
             admin_secret: get("ADMIN_SECRET").unwrap_or_default(),
             identity_secret: get("IDENTITY_SECRET").unwrap_or_default(),
+            identity_key,
             secrets_key: get("SECRETS_KEY").unwrap_or_default(),
             dev_mode: get("DEV_MODE").as_deref() == Some("1"),
             resend_api_key: get("RESEND_API_KEY"),
@@ -406,6 +413,7 @@ impl Config {
             ("API_ORIGIN", "http://localhost:8787"),
             ("ADMIN_SECRET", "test-admin-secret"),
             ("IDENTITY_SECRET", "test-identity-secret"),
+            ("IDENTITY_SIGNING_KEY", TEST_SIGNING_KEY),
             ("SECRETS_KEY", "test-secrets-key-0123456789"),
             ("DEV_MODE", "1"),
         ]
@@ -416,8 +424,12 @@ impl Config {
     }
 }
 
-/// The secrets a self-hosted Brod makes for itself when the environment does not set them.
-pub const GENERATED: [&str; 4] = ["ADMIN_SECRET", "IDENTITY_SECRET", "SECRETS_KEY", "BROD_RUNTIME_SECRET"];
+/// The secrets a self-hosted Brod makes for itself when the environment does not set them. Each is 32 random bytes in
+/// hex, which is also the form IDENTITY_SIGNING_KEY takes (an Ed25519 seed).
+pub const GENERATED: [&str; 5] = ["ADMIN_SECRET", "IDENTITY_SECRET", "SECRETS_KEY", "BROD_RUNTIME_SECRET", "IDENTITY_SIGNING_KEY"];
+
+/// An identity signing key for tests (the RFC 8032 test key). Never use it anywhere else.
+pub const TEST_SIGNING_KEY: &str = "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60";
 
 /// Values that must never protect a real server: the examples in Brod's own docs and tests, and the usual guesses.
 fn is_weak_secret(v: &str) -> bool {
@@ -465,12 +477,17 @@ mod tests {
     fn names_missing_variables_without_values() {
         let vars = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<HashMap<_, _>>();
         let err = Config::from_vars(&vars(&[("BROD_MODE", "hosted"), ("API_ORIGIN", "https://brod.example.test/")])).unwrap_err();
-        assert!(err.0.contains("APPS_DOMAIN, ADMIN_SECRET, IDENTITY_SECRET, SECRETS_KEY"), "{}", err.0);
-        // Self-hosted needs only the two secrets (from_env generates them), and defaults to this machine.
+        assert!(err.0.contains("APPS_DOMAIN, ADMIN_SECRET, IDENTITY_SECRET, IDENTITY_SIGNING_KEY, SECRETS_KEY"), "{}", err.0);
+        // Self-hosted needs only the three secrets (from_env generates them), and defaults to this machine.
         let err = Config::from_vars(&vars(&[])).unwrap_err();
-        assert!(err.0.contains("Set these environment variables: ADMIN_SECRET, IDENTITY_SECRET."), "{}", err.0);
-        let local =
-            Config::from_vars(&vars(&[("ADMIN_SECRET", "a"), ("IDENTITY_SECRET", "b"), ("BROD_LISTEN", "127.0.0.1:9000")])).unwrap();
+        assert!(err.0.contains("Set these environment variables: ADMIN_SECRET, IDENTITY_SECRET, IDENTITY_SIGNING_KEY."), "{}", err.0);
+        let local = Config::from_vars(&vars(&[
+            ("ADMIN_SECRET", "a"),
+            ("IDENTITY_SECRET", "b"),
+            ("IDENTITY_SIGNING_KEY", TEST_SIGNING_KEY),
+            ("BROD_LISTEN", "127.0.0.1:9000"),
+        ]))
+        .unwrap();
         assert_eq!((local.api_origin.as_str(), local.apps_domain.as_str()), ("http://localhost:9000", "localhost:9000"));
         assert_eq!(local.mode, Mode::SelfHosted);
         assert!(!local.marketplace && !local.abuse_checks && local.auto_migrate);
@@ -479,6 +496,7 @@ mod tests {
         let named = Config::from_vars(&vars(&[
             ("ADMIN_SECRET", "a"),
             ("IDENTITY_SECRET", "b"),
+            ("IDENTITY_SIGNING_KEY", TEST_SIGNING_KEY),
             ("BROD_PUBLIC_URL", "https://brod.acme.test"),
             ("API_ORIGIN", "https://old.test"),
         ]))
@@ -491,6 +509,7 @@ mod tests {
             ("APPS_DOMAIN", "b.test"),
             ("ADMIN_SECRET", "dev-admin-secret"),
             ("IDENTITY_SECRET", &"x".repeat(40)),
+            ("IDENTITY_SIGNING_KEY", TEST_SIGNING_KEY),
             ("SECRETS_KEY", &"y".repeat(40)),
         ]));
         assert!(weak.unwrap_err().0.starts_with("ADMIN_SECRET is short"));
@@ -505,6 +524,7 @@ mod tests {
             ("API_ORIGIN", "http://localhost:8787"),
             ("ADMIN_SECRET", "test-admin-secret"),
             ("IDENTITY_SECRET", "test-identity-secret"),
+            ("IDENTITY_SIGNING_KEY", TEST_SIGNING_KEY),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -520,6 +540,7 @@ mod tests {
         let again = load_or_create_secrets(&dir).unwrap();
         assert_eq!(first, again);
         assert!(GENERATED.iter().all(|k| first[*k].len() == 64));
+        assert!(crate::identity::IdentityKey::parse(&first["IDENTITY_SIGNING_KEY"]).is_ok());
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
