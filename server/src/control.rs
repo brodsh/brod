@@ -467,6 +467,10 @@ pub fn get_status(conn: &Connection, cfg: &Config, c: &Caller, slug: &str) -> Re
     }
     // Names only: secret values are never returned.
     m.insert("secrets".into(), secrets::list(conn, &app.id)?);
+    // Its managed Postgres (databases.rs): name, size and backups, never the password.
+    if let Some(d) = crate::databases::view(conn, cfg, &app.id)? {
+        m.insert("database".into(), d);
+    }
     // What the app lets this workspace customise (its brod.json), and the values set on it.
     m.insert("settings".into(), crate::settings::for_app(conn, &app)?);
     // Where the app may send data (its brod.json), and what it reached without declaring.
@@ -538,6 +542,9 @@ pub fn set_secret(conn: &Connection, cfg: &Config, c: &Caller, slug: &str, name:
     let app = get_app(conn, c, slug)?;
     let clean = js_trim(name).to_string();
     secrets::check_name(&clean)?;
+    if clean == crate::databases::SECRET && crate::databases::manages_url(conn, &app.id)? {
+        return Err(crate::databases::managed_url_problem());
+    }
     tx(conn, |x| {
         match value {
             None => secrets::delete(x, &app.id, &clean)?,
@@ -1374,11 +1381,12 @@ pub fn release_upload(conn: &Connection, id: &str) -> Result<()> {
 /// confirm_url for a person to open (needs_confirmation). A person signed in to Brod makes the same change directly.
 /// The other direction never waits: narrowing access, removing grants or open paths applies at once. The key is the
 /// confirmation's kind. docs/security.md and docs/mcp.md ("What needs a person") list the same.
-pub const NEEDS_A_PERSON: [(&str, &str); 4] = [
+pub const NEEDS_A_PERSON: [(&str, &str); 5] = [
     ("access", "widening who can open an app: a more open access mode, new grants, or a new password (set_access)"),
     ("invite", "inviting someone into the workspace or to an app (invite)"),
     ("delete", "deleting an app with all its versions and data (delete_app)"),
     ("open_paths", "opening paths of an app to anyone without sign-in (open_paths in brod.json on deploy_app, set_open_paths)"),
+    ("restore_database", "replacing an app's managed database with a backup (restore_database)"),
 ];
 
 /// Whether this caller must get a person to confirm an action of this kind.
@@ -1387,7 +1395,7 @@ pub fn needs_a_person(c: &Caller, kind: &str) -> bool {
 }
 
 /// An agent asked for a change a person must confirm. Nothing changes until they do.
-fn needs_confirmation(
+pub(crate) fn needs_confirmation(
     conn: &Connection,
     cfg: &Config,
     c: &Caller,
@@ -1490,6 +1498,10 @@ pub async fn confirm(st: &State, user: &User, id: &str) -> Result<Value> {
         }
         "invite" => invite(st, &c, payload).await,
         "delete" => delete_app(st, &c, &slug).await,
+        "restore_database" => {
+            let backup = payload.get("backup").and_then(|v| v.as_str()).map(String::from);
+            crate::backups::restore(st, &c, &slug, backup.as_deref()).await
+        }
         "open_paths" => {
             let (c, cfg) = (c.clone(), st.cfg.clone());
             let add = payload.get("add").cloned().unwrap_or(json!([]));
@@ -2028,6 +2040,8 @@ pub async fn delete_app(st: &State, c: &Caller, slug: &str) -> Result<Value> {
     if let Some(p) = pending {
         return Ok(p);
     }
+    // A managed database is backed up a last time (kept 30 days), then dropped with its role; a failed backup stops here.
+    crate::backups::retire(st, &app.id, &c.actor).await?;
     st.store.delete_prefix(&format!("{}/", app.id)).await?;
     runtime::wipe_app_data(st, &app.id).await?;
     let c2 = c.clone();
@@ -2197,7 +2211,7 @@ mod tests {
     #[test]
     fn the_approval_policy_names_what_needs_a_person() {
         let kinds: Vec<&str> = NEEDS_A_PERSON.iter().map(|(k, _)| *k).collect();
-        assert_eq!(kinds, ["access", "invite", "delete", "open_paths"]);
+        assert_eq!(kinds, ["access", "invite", "delete", "open_paths", "restore_database"]);
         let db = crate::db::test_db();
         let mut c = tokio::runtime::Runtime::new().unwrap().block_on(db.call(|conn| Ok(builder(conn)))).unwrap();
         assert!(!needs_a_person(&c, "open_paths"), "a person never waits for themselves");

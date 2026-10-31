@@ -83,6 +83,19 @@ pub struct Config {
     pub containers: Containers,
     /// BROD_REGISTRY_URL and the key Brod signs registry tokens with (registry.rs). None: no registry, so no containers.
     pub registry: Option<RegistryConfig>,
+    /// BROD_APPS_DATABASE_URL: apps-postgres, where apps' managed databases live (databases.rs). None: none.
+    pub apps_db: Option<AppsDbConfig>,
+}
+
+/// The admin connection to apps-postgres: a server of its own, never Brod's database, reached only by Brod.
+#[derive(Clone, Debug)]
+pub struct AppsDbConfig {
+    /// A postgres:// URL; a Unix socket folder goes in the host, percent-encoded (postgres://brod_admin@%2Frun%2Fpg/postgres).
+    pub url: String,
+    /// APPS_DATABASE_PASSWORD, when the URL carries none (self-hosted, generated into secrets.env).
+    pub password: Option<String>,
+    /// BROD_PG_BIN_DIR: where pg_dump and pg_restore are, matching the server's major version. Default: the PATH.
+    pub bin_dir: Option<PathBuf>,
 }
 
 /// BROD_CONTAINERS. `Off`: container apps are refused. `Trusted`: every workspace is trusted, so an image may even run
@@ -191,6 +204,23 @@ impl Config {
             let key = registry_key_from_secrets(&data_dir)?;
             vars.insert("REGISTRY_SIGNING_KEY".into(), key);
             generated.push("REGISTRY_SIGNING_KEY".into());
+        }
+        // The apps-postgres admin password, like the registry key, is made the first time apps-postgres is configured,
+        // and written to BROD_APPS_DATABASE_PASSWORD_FILE for the database container's POSTGRES_PASSWORD_FILE.
+        if !hosted && set(&vars, "BROD_APPS_DATABASE_URL") && !set(&vars, "APPS_DATABASE_PASSWORD") {
+            let pw = kept_secret(&data_dir, "APPS_DATABASE_PASSWORD", || crate::util::random_id("", 32))?;
+            vars.insert("APPS_DATABASE_PASSWORD".into(), pw);
+            generated.push("APPS_DATABASE_PASSWORD".into());
+        }
+        if let (Some(path), Some(pw)) = (
+            vars.get("BROD_APPS_DATABASE_PASSWORD_FILE").map(|p| p.trim()).filter(|p| !p.is_empty()),
+            vars.get("APPS_DATABASE_PASSWORD").map(|p| p.trim()).filter(|p| !p.is_empty()),
+        ) {
+            let path = PathBuf::from(path);
+            if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+                std::fs::create_dir_all(dir).map_err(|e| ConfigError(format!("Could not create {}: {e}", dir.display())))?;
+            }
+            write_private(&path, pw).map_err(|e| ConfigError(format!("Could not write {}: {e}", path.display())))?;
         }
         let mut cfg = Config::from_vars(&vars)?;
         cfg.generated_secrets = generated;
@@ -440,7 +470,20 @@ impl Config {
                 Some(RegistryConfig { url: url.trim_end_matches('/').to_string(), key_pkcs8, cert_file })
             }
         };
+        let apps_db = match get("BROD_APPS_DATABASE_URL") {
+            None => None,
+            Some(url) => {
+                if !(url.starts_with("postgres://") || url.starts_with("postgresql://")) || url.parse::<postgres::Config>().is_err() {
+                    return Err(ConfigError(
+                        "BROD_APPS_DATABASE_URL must be a postgres:// address, such as postgres://brod_admin@apps-postgres/postgres."
+                            .into(),
+                    ));
+                }
+                Some(AppsDbConfig { url, password: get("APPS_DATABASE_PASSWORD"), bin_dir: get("BROD_PG_BIN_DIR").map(PathBuf::from) })
+            }
+        };
         Ok(Config {
+            apps_db,
             containers,
             registry,
             mode,
@@ -542,18 +585,22 @@ fn load_or_create_secrets(data_dir: &std::path::Path) -> Result<HashMap<String, 
 
 /// REGISTRY_SIGNING_KEY from `<data>`/secrets.env, appended there with a fresh key when it is missing.
 fn registry_key_from_secrets(data_dir: &std::path::Path) -> Result<String, ConfigError> {
+    kept_secret(data_dir, "REGISTRY_SIGNING_KEY", crate::registry::new_key)
+}
+
+/// `name` from `<data>`/secrets.env, appended there with a fresh value from `fresh` when it is missing.
+fn kept_secret(data_dir: &std::path::Path, name: &str, fresh: impl FnOnce() -> String) -> Result<String, ConfigError> {
     let path = data_dir.join("secrets.env");
-    let fail = |e: std::io::Error| ConfigError(format!("Could not keep the registry key in {}: {e}", path.display()));
+    let fail = |e: std::io::Error| ConfigError(format!("Could not keep {name} in {}: {e}", path.display()));
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(fail(e)),
     };
-    if let Some(v) = text.lines().filter_map(|l| l.split_once('=')).find(|(k, _)| k.trim() == "REGISTRY_SIGNING_KEY").map(|(_, v)| v.trim())
-    {
+    if let Some(v) = text.lines().filter_map(|l| l.split_once('=')).find(|(k, _)| k.trim() == name).map(|(_, v)| v.trim()) {
         return Ok(v.to_string());
     }
-    let key = crate::registry::new_key();
+    let key = fresh();
     let mut text = if text.is_empty() {
         String::from("# Generated by Brod on first start. Keep this file private; back it up with the database.\n")
     } else {
@@ -562,7 +609,7 @@ fn registry_key_from_secrets(data_dir: &std::path::Path) -> Result<String, Confi
     if !text.ends_with('\n') {
         text.push('\n');
     }
-    text.push_str(&format!("REGISTRY_SIGNING_KEY={key}\n"));
+    text.push_str(&format!("{name}={key}\n"));
     std::fs::create_dir_all(data_dir).map_err(fail)?;
     write_private(&path, &text).map_err(fail)?;
     Ok(key)

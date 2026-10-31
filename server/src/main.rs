@@ -219,6 +219,20 @@ async fn run(cfg: Config) {
             }
         });
     }
+    // Apps' managed databases (databases.rs, backups.rs): sizes, nightly backups, weekly restore drills, retention.
+    if st.cfg.apps_db.is_some() {
+        let st = st.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(120)).await;
+            let mut tick = tokio::time::interval(Duration::from_secs(600));
+            loop {
+                tick.tick().await;
+                if let Err(e) = brod::backups::tick(&st).await {
+                    tracing::warn!("could not look after app databases: {}", e.message);
+                }
+            }
+        });
+    }
     // Server apps' databases are measured in the runtime: refresh their sizes every 10 minutes.
     if st.cfg.runtime.is_some() {
         let st = st.clone();

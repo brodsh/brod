@@ -75,6 +75,7 @@ pub fn tools() -> Value {
                     "health": s("Container apps: the path Brod checks before sending traffic, such as \"/healthz\" (healthy: any status below 500). Default \"/\"."),
                     "cpu": { "type": "number", "minimum": 0.1, "maximum": 16, "description": "Container apps: CPUs. Default 0.5." },
                     "memory_mb": { "type": "integer", "minimum": 64, "maximum": 65536, "description": "Container apps: memory in MB. Default 512." },
+                    "migrate": s("Container apps: a shell command run once from the new image before it serves, such as \"npm run migrate\" (or \"migrate\" in brod.json). If it fails the deployment fails with migration_failed and what is live keeps serving. Schema changes are NOT undone by a rollback, and staging shares the live database."),
                     "files": {
                         "type": "array", "description": "The app's files, for small apps. Must include index.html at the top level.",
                         "items": { "type": "object", "properties": { "path": s("Path inside the app, for example \"index.html\" or \"assets/app.js\"."), "content": s("File content."), "encoding": { "type": "string", "enum": ["utf8", "base64"], "description": "How content is encoded. Default utf8." } }, "required": ["path", "content"] },
@@ -105,7 +106,7 @@ pub fn tools() -> Value {
         },
         {
             "name": "get_deployment", "title": "Deployment status",
-            "description": "Follow a container app's deployment (deploy_app or rollback returns its id): its state (scheduled, building, pulling, starting, healthy, serving; draining and stopped once replaced) and the last 50 lines of its log. A failed one returns the error build_failed or deployment_failed with the log lines that say why; what was live stays live.",
+            "description": "Follow a container app's deployment (deploy_app or rollback returns its id): its state (scheduled, building, pulling, migrating, starting, healthy, serving; draining and stopped once replaced) and the last 50 lines of its log. A failed one returns the error build_failed, migration_failed or deployment_failed with the log lines that say why; what was live stays live.",
             "inputSchema": { "type": "object", "properties": { "app": app_arg(), "deployment": s("The deployment id. Default: the app's newest deployment.") }, "required": ["app"] },
             "annotations": { "readOnlyHint": true },
         },
@@ -119,6 +120,29 @@ pub fn tools() -> Value {
                 "required": ["app", "name"],
             },
             "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true },
+        },
+        {
+            "name": "request_database", "title": "Add a Postgres database",
+            "description": concat!("Give a container app its own Postgres database (when this Brod has managed databases). Safe to call again: it returns the database the app already has. ",
+                "The app's containers get DATABASE_URL (postgres://...@brod-db.internal:5432/...) from their next deployment, so deploy the app after this. Only this app can reach its database. ",
+                "DATABASE_URL is then managed by Brod and set_secret cannot change it. It is backed up nightly (backup_database takes one now); get_status shows its size and backups. ",
+                "To change the schema on deploy, give deploy_app (or brod.json) a \"migrate\" command."),
+            "inputSchema": { "type": "object", "properties": { "app": app_arg() }, "required": ["app"] },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true },
+        },
+        {
+            "name": "backup_database", "title": "Back up a database",
+            "description": "Back up an app's managed database now (encrypted, kept with the nightly ones). Returns the backup's id, which restore_database takes.",
+            "inputSchema": { "type": "object", "properties": { "app": app_arg() }, "required": ["app"] },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false },
+        },
+        {
+            "name": "restore_database", "title": "Restore a database",
+            "description": concat!("Replace an app's managed database with a backup (the newest unless \"backup\" names one; get_status lists them). Everything written since that backup is replaced. ",
+                "This needs a person: nothing changes until the owner opens the confirm_url you get back. Pass it on and tell them what will be replaced. ",
+                "Once confirmed, the replaced data is kept for 24 hours and the app's containers restart."),
+            "inputSchema": { "type": "object", "properties": { "app": app_arg(), "backup": s("A backup id from get_status. Default: the newest.") }, "required": ["app"] },
+            "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false },
         },
         {
             "name": "publish_staging", "title": "Publish staging",
@@ -342,6 +366,12 @@ async fn call(st: &State, c: &Caller, name: &str, a: &Map<String, Value>) -> Res
             let value = if remove { None } else { value };
             st.db.call(move |conn| control::set_secret(conn, &cfg, &c2, &slug, &name, value.as_deref())).await
         }
+        "request_database" => crate::databases::request(st, c, &str_arg("app")).await,
+        "backup_database" => crate::backups::backup_now(st, c, &str_arg("app")).await,
+        "restore_database" => {
+            let backup = str_arg("backup");
+            crate::backups::restore(st, c, &str_arg("app"), Some(&backup)).await
+        }
         "publish_staging" => {
             let slug = str_arg("app");
             if matches!(a.get("discard"), Some(Value::Bool(true))) {
@@ -546,6 +576,9 @@ mod tests {
                 "get_logs",
                 "get_deployment",
                 "set_secret",
+                "request_database",
+                "backup_database",
+                "restore_database",
                 "publish_staging",
                 "rollback",
                 "set_access",

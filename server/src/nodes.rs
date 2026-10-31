@@ -215,6 +215,11 @@ impl Nodes {
         serial
     }
 
+    /// Whether `serial` is still the node's live tunnel.
+    pub fn is_current(&self, node: &str, serial: u64) -> bool {
+        lock(&self.tunnels).get(node).is_some_and(|t| t.serial == serial && !t.send.is_closed())
+    }
+
     /// Forget the tunnel `serial` once it has ended, unless another has replaced it.
     fn detach(&self, node: &str, serial: u64) {
         let mut t = lock(&self.tunnels);
@@ -411,7 +416,11 @@ async fn tunnel(st: State, node: String, address: Option<String>, on_upgrade: hy
         })
         .await;
     match marked {
-        Ok(to) => tracing::info!("node {node} connected ({})", to.name()),
+        Ok(to) => {
+            tracing::info!("node {node} connected ({})", to.name());
+            // Apps' connections to their managed databases come over this tunnel (databases.rs).
+            tokio::spawn(crate::databases::accept_loop(st.clone(), node.clone(), serial));
+        }
         Err(e) => {
             // Disabled or removed while it was connecting.
             tracing::info!("node {node} refused after connecting: {}", e.message);

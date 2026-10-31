@@ -90,10 +90,26 @@ impl S3Store {
         body: Bytes,
         content_type: Option<&str>,
     ) -> Result<reqwest::Response> {
+        let payload = sha_hex(&body);
+        let has_body = !body.is_empty() || method == Method::PUT;
+        self.send_body(method, path, query, payload, has_body.then(|| (reqwest::Body::from(body), None)), content_type, None).await
+    }
+
+    /// `send` with the body's SHA-256 known ahead (a streamed file's), and its length when it is a stream.
+    #[allow(clippy::too_many_arguments)]
+    async fn send_body(
+        &self,
+        method: Method,
+        path: &str,
+        query: &[(&str, String)],
+        payload: String,
+        body: Option<(reqwest::Body, Option<u64>)>,
+        content_type: Option<&str>,
+        timeout: Option<Duration>,
+    ) -> Result<reqwest::Response> {
         let stamp = crate::util::iso(crate::util::now());
         let amz_date = format!("{}{}{}T{}{}{}Z", &stamp[0..4], &stamp[5..7], &stamp[8..10], &stamp[11..13], &stamp[14..16], &stamp[17..19]);
         let date = &amz_date[..8];
-        let payload = sha_hex(&body);
         let mut q: Vec<(String, String)> = query.iter().map(|(k, v)| (enc(k), enc(v))).collect();
         q.sort();
         let canonical_query = q.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("&");
@@ -119,8 +135,14 @@ impl S3Store {
                 req = req.header(*k, v);
             }
         }
-        if !body.is_empty() || method == Method::PUT {
+        if let Some((body, len)) = body {
+            if let Some(len) = len {
+                req = req.header("content-length", len);
+            }
             req = req.body(body);
+        }
+        if let Some(t) = timeout {
+            req = req.timeout(t);
         }
         req.send().await.map_err(|e| Problem::internal(format!("S3 {method} {path}: {e}")))
     }
@@ -155,6 +177,49 @@ impl S3Store {
     pub async fn put(&self, key: &str, bytes: Bytes, content_type: Option<&str>) -> Result<ObjectMeta> {
         let size = bytes.len() as u64;
         let res = self.send(Method::PUT, &self.key_path(key), &[], bytes, content_type).await?;
+        let res = self.check(res, &format!("PUT {key}"), false).await?.ok_or_else(|| Problem::internal("S3 PUT"))?;
+        let etag = res.headers().get("etag").and_then(|v| v.to_str().ok()).unwrap_or("").trim_matches('"').to_string();
+        Ok(ObjectMeta {
+            key: key.to_string(),
+            size,
+            etag,
+            content_type: content_type.map(String::from),
+            uploaded: Some(crate::util::iso(crate::util::now())),
+        })
+    }
+
+    /// PUT a local file, streamed, signed with its SHA-256 (read once ahead).
+    pub async fn put_file(&self, key: &str, path: &std::path::Path, content_type: Option<&str>) -> Result<ObjectMeta> {
+        let src = path.to_path_buf();
+        let (hash, size) = tokio::task::spawn_blocking(move || -> std::io::Result<(String, u64)> {
+            use std::io::Read;
+            let mut f = std::fs::File::open(src)?;
+            let mut h = Sha256::new();
+            let (mut buf, mut size) = (vec![0u8; 64 * 1024], 0u64);
+            loop {
+                let n = f.read(&mut buf)?;
+                if n == 0 {
+                    return Ok((hex::encode(h.finalize()), size));
+                }
+                size += n as u64;
+                h.update(&buf[..n]);
+            }
+        })
+        .await
+        .map_err(Problem::internal)??;
+        let file = tokio::fs::File::open(path).await?;
+        let body = reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::new(file));
+        let res = self
+            .send_body(
+                Method::PUT,
+                &self.key_path(key),
+                &[],
+                hash,
+                Some((body, Some(size))),
+                content_type,
+                Some(Duration::from_secs(6 * 3600)),
+            )
+            .await?;
         let res = self.check(res, &format!("PUT {key}"), false).await?.ok_or_else(|| Problem::internal("S3 PUT"))?;
         let etag = res.headers().get("etag").and_then(|v| v.to_str().ok()).unwrap_or("").trim_matches('"').to_string();
         Ok(ObjectMeta {
