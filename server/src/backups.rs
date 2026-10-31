@@ -394,8 +394,9 @@ pub fn compare(expected: &Map<String, Value>, got: &Map<String, Value>) -> std::
 fn create_scratch(cfg: &Config, scratch: &str, owner: Option<&str>) -> Result<()> {
     let mut c = connect(&admin_config(cfg, None)?)?;
     let owner = owner.map(|o| format!(" OWNER {}", ident(o))).unwrap_or_default();
-    c.batch_execute(&format!("CREATE DATABASE {}{owner}; REVOKE ALL ON DATABASE {} FROM PUBLIC", ident(scratch), ident(scratch)))
-        .map_err(pg_error)
+    // Separate statements: CREATE DATABASE cannot run in the implicit transaction of a multi-statement batch.
+    c.batch_execute(&format!("CREATE DATABASE {}{owner}", ident(scratch))).map_err(pg_error)?;
+    c.batch_execute(&format!("REVOKE ALL ON DATABASE {} FROM PUBLIC", ident(scratch))).map_err(pg_error)
 }
 
 fn drop_db(cfg: &Config, name: &str) -> Result<()> {

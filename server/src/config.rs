@@ -220,7 +220,9 @@ impl Config {
             if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
                 std::fs::create_dir_all(dir).map_err(|e| ConfigError(format!("Could not create {}: {e}", dir.display())))?;
             }
-            write_private(&path, pw).map_err(|e| ConfigError(format!("Could not write {}: {e}", path.display())))?;
+            // Readable by others: the Postgres image reads it as its own user, not Brod's. The volume it is in holds
+            // nothing else and is mounted only by Brod and apps-postgres.
+            write_shared(&path, pw).map_err(|e| ConfigError(format!("Could not write {}: {e}", path.display())))?;
         }
         let mut cfg = Config::from_vars(&vars)?;
         cfg.generated_secrets = generated;
@@ -622,6 +624,14 @@ fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
     std::io::Write::write_all(&mut opts.open(path)?, text.as_bytes())
+}
+
+/// Write `text` to `path` readable by everyone (0644), for a file another container reads as a different user.
+fn write_shared(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    std::fs::write(path, text)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o644))?;
+    Ok(())
 }
 
 #[cfg(test)]

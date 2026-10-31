@@ -144,8 +144,12 @@ pub async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 
     tokio::task::spawn_blocking(f).await.map_err(Problem::internal)?
 }
 
+/// An error from apps-postgres, with the server's own message when there is one ("db error" alone says nothing).
 pub fn pg_error(e: postgres::Error) -> Problem {
-    Problem::internal(format!("apps-postgres: {e}"))
+    match e.as_db_error() {
+        Some(d) => Problem::internal(format!("apps-postgres: {} ({}): {}", d.message(), d.code().code(), d.detail().unwrap_or(""))),
+        None => Problem::internal(format!("apps-postgres: {e}")),
+    }
 }
 
 /// Create (or bring back in line) the app's role and database. Safe to repeat: an existing role gets the new password.
@@ -278,7 +282,7 @@ pub fn view(conn: &Connection, cfg: &Config, app_id: &str) -> Result<Option<Valu
         },
     )?;
     let mut v = json!({
-        "engine": "postgres", "name": d.name, "host": HOST, "port": PORT, "env": SECRET,
+        "id": d.id, "engine": "postgres", "name": d.name, "host": HOST, "port": PORT, "env": SECRET,
         "size_bytes": d.bytes, "measured": d.measured_at.map(iso), "created": iso(d.created_at),
         "last_restore_drill": d.drilled_at.map(iso), "backups": backups,
     });
@@ -608,6 +612,14 @@ async fn upstream(cfg: &Config) -> Result<Box<dyn Io>> {
     Ok(io)
 }
 
+/// Send the client a last message and end the connection, waiting (briefly) for the node to close its side: dropping
+/// the stream at once would reset it before the message reaches the client.
+async fn refuse<R: AsyncRead + Unpin>(tx: mpsc::Sender<Bytes>, mut client: R, message: Bytes) {
+    let _ = tx.send(message).await;
+    drop(tx);
+    let _ = tokio::time::timeout(Duration::from_secs(5), tokio::io::copy(&mut client, &mut tokio::io::sink())).await;
+}
+
 /// Take a connection: check its startup packet against the app's database, then pipe it to apps-postgres.
 async fn pipe(st: &State, node: &str, conn: &str, name: &str, role: &str) -> Result<()> {
     let (tx, rx) = mpsc::channel::<Bytes>(16);
@@ -632,7 +644,7 @@ async fn pipe(st: &State, node: &str, conn: &str, name: &str, role: &str) -> Res
                 let m = format!(
                     "This app's database is {name}, reached as {role}: use DATABASE_URL. No other database or role is reachable from here."
                 );
-                let _ = tx.send(error_response("28000", &m)).await;
+                refuse(tx, client, error_response("28000", &m)).await;
                 return Err(Problem::new(403, "forbidden", format!("asked for {database} as {user}")));
             }
             packet
@@ -641,7 +653,7 @@ async fn pipe(st: &State, node: &str, conn: &str, name: &str, role: &str) -> Res
     let up = match upstream(&st.cfg).await {
         Ok(u) => u,
         Err(e) => {
-            let _ = tx.send(error_response("57P03", "The database server is not reachable right now.")).await;
+            refuse(tx, client, error_response("57P03", "The database server is not reachable right now.")).await;
             return Err(e);
         }
     };
