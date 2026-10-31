@@ -678,16 +678,17 @@ fn new_slug(conn: &Connection, c: &Caller, name: &str) -> Result<String> {
     Ok(format!("{base}-{}", random_id("", 4)))
 }
 
-pub(crate) fn check_rate(conn: &Connection, c: &Caller) -> Result<()> {
+/// Refuse a deploy once the workspace has deployed `per_hour` times in the last hour (rate.deploys_per_hour).
+pub(crate) fn check_rate(conn: &Connection, c: &Caller, per_hour: i64) -> Result<()> {
     let n = conn.count(
         "SELECT COUNT(*) AS n FROM events WHERE workspace_id = ? AND action = 'deploy' AND at > ?",
         params![c.workspace.id, now() - 3_600_000],
     )?;
-    if n >= limits::DEPLOYS_PER_HOUR {
+    if n >= per_hour {
         return Err(Problem::new(
             429,
             "rate_limited",
-            format!("This workspace has deployed {} times in the last hour. Wait a little and try again.", limits::DEPLOYS_PER_HOUR),
+            format!("This workspace has deployed {per_hour} times in the last hour. Wait a little and try again."),
         ));
     }
     Ok(())
@@ -875,10 +876,11 @@ pub(crate) fn target_app(conn: &Connection, cfg: &Config, c: &Caller, o: &Deploy
 pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFile>) -> Result<Value> {
     {
         let (c, o) = (c.clone(), o.clone());
+        let per_hour = crate::instance::current(st).await.int("rate.deploys_per_hour");
         st.db
             .call(move |conn| {
                 require_role(&c, "builder", "deploy apps")?;
-                check_rate(conn, &c)?;
+                check_rate(conn, &c, per_hour)?;
                 abuse::check_workspace_up(conn, &c)?;
                 match o.app_slug() {
                     Some(slug) => abuse::check_up(conn, &get_app(conn, &c, slug)?),
@@ -908,7 +910,7 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFi
     let bytes: usize = files.iter().map(|f| f.bytes.len()).sum();
     // The phishing check (BROD_ABUSE_CHECKS): a flagged version still deploys, but its app stays private or people-only
     // and the operator gets a report.
-    let checks = st.cfg.abuse_checks;
+    let checks = st.settings.last().flag("features.abuse_checks");
     let (files, scan) = tokio::task::spawn_blocking(move || {
         let scan = if checks { crate::scan::scan_bundle(&files) } else { crate::scan::Scan::default() };
         (files, scan)
@@ -1541,7 +1543,7 @@ fn labels(list: &[crate::open_paths::OpenPath]) -> String {
 /// Refuse opening paths of an app to anyone where opening the app itself to anyone would be refused.
 fn check_may_open(conn: &Connection, cfg: &Config, c: &Caller, app: &AppRow) -> Result<()> {
     abuse::check_up(conn, app)?;
-    if cfg.abuse_checks {
+    if crate::instance::Settings::load(conn, cfg)?.flag("features.abuse_checks") {
         abuse::check_can_open_outside(conn, c, "public")?;
     }
     abuse::check_not_flagged(conn, app, "public")
@@ -1890,7 +1892,7 @@ pub fn set_access(
         abuse::check_up(conn, &app)?;
     }
     if opening {
-        if cfg.abuse_checks {
+        if crate::instance::Settings::load(conn, cfg)?.flag("features.abuse_checks") {
             abuse::check_can_open_outside(conn, c, &access)?;
         }
         abuse::check_not_flagged(conn, &app, &access)?;

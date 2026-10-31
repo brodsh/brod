@@ -23,7 +23,7 @@ pub const OAUTH_CLIENTS_PER_IP_HOUR: i64 = 10;
 pub const WORKSPACES_PER_USER_DAY: i64 = 3;
 pub const REPORTS_PER_IP_HOUR: i64 = 10;
 /// Calls one agent connection, or one person's session, may make to the REST API and MCP in a minute.
-pub const CALLS_PER_MINUTE: u32 = 600;
+pub const CALLS_PER_MINUTE: i64 = 600;
 /// A workspace this young cannot open apps to people outside it (password, signed_in, public).
 pub const NEW_WORKSPACE_MS: i64 = 24 * HOUR;
 pub const HOUR: i64 = 3_600_000;
@@ -155,12 +155,13 @@ pub fn taken_down_page() -> Response {
 pub struct CallLimits(Mutex<HashMap<String, (i64, u32)>>);
 
 impl CallLimits {
-    /// Count one call by `c`; refuse it with 429 once there have been CALLS_PER_MINUTE this minute.
-    pub fn check(&self, c: &Caller) -> Result<()> {
-        self.check_at(&format!("{}:{}", c.user.id, c.actor), now())
+    /// Count one call by `c`; refuse it with 429 once there have been `per_minute` this minute (rate.calls_per_minute,
+    /// CALLS_PER_MINUTE by default).
+    pub fn check(&self, c: &Caller, per_minute: i64) -> Result<()> {
+        self.check_at(&format!("{}:{}", c.user.id, c.actor), now(), per_minute)
     }
 
-    fn check_at(&self, key: &str, at: i64) -> Result<()> {
+    fn check_at(&self, key: &str, at: i64, per_minute: i64) -> Result<()> {
         let window = at / 60_000;
         let mut calls = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         if calls.len() > 10_000 {
@@ -171,7 +172,7 @@ impl CallLimits {
             *entry = (window, 0);
         }
         entry.1 += 1;
-        if entry.1 > CALLS_PER_MINUTE {
+        if i64::from(entry.1) > per_minute {
             return Err(Problem::new(
                 429,
                 "rate_limited",
@@ -451,12 +452,12 @@ mod tests {
     fn limits_calls_per_connection_per_minute() {
         let limits = CallLimits::default();
         for _ in 0..CALLS_PER_MINUTE {
-            limits.check_at("usr_1:claude", 60_000).unwrap();
+            limits.check_at("usr_1:claude", 60_000, CALLS_PER_MINUTE).unwrap();
         }
-        assert_eq!(limits.check_at("usr_1:claude", 60_001).unwrap_err().status, 429);
+        assert_eq!(limits.check_at("usr_1:claude", 60_001, CALLS_PER_MINUTE).unwrap_err().status, 429);
         // Another connection, and the next minute, start again.
-        limits.check_at("usr_1:cursor", 60_002).unwrap();
-        limits.check_at("usr_1:claude", 120_000).unwrap();
+        limits.check_at("usr_1:cursor", 60_002, CALLS_PER_MINUTE).unwrap();
+        limits.check_at("usr_1:claude", 120_000, CALLS_PER_MINUTE).unwrap();
     }
 
     #[test]

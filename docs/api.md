@@ -52,7 +52,7 @@ is on (`BROD_MARKETPLACE=true`, the default when hosted, off when self-hosted). 
 | Route | |
 | --- | --- |
 | `GET /v1/me` | The signed-in person and their workspaces. Session cookie only. |
-| `POST /v1/workspaces` `{name, accept_terms}` | Create a workspace. Session cookie only. `accept_terms` is needed only when hosted. Self-hosted, only workspace admins can create workspaces. |
+| `POST /v1/workspaces` `{name, accept_terms}` | Create a workspace. Session cookie only. `accept_terms` is needed only when hosted. Who may is the operator's `workspaces.creation` setting: by default anyone verified when hosted, workspace admins when self-hosted (`403 workspaces_closed` otherwise). |
 | `GET /v1/workspace`, `PATCH /v1/workspace` `{name, color, icon}` | Workspace details and branding |
 | `GET /v1/people`, `PATCH /v1/people/:email-or-id` `{role}`, `DELETE /v1/people/:email-or-id` | The people directory. Changing roles and removing people needs an admin. |
 | `GET /v1/invites`, `POST /v1/invites` `{email, role, app?, app_role?}`, `DELETE /v1/invites/:id` | Invitations, to the workspace or as a guest to one app |

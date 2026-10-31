@@ -111,13 +111,15 @@ pub fn membership(conn: &Connection, user: &User, workspace: Option<&str>) -> Re
     )
 }
 
-/// Who may make a workspace. Hosted: anyone with a verified email. Self-hosted: an admin of an existing workspace or,
-/// on a server with no workspace yet, BROD_ADMIN_EMAIL (anyone who signs in first, when that is not set).
+/// Who may make a workspace, by the workspaces.creation setting: "anyone_verified" (the hosted default), "workspace_admins"
+/// (an admin of an existing workspace; the self-hosted default) or "operators". Operators always may. On a server with
+/// no workspace yet, BROD_ADMIN_EMAIL may (anyone who signs in first, when that is not set), whatever the policy.
 pub fn may_create_workspace(conn: &Connection, cfg: &Config, user: &User) -> Result<bool> {
-    if cfg.mode == crate::config::Mode::Hosted {
+    let policy = crate::instance::Settings::load(conn, cfg)?.text("workspaces.creation").to_string();
+    if policy == "anyone_verified" || crate::operator::is_operator(conn, &user.id)? {
         return Ok(true);
     }
-    if conn.exists("SELECT 1 FROM members WHERE user_id = ? AND role = 'admin'", [&user.id])? {
+    if policy == "workspace_admins" && conn.exists("SELECT 1 FROM members WHERE user_id = ? AND role = 'admin'", [&user.id])? {
         return Ok(true);
     }
     if conn.exists("SELECT 1 FROM workspaces", ())? {
@@ -138,7 +140,7 @@ pub fn create_workspace(conn: &Connection, cfg: &Config, user: &User, name: &str
         return Err(Problem::new(
             403,
             "workspaces_closed",
-            "On this server only workspace admins can create workspaces. Ask an admin to invite you.",
+            "On this server you cannot create workspaces. Ask an admin to invite you to one, or the operator to let you.",
         ));
     }
     crate::allowances::check_new_workspace(conn, cfg)?;
@@ -154,16 +156,14 @@ pub fn create_workspace(conn: &Connection, cfg: &Config, user: &User, name: &str
             ));
         }
     }
+    let per_day = crate::instance::Settings::load(conn, cfg)?.int("rate.workspaces_per_user_day");
     crate::abuse::rate_limit(
         conn,
         "workspaces",
         &user.id,
-        crate::abuse::WORKSPACES_PER_USER_DAY,
+        per_day,
         crate::abuse::DAY,
-        &format!(
-            "You can create {} workspaces a day and have reached that; use one you already have.",
-            crate::abuse::WORKSPACES_PER_USER_DAY
-        ),
+        &format!("You can create {per_day} workspaces a day and have reached that; use one you already have."),
     )?;
     let base = workspace_slugify(&clean);
     let mut slug = base.clone();

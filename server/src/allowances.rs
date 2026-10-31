@@ -98,6 +98,32 @@ pub fn check_new_user(conn: &Connection, cfg: &Config, email: &str) -> Result<()
     Ok(())
 }
 
+/// Refuse a new account whose email is outside `signin.allowed_email_domains` (when that list is not empty). Someone
+/// who already has an account always gets in, and so does someone a workspace admin invited (accept_invite only
+/// checks `check_new_user`): the allowlist closes open sign-up, not invitations.
+pub fn check_email_domain(conn: &Connection, cfg: &Config, email: &str) -> Result<()> {
+    let e = crate::util::norm_email(email);
+    let allowed = Settings::load(conn, cfg)?.list("signin.allowed_email_domains");
+    if allowed.is_empty() || conn.exists("SELECT 1 FROM users WHERE email = ?", [&e])? {
+        return Ok(());
+    }
+    let domain = e.rsplit_once('@').map(|(_, d)| d).unwrap_or("");
+    if allowed.iter().any(|d| d == domain) {
+        return Ok(());
+    }
+    Err(crate::problem::Problem::new(
+        403,
+        "email_domain_not_allowed",
+        format!("This server only lets in people with an email address at {}. Ask an admin to invite you.", allowed.join(", ")),
+    ))
+}
+
+/// Both checks for someone signing in by themselves (a sign-in link or Google): the domain allowlist and the cap.
+pub fn check_new_signin(conn: &Connection, cfg: &Config, email: &str) -> Result<()> {
+    check_email_domain(conn, cfg, email)?;
+    check_new_user(conn, cfg, email)
+}
+
 /// Refuse a new workspace when the server already has `server.max_workspaces`.
 pub fn check_new_workspace(conn: &Connection, cfg: &Config) -> Result<()> {
     let Some(max) = Settings::load(conn, cfg)?.limit("server.max_workspaces") else { return Ok(()) };
@@ -181,6 +207,50 @@ mod tests {
             let open = cfg(Mode::SelfHosted, &[]);
             check_new_user(conn, &open, "b@x.test")?;
             check_new_workspace(conn, &open)?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_domain_allowlist_closes_sign_up_but_not_existing_accounts() {
+        let db = crate::db::test_db();
+        db.call(|conn| {
+            let c = cfg(Mode::SelfHosted, &[("BROD_ALLOWED_EMAIL_DOMAINS", "acme.com, Acme.io")]);
+            crate::people::verified_user(conn, "old@elsewhere.test", "")?;
+            check_new_signin(conn, &c, "new@acme.com")?;
+            check_new_signin(conn, &c, "New@ACME.io")?;
+            check_new_signin(conn, &c, "old@elsewhere.test")?;
+            let e = check_new_signin(conn, &c, "x@evil.test").unwrap_err();
+            assert_eq!((e.status, e.code.as_str()), (403, "email_domain_not_allowed"));
+            // A look-alike subdomain is not the domain.
+            assert!(check_new_signin(conn, &c, "x@notacme.com").is_err());
+            check_new_signin(conn, &cfg(Mode::SelfHosted, &[]), "x@evil.test")?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_creation_policy_decides_who_may_make_a_workspace() {
+        let db = crate::db::test_db();
+        db.call(|conn| {
+            let admin = crate::people::verified_user(conn, "admin@x.test", "")?;
+            let other = crate::people::verified_user(conn, "other@x.test", "")?;
+            workspace(conn, "w1", "free");
+            conn.run("INSERT INTO members (workspace_id, user_id, role, created_at) VALUES ('w1', ?, 'admin', 1)", [&admin.id])?;
+            let may = |c: &Config, u: &crate::model::User| crate::people::may_create_workspace(conn, c, u).unwrap();
+            let anyone = cfg(Mode::SelfHosted, &[("BROD_WORKSPACE_CREATION", "anyone_verified")]);
+            assert!(may(&anyone, &admin) && may(&anyone, &other));
+            let admins = cfg(Mode::SelfHosted, &[]);
+            assert!(may(&admins, &admin) && !may(&admins, &other));
+            let ops = cfg(Mode::SelfHosted, &[("BROD_WORKSPACE_CREATION", "operators")]);
+            assert!(!may(&ops, &admin) && !may(&ops, &other));
+            conn.run("UPDATE users SET operator_at = 1 WHERE id = ?", [&other.id])?;
+            assert!(may(&ops, &other));
+            assert!(may(&cfg(Mode::Hosted, &[]), &admin));
             Ok(())
         })
         .await

@@ -213,10 +213,11 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, archive: Vec<u8>) -
     }
     {
         let (c, o) = (c.clone(), o.clone());
+        let per_hour = crate::instance::current(st).await.int("rate.deploys_per_hour");
         st.db
             .call(move |conn| {
                 require_role(&c, "builder", "deploy apps")?;
-                control::check_rate(conn, &c)?;
+                control::check_rate(conn, &c, per_hour)?;
                 crate::abuse::check_workspace_up(conn, &c)?;
                 match o.app_slug() {
                     Some(slug) => crate::abuse::check_up(conn, &control::get_app(conn, &c, slug)?),
@@ -1292,7 +1293,7 @@ pub async fn dispatch(
     if req.method == Method::HEAD {
         return Ok(response(status, Body::empty(), &pairs));
     }
-    if app.access == "public" && html && st.cfg.abuse_checks {
+    if app.access == "public" && html && st.settings.last().flag("features.abuse_checks") {
         let page = crate::http::read_capped(res.into_body(), crate::tar::FILE_BYTES * 2, "The page").await?;
         return Ok(response(status, crate::http::bytes_body(crate::gateway::append_to_body(&page, crate::gateway::REPORT_LINK)), &pairs));
     }

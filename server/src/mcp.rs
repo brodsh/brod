@@ -530,7 +530,7 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
             ));
         }
     };
-    if let Err(e) = st.calls.check(&caller) {
+    if let Err(e) = st.calls.check(&caller, crate::instance::current(st).await.int("rate.calls_per_minute")) {
         return Ok(json_response(&json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32000, "message": e.message } }), 429, &[]));
     }
     let raw = req.bytes(crate::tar::BUNDLE_BYTES, "The request body").await?;

@@ -141,6 +141,19 @@ async fn run(cfg: Config) {
         Ok(n) => tracing::info!("{n} operator(s)"),
         Err(e) => tracing::warn!("operator bootstrap failed: {}", e.message),
     }
+    // Instance settings (instance.rs): read before the first request, then kept fresh, so code that cannot wait for
+    // the database (st.settings.last()) sees an operator's change from another replica within CACHE_TTL.
+    brod::instance::current(&st).await;
+    {
+        let st = st.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(brod::instance::CACHE_TTL);
+            loop {
+                tick.tick().await;
+                brod::instance::current(&st).await;
+            }
+        });
+    }
     if let Some(tls) = st.cfg.tls.clone()
         && let Err(e) = brod::tls::start(st.clone(), tls).await
     {
