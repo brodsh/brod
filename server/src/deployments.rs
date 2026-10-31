@@ -620,8 +620,9 @@ async fn steps(st: &State, d: &Deployment, log: &mut Log) -> Step<()> {
         let why = h["error"].as_str().unwrap_or("it did not answer").to_string();
         if let Ok(l) = node_call(st, &node, Method::GET, &format!("/v1/containers/{name}/logs"), None, 30).await {
             log.line("the container's output:").await;
-            for line in l["lines"].as_array().into_iter().flatten().rev().take(50).collect::<Vec<_>>().into_iter().rev() {
-                log.line(format!("  {}", line["message"].as_str().unwrap_or(""))).await;
+            let lines: Vec<&str> = l["lines"].as_array().into_iter().flatten().map(|x| x["message"].as_str().unwrap_or("")).collect();
+            for line in collapse(&lines).into_iter().rev().take(40).collect::<Vec<_>>().into_iter().rev() {
+                log.line(format!("  {line}")).await;
             }
         }
         return Err(fail(Problem::new(502, "deployment_failed", format!("The health check failed: {why}"))));
@@ -675,7 +676,9 @@ async fn build(st: &State, d: &Deployment, node: &str, log: &mut Log) -> Result<
             let Ok(v) = serde_json::from_slice::<Value>(&line) else { continue };
             if v["done"].as_bool() == Some(true) {
                 done = Some(v);
-            } else if let Some(l) = v["log"].as_str() {
+            } else if let Some(l) = v["log"].as_str()
+                && !progress(l)
+            {
                 log.line(l).await;
             }
         }
@@ -685,6 +688,24 @@ async fn build(st: &State, d: &Deployment, node: &str, log: &mut Log) -> Result<
         Some(v) => Err(Problem::new(422, "build_failed", v["error"].as_str().unwrap_or("The image did not build.").to_string())),
         None => Err(Problem::new(502, "build_failed", "The node stopped answering during the build.")),
     }
+}
+
+/// A buildx line that only reports download progress ("#5 sha256:... 12.5MB / 55.7MB 1.2s"), left out of the log.
+fn progress(line: &str) -> bool {
+    line.starts_with('#') && line.contains("B / ") && !line.ends_with("done")
+}
+
+/// Runs of the same line as one, with how many times it came ("GET /healthz (x49)"), so a log's tail keeps what
+/// came before a loop.
+fn collapse(lines: &[&str]) -> Vec<String> {
+    let mut out: Vec<(String, usize)> = Vec::new();
+    for l in lines {
+        match out.last_mut() {
+            Some((last, n)) if last == l => *n += 1,
+            _ => out.push((l.to_string(), 1)),
+        }
+    }
+    out.into_iter().map(|(l, n)| if n > 1 { format!("{l} (x{n})") } else { l }).collect()
 }
 
 async fn node_arch(st: &State, node: &str) -> Option<String> {
@@ -1133,8 +1154,17 @@ pub async fn dispatch(
     }
     let path = if req.query.is_empty() { req.path.clone() } else { format!("{}?{}", req.path, req.query) };
     let has_body = req.method != Method::GET && req.method != Method::HEAD;
+    // A body without a length that grows past the limit breaks the request off; `over` tells that apart from a node
+    // that did not answer.
+    let over = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let body = if has_body {
-        Body::new(http_body_util::Limited::new(req.take_body(), REQUEST_BYTES).map_err(std::io::Error::other))
+        let over = over.clone();
+        Body::new(http_body_util::Limited::new(req.take_body(), REQUEST_BYTES).map_err(move |e| {
+            if e.is::<http_body_util::LengthLimitError>() {
+                over.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            std::io::Error::other(e)
+        }))
     } else {
         Body::empty()
     };
@@ -1143,8 +1173,13 @@ pub async fn dispatch(
         *h = headers;
     }
     let out = out.body(body).map_err(Problem::internal)?;
+    let too_large = || notice(413, "Too large", "The request is larger than this app accepts.", "");
     let res = match tokio::time::timeout(Duration::from_secs(REQUEST_SECS), crate::nodes::request(st, &node, out)).await {
+        Ok(Ok(r)) if r.headers().contains_key("x-brod-node-error") && over.load(std::sync::atomic::Ordering::Relaxed) => {
+            return Ok(too_large());
+        }
         Ok(Ok(r)) => r,
+        Ok(Err(_)) if over.load(std::sync::atomic::Ordering::Relaxed) => return Ok(too_large()),
         Ok(Err(e)) => {
             tracing::warn!(app = %app.slug, "container request failed: {}", e.message);
             return Ok(notice(503, "This app is offline", "The machine that runs this app did not answer. Try again in a minute.", ""));
@@ -1396,6 +1431,14 @@ mod tests {
             })
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn keeps_build_and_container_logs_readable() {
+        assert!(progress("#5 sha256:5c8e 45.09MB / 55.69MB 2.3s"));
+        assert!(!progress("#5 sha256:5c8e 55.69MB / 55.69MB 2.9s done"));
+        assert!(!progress("#6 [2/3] COPY server.js ./"));
+        assert_eq!(collapse(&["listening", "GET /", "GET /", "GET /", "bye"]), ["listening", "GET / (x3)", "bye"]);
     }
 
     fn check_transitions(db: &Connection) {

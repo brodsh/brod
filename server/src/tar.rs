@@ -229,6 +229,16 @@ fn header(name: &[u8], size: usize, kind: u8, mtime_ms: i64) -> [u8; 512] {
     h
 }
 
+/// A plain ustar header for a folder (mode 755), such as "./".
+pub fn folder_header(name: &str, mtime_ms: i64) -> [u8; 512] {
+    let mut h = header(name.as_bytes(), 0, b'5', mtime_ms);
+    h[100..108].copy_from_slice(b"0000755\0");
+    h[148..156].copy_from_slice(b"        ");
+    let sum: u32 = h.iter().map(|x| *x as u32).sum();
+    h[148..156].copy_from_slice(format!("{sum:06o}\0 ").as_bytes());
+    h
+}
+
 /// A tar.gz of the files, the way `tar -czf` would write them, every file dated `mtime_ms`. A path longer than a ustar
 /// header holds gets a pax path record.
 pub fn pack(files: &[BundleFile], mtime_ms: i64) -> Vec<u8> {

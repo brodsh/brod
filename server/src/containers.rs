@@ -447,6 +447,10 @@ pub fn write_context(archive: &[u8], ignore: &Ignore, dest: &Path) -> Result<Con
     let file = std::fs::File::create(dest).map_err(Problem::internal)?;
     let mut out = std::io::BufWriter::new(file);
     let mut ctx = Context { files: 0, bytes: 0 };
+    // The docker CLI takes stdin for a tar only when its first 512 bytes parse as a whole entry; a pax or GNU extension
+    // header first (macOS tar writes one for extended attributes) makes it read the stream as a Dockerfile. A plain
+    // header for the top folder always comes first.
+    out.write_all(&crate::tar::folder_header("./", crate::util::now())).map_err(Problem::internal)?;
     while let Some(e) = next_entry(&mut r)? {
         let always = matches!(e.path.as_str(), "Dockerfile" | ".dockerignore" | "brod.json");
         let keep = !e.path.is_empty()
@@ -571,8 +575,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let dest = dir.join("ctx.tar");
         let ctx = write_context(&padded, &Ignore::parse(s.dockerignore.as_deref().unwrap()), &dest).unwrap();
-        assert_eq!(names(&dest), ["Dockerfile", ".dockerignore", "brod.json", "main.go", long.as_str()]);
+        assert_eq!(names(&dest), ["", "Dockerfile", ".dockerignore", "brod.json", "main.go", long.as_str()]);
         assert_eq!(ctx.files, 5);
+        // A plain folder header comes first, so the docker CLI takes the stream for a tar.
+        let head = std::fs::read(&dest).unwrap();
+        assert_eq!((&head[..3], head[156], &head[257..262]), (&b"./\0"[..], b'5', &b"ustar"[..]));
         let _ = std::fs::remove_dir_all(dir);
         // A bundle without a top-level Dockerfile is not a container source; a zip is not a tar at all.
         assert!(!survey(&gzip(&tar(&[entry("app/Dockerfile", "FROM x")]))).unwrap().unwrap().dockerfile);
