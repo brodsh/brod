@@ -33,6 +33,7 @@ This page is generated from `.env.example` by `node scripts/config-docs.mjs`. Ed
 | `SECRETS_KEY` |  | Encrypts app secrets at rest; changing it makes stored app secrets unreadable. Generated on first start if not set. |
 | `BROD_RUNTIME_SECRET` |  | Shared with the runtime sidecar. Generated on first start if not set. |
 | `BROD_RUNTIME_SECRET_FILE` |  | Where Brod writes BROD_RUNTIME_SECRET for the runtime to read. Default: &lt;BROD_DATA_DIR&gt;/runtime-secret. Compose sets this. |
+| `BROD_NODE_JOIN_TOKEN_FILE` |  | Where Brod writes a one-time join token for the node next to it while no node has joined (nodes). Compose sets this. |
 
 ## Data
 
