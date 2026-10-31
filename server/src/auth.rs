@@ -747,6 +747,10 @@ pub async fn serve(st: &State, req: &mut Req) -> Result<Option<Response>> {
         }));
     }
 
+    if p == "/admin" && m == Method::GET {
+        return crate::admin::operator_page(st, req).await.map(Some);
+    }
+
     if let Some(slug) = p.strip_prefix("/w/").and_then(|x| x.strip_suffix("/admin"))
         && !slug.is_empty()
         && slug.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')

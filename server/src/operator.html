@@ -1,0 +1,301 @@
+<script type="application/json" id="boot">{{BOOT}}</script>
+<div id="app" class="shell">
+  <aside class="side">
+    <span class="brand"><span class="logo">B</span><span>Brod admin</span></span>
+    <nav class="nav" id="nav" aria-label="Main"></nav>
+    <div class="sidefoot">
+      <span class="who" id="who"></span>
+      <span class="tag">operator</span>
+      <a class="link" href="/">Home</a>
+      <button class="link" id="theme" type="button"></button>
+      <form method="post" action="/auth/signout"><button class="link">Sign out</button></form>
+    </div>
+  </aside>
+  <main class="main" id="main"></main>
+</div>
+<div id="toast" role="status" hidden></div>
+<script>
+'use strict';
+// The operator console (docs/plans/admin-mode.md). Everything goes through /v1/admin with the session cookie; the
+// server checks that the person signed in is an operator on every call.
+const B = JSON.parse(document.getElementById('boot').textContent);
+const $main = document.getElementById('main');
+document.getElementById('who').textContent = B.email;
+
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (k === 'value') el.value = v;
+    else el.setAttribute(k, v === true ? '' : v);
+  }
+  for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid instanceof Node ? kid : String(kid));
+  return el;
+}
+async function api(path, { method = 'GET', body } = {}) {
+  const r = await fetch('/v1/admin' + path, {
+    method, credentials: 'same-origin',
+    headers: body ? { 'content-type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error?.message || `${r.status} ${r.statusText}`);
+  return data;
+}
+const enc = encodeURIComponent;
+let toastTimer;
+function toast(text) {
+  const t = document.getElementById('toast');
+  t.textContent = text; t.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), 2600);
+}
+const err = (text) => h('p', { class: 'err', role: 'alert' }, text);
+/** Run an action from a button or form: disable it while it runs, show any error next to it, then redraw. */
+function act(fn, done) {
+  return async (e) => {
+    e?.preventDefault?.();
+    const btn = e?.submitter || e?.currentTarget;
+    const spot = btn?.closest?.('form, li, tr, section') || $main;
+    const where = spot.tagName === 'TR' ? spot.lastElementChild : spot;
+    where.querySelectorAll(':scope > .err').forEach(m => m.remove());
+    if (btn?.tagName === 'BUTTON') btn.disabled = true;
+    try { await fn(); if (done) toast(done); await render(); }
+    catch (x) { where.append(err(x.message)); }
+    finally { if (btn?.tagName === 'BUTTON') btn.disabled = false; }
+  };
+}
+const when = (ms) => ms ? new Date(ms).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '';
+function bytes(n) {
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1048576).toFixed(1)} MB`;
+  return `${(n / 1073741824).toFixed(2)} GB`;
+}
+const lim = (v, unit = '') => v == null ? 'unlimited' : `${v}${unit}`;
+const of = (n, limit) => limit == null ? String(n) : `${n} of ${limit}`;
+
+// ---------- navigation ----------
+const TABS = [['overview', 'Overview'], ['settings', 'Settings'], ['workspaces', 'Workspaces'], ['reports', 'Reports'], ['operators', 'Operators'], ['audit', 'Audit log']];
+let tab = (location.hash.slice(1).split('/')[0]) || 'overview';
+let detail = decodeURIComponent(location.hash.slice(1).split('/')[1] || '');
+function go(t, d = '') { tab = t; detail = d; location.hash = d ? `${t}/${enc(d)}` : t; }
+window.addEventListener('hashchange', () => {
+  const [t, d] = location.hash.slice(1).split('/');
+  tab = t || 'overview'; detail = decodeURIComponent(d || ''); render();
+});
+function nav() {
+  const n = document.getElementById('nav');
+  n.replaceChildren(...TABS.map(([k, label]) => h('button', { class: tab === k ? 'on' : null, onclick: () => go(k) }, label)));
+}
+
+let q = '', wsCursor = '', auditCursor = '', reportStatus = 'open';
+async function render() {
+  nav();
+  const view = { overview, settings, workspaces: detail ? workspace : workspaces, reports, operators, audit }[tab] || overview;
+  try {
+    const body = await view();
+    $main.replaceChildren(...[body].flat());
+  } catch (x) { $main.replaceChildren(h('section', null, h('h1', null, 'Something went wrong'), err(x.message))); }
+}
+
+// ---------- overview ----------
+async function overview() {
+  const o = await api('/overview');
+  const stat = (label, value, to) => h('button', { class: 'stat', type: 'button', onclick: to ? () => go(to) : null }, h('b', null, value), h('span', null, label));
+  return h('section', null,
+    h('div', { class: 'head' }, h('div', null, h('h1', null, 'This Brod server'), h('p', { class: 'muted' }, `${o.mode}, version ${o.version}`))),
+    o.warnings?.length ? h('ul', { class: 'list' }, o.warnings.map(w => h('li', null, h('div', { class: 'alert' }, w)))) : null,
+    h('div', { class: 'stats' },
+      stat('Workspaces', o.workspaces, 'workspaces'),
+      stat('People', o.users),
+      stat('Running apps', o.apps.live, 'workspaces'),
+      stat('Paused apps', o.apps.paused),
+      stat('Taken down', o.apps.taken_down, 'reports'),
+      stat('Storage used', bytes(o.storage_bytes)),
+      stat('Open reports', o.open_reports, 'reports'),
+      stat('Operators', o.operators, 'operators'),
+      o.suspended_workspaces ? stat('Suspended workspaces', o.suspended_workspaces, 'workspaces') : null,
+    ));
+}
+
+// ---------- settings ----------
+const GROUPS = [['limits.', 'Default limits per workspace'], ['server.', 'Server-wide caps'], ['workspaces.', 'Workspaces'], ['signin.', 'Sign-in'], ['features.', 'Features'], ['rate.', 'Rate limits']];
+function shown(s, v) {
+  if (s.kind.type === 'limit') return v == null ? 'unlimited' : String(v);
+  if (s.kind.type === 'bool') return v ? 'on' : 'off';
+  if (s.kind.type === 'domains') return v?.length ? v.join(', ') : 'any domain';
+  return String(v);
+}
+function editor(s) {
+  const id = 'set-' + s.key.replace(/\W/g, '-');
+  const t = s.kind.type;
+  if (t === 'bool') return h('select', { id, name: 'v' }, h('option', { value: 'true', selected: s.value === true }, 'on'), h('option', { value: 'false', selected: s.value !== true }, 'off'));
+  if (t === 'enum') return h('select', { id, name: 'v' }, s.kind.options.map(o => h('option', { value: o, selected: o === s.value }, o)));
+  if (t === 'domains') return h('input', { id, name: 'v', value: (s.value || []).join(', '), placeholder: 'acme.com, example.org (empty: any)' });
+  if (t === 'limit') return h('input', { id, name: 'v', value: s.value == null ? 'unlimited' : String(s.value), placeholder: 'a number or unlimited' });
+  return h('input', { id, name: 'v', type: 'number', min: s.kind.min, max: s.kind.max, value: String(s.value) });
+}
+function parse(s, raw) {
+  const t = s.kind.type;
+  if (t === 'bool') return raw === 'true';
+  if (t === 'enum') return raw;
+  if (t === 'domains') return raw.split(',').map(d => d.trim()).filter(Boolean);
+  if (t === 'limit') return raw.trim().toLowerCase() === 'unlimited' || raw.trim() === '' ? 'unlimited' : Number(raw);
+  return Number(raw);
+}
+async function settings() {
+  const { settings: all } = await api('/settings');
+  const row = (s) => h('tr', null,
+    h('td', null, h('label', { for: 'set-' + s.key.replace(/\W/g, '-') }, h('b', null, s.key)), h('div', { class: 'muted' }, s.help)),
+    h('td', null, s.locked_by
+      ? h('div', null, h('span', { class: 'mono' }, shown(s, s.value)), h('div', { class: 'muted' }, `Locked by ${s.locked_by}`))
+      : h('form', { class: 'inline', onsubmit: act(async (e) => {
+          await api('/settings', { method: 'PATCH', body: { [s.key]: parse(s, e.target.elements.v.value) } });
+        }, `${s.key} saved`) }, editor(s), h('button', { class: 'btn' }, 'Save'))),
+    h('td', null,
+      h('span', { class: s.source === 'database' ? 'pill ok' : s.source === 'env' ? 'pill warn' : 'pill idle' }, s.source),
+      s.source === 'database' ? h('button', { class: 'link', type: 'button', onclick: act(() => api('/settings', { method: 'PATCH', body: { [s.key]: null } }), `${s.key} back to the default`) }, `Reset (default ${shown(s, s.default)})`) : null));
+  return h('section', null,
+    h('div', { class: 'head' }, h('div', null, h('h1', null, 'Settings'),
+      h('p', { class: 'muted' }, 'Changes apply within a few seconds, with no restart. A setting given by an environment variable is locked here; change it in the environment and restart Brod. Lowering a limit never stops or deletes anything: it only refuses what would go over it.'))),
+    GROUPS.map(([prefix, title]) => {
+      const rows = all.filter(s => s.key.startsWith(prefix));
+      return rows.length ? [h('h2', null, title), h('div', { class: 'scroll' }, h('table', null, h('tbody', null, rows.map(row))))] : null;
+    }));
+}
+
+// ---------- workspaces ----------
+function limitsLine(w) {
+  const e = w.effective, u = w.usage;
+  return `${of(u.running_apps, e.max_running_apps)} running apps · ${of(u.members, e.max_members)} members · ${bytes(u.storage_bytes)}${e.max_storage_mb == null ? '' : ' of ' + e.max_storage_mb + ' MB'}`;
+}
+async function workspaces() {
+  const r = await api(`/workspaces?q=${enc(q)}&cursor=${enc(wsCursor)}`);
+  return h('section', null,
+    h('div', { class: 'head' }, h('div', null, h('h1', null, 'Workspaces'))),
+    h('form', { class: 'inline', onsubmit: (e) => { e.preventDefault(); q = e.target.elements.q.value; wsCursor = ''; render(); } },
+      h('input', { name: 'q', value: q, placeholder: 'Search by name or slug', 'aria-label': 'Search workspaces' }), h('button', { class: 'btn' }, 'Search')),
+    r.workspaces.length ? h('div', { class: 'scroll' }, h('table', null,
+      h('thead', null, h('tr', null, h('th', null, 'Workspace'), h('th', null, 'Plan'), h('th', null, 'Usage'), h('th', null, 'Created'))),
+      h('tbody', null, r.workspaces.map(w => h('tr', null,
+        h('td', null, h('button', { class: 'link name', type: 'button', onclick: () => go('workspaces', w.slug) }, w.name), h('div', { class: 'muted mono' }, w.slug),
+          w.suspended ? h('span', { class: 'pill bad' }, 'suspended') : null, w.override ? h('span', { class: 'pill warn' }, 'override') : null),
+        h('td', null, w.plan),
+        h('td', null, limitsLine(w)),
+        h('td', { class: 'nowrap' }, when(w.created_at))))))) : h('p', { class: 'empty' }, 'No workspaces match.'),
+    h('div', { class: 'acts' },
+      wsCursor ? h('button', { class: 'btn quiet', type: 'button', onclick: () => { wsCursor = ''; render(); } }, 'First page') : null,
+      r.next ? h('button', { class: 'btn quiet', type: 'button', onclick: () => { wsCursor = r.next; render(); } }, 'Next page') : null));
+}
+const FIELDS = [['max_running_apps', 'Running apps', ''], ['max_members', 'Members', ''], ['max_storage_mb', 'Storage', ' MB'], ['analytics_days', 'Analytics days', ' days']];
+async function workspace() {
+  const slug = detail;
+  const w = await api(`/workspaces/${enc(slug)}/limits`);
+  const o = w.override || {};
+  const cell = (v, unit) => lim(v, unit);
+  return h('section', null,
+    h('p', null, h('button', { class: 'link', type: 'button', onclick: () => go('workspaces') }, '← All workspaces')),
+    h('div', { class: 'head' }, h('div', null, h('h1', null, w.name), h('p', { class: 'muted' }, `${w.slug} · plan ${w.plan} · created ${when(w.created_at)}`)),
+      h('div', { class: 'acts' },
+        h('a', { class: 'btn quiet', href: `/w/${enc(w.slug)}` }, 'Open'),
+        w.suspended
+          ? h('button', { class: 'btn', type: 'button', onclick: act(() => api(`/workspaces/${enc(slug)}/unsuspend`, { method: 'POST', body: {} }), 'Suspension lifted') }, 'Lift suspension')
+          : h('button', { class: 'btn dangerbtn', type: 'button', onclick: act(async () => {
+              const reason = prompt('Why is this workspace suspended? Its admins see this.');
+              if (!reason) return;
+              await api(`/workspaces/${enc(slug)}/suspend`, { method: 'POST', body: { reason } });
+            }, 'Done') }, 'Suspend'))),
+    h('p', null, limitsLine(w)),
+    h('h2', null, 'Limits'),
+    h('p', { class: 'muted' }, 'An override beats the plan or the server default for this workspace only. Leave a field empty to use the base; type "unlimited" for no limit.'),
+    h('form', { onsubmit: act(async (e) => {
+        const el = e.target.elements, body = { note: el.note.value.trim() || null };
+        for (const [k] of FIELDS) {
+          const raw = el[k].value.trim().toLowerCase();
+          body[k] = raw === '' ? null : raw === 'unlimited' ? 'unlimited' : Number(raw);
+        }
+        await api(`/workspaces/${enc(slug)}/limits`, { method: 'PATCH', body });
+      }, 'Limits saved') },
+      h('div', { class: 'scroll' }, h('table', null,
+        h('thead', null, h('tr', null, h('th', null, ''), h('th', null, 'Base'), h('th', null, 'Override'), h('th', null, 'In force'))),
+        h('tbody', null, FIELDS.map(([k, label, unit]) => h('tr', null,
+          h('td', null, h('label', { for: 'ov-' + k }, label)),
+          h('td', null, cell(w.base[k], unit)),
+          h('td', null, h('input', { id: 'ov-' + k, name: k, value: o[k] == null ? '' : String(o[k]), placeholder: 'base', size: 10 })),
+          h('td', null, h('b', null, cell(w.effective[k], unit)))))))),
+      h('label', { class: 'field' }, h('span', null, 'Note (why, for the other operators)'), h('input', { name: 'note', value: o.note || '' })),
+      h('div', { class: 'acts' },
+        h('button', { class: 'btn deploy' }, 'Save limits'),
+        w.override ? h('button', { class: 'btn quiet', type: 'button', onclick: act(() => api(`/workspaces/${enc(slug)}/limits`, { method: 'PATCH', body: { max_running_apps: null, max_members: null, max_storage_mb: null, analytics_days: null, note: null } }), 'Override removed') }, 'Remove override') : null)));
+}
+
+// ---------- reports ----------
+async function reports() {
+  const r = await fetch(`/v1/admin/reports?status=${reportStatus}`, { credentials: 'same-origin' }).then(async x => { const d = await x.json().catch(() => ({})); if (!x.ok) throw new Error(d.error?.message || x.statusText); return d; });
+  const appPath = (x) => `/apps/${enc(x.workspace)}/${enc(x.app)}`;
+  return h('section', null,
+    h('div', { class: 'head' }, h('div', null, h('h1', null, 'Reports'), h('p', { class: 'muted' }, 'Visitor reports and the phishing check\'s automatic flags.'))),
+    h('div', { class: 'seg', role: 'group', 'aria-label': 'Status' }, ['open', 'resolved', 'dismissed'].map(s =>
+      h('button', { type: 'button', class: s === reportStatus ? 'on' : null, onclick: () => { reportStatus = s; render(); } }, s))),
+    r.reports.length ? h('ul', { class: 'list' }, r.reports.map(x => h('li', null,
+      h('div', null, h('b', null, `${x.workspace || '?'}/${x.app || '?'}`), ' ', h('span', { class: 'tag' }, x.kind),
+        x.taken_down_at ? h('span', { class: 'pill bad' }, 'taken down') : null,
+        h('div', null, x.reason), h('div', { class: 'muted' }, `${when(x.created_at)}${x.reporter ? ' · ' + x.reporter : ''}${x.note ? ' · ' + x.note : ''}`)),
+      x.app ? h('div', { class: 'acts' },
+        x.status === 'open' ? [
+          h('button', { class: 'btn quiet', type: 'button', onclick: act(() => api(`/reports/${enc(x.id)}`, { method: 'POST', body: { status: 'resolved' } }), 'Resolved') }, 'Resolve'),
+          h('button', { class: 'btn quiet', type: 'button', onclick: act(() => api(`/reports/${enc(x.id)}`, { method: 'POST', body: { status: 'dismissed' } }), 'Dismissed') }, 'Dismiss'),
+        ] : null,
+        x.taken_down_at
+          ? h('button', { class: 'btn', type: 'button', onclick: act(() => api(appPath(x) + '/restore', { method: 'POST', body: {} }), 'Restored') }, 'Restore')
+          : h('button', { class: 'btn dangerbtn', type: 'button', onclick: act(async () => {
+              const reason = prompt('Why is this app taken down? Its owner sees this.');
+              if (!reason) return;
+              await api(appPath(x) + '/takedown', { method: 'POST', body: { reason } });
+            }, 'Taken down') }, 'Take down')) : null))) : h('p', { class: 'empty' }, `No ${reportStatus} reports.`));
+}
+
+// ---------- operators ----------
+async function operators() {
+  const r = await api('/operators');
+  return h('section', null,
+    h('div', { class: 'head' }, h('div', null, h('h1', null, 'Operators'),
+      h('p', { class: 'muted' }, 'Operators run the whole server: settings, limits, reports and the people on this list. The person named by BROD_ADMIN_EMAIL is always one.'))),
+    h('ul', { class: 'list' }, r.operators.map(o => h('li', null,
+      h('div', null, h('b', null, o.email), o.name ? h('span', { class: 'muted' }, ' ' + o.name) : null, h('div', { class: 'muted' }, `since ${when(o.since)}`)),
+      h('button', { class: 'link danger', type: 'button', onclick: act(async () => {
+        if (!confirm(`Remove ${o.email} as an operator?`)) return;
+        await api(`/operators/${enc(o.id)}`, { method: 'DELETE' });
+      }, 'Removed') }, 'Remove')))),
+    h('h2', null, 'Add an operator'),
+    h('form', { class: 'inline', onsubmit: act(async (e) => { await api('/operators', { method: 'POST', body: { email: e.target.elements.email.value } }); }, 'Operator added') },
+      h('input', { name: 'email', type: 'email', required: true, placeholder: 'someone@example.com', 'aria-label': 'Email' }),
+      h('button', { class: 'btn' }, 'Add')),
+    h('p', { class: 'muted' }, 'They need an account here: ask them to sign in once first.'));
+}
+
+// ---------- audit ----------
+async function audit() {
+  const r = await api(`/audit?cursor=${enc(auditCursor)}`);
+  return h('section', null,
+    h('div', { class: 'head' }, h('div', null, h('h1', null, 'Audit log'), h('p', { class: 'muted' }, 'What operators changed on this server, newest first.'))),
+    r.events.length ? h('div', { class: 'scroll' }, h('table', null,
+      h('thead', null, h('tr', null, h('th', null, 'When'), h('th', null, 'Who'), h('th', null, 'What'), h('th', null, 'Detail'))),
+      h('tbody', null, r.events.map(e => h('tr', null, h('td', { class: 'nowrap' }, when(e.at)), h('td', null, e.actor), h('td', null, e.action), h('td', { class: 'mono' }, e.detail || '')))))) : h('p', { class: 'empty' }, 'Nothing yet.'),
+    h('div', { class: 'acts' },
+      auditCursor ? h('button', { class: 'btn quiet', type: 'button', onclick: () => { auditCursor = ''; render(); } }, 'Newest') : null,
+      r.next ? h('button', { class: 'btn quiet', type: 'button', onclick: () => { auditCursor = r.next; render(); } }, 'Older') : null));
+}
+
+// ---------- theme ----------
+function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch { return null; } }
+const dark = () => { const t = document.documentElement.dataset.theme; return t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches; };
+const themeBtn = document.getElementById('theme');
+const paintTheme = () => (themeBtn.textContent = dark() ? 'Light theme' : 'Dark theme');
+const saved = store('brod-theme');
+if (saved === 'light' || saved === 'dark') document.documentElement.dataset.theme = saved;
+themeBtn.addEventListener('click', () => { const t = dark() ? 'light' : 'dark'; document.documentElement.dataset.theme = t; store('brod-theme', t); paintTheme(); });
+paintTheme();
+render();
+</script>
+</html>

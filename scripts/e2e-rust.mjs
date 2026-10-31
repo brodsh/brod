@@ -143,6 +143,7 @@ try {
   if (code === 0) { console.log('\nBilling, visits, analytics, storage and spaces\n'); code = await node('scripts/e2e-billing.mjs', `http://127.0.0.1:${stripe.port}`); }
   if (code === 0) { console.log('\nMarketplace\n'); code = await node('scripts/e2e-market.mjs'); }
   if (code === 0) { console.log('\nAgent connections: scopes, expiry and refresh\n'); code = await node('scripts/e2e-tokens.mjs'); }
+  if (code === 0) { console.log('\nAdmin mode: operator API, settings, limits and console\n'); code = await node('scripts/e2e-admin.mjs'); }
   // The cases of test/server.test.ts, which only the Workers runtime runs otherwise.
   if (runtime && code === 0) { console.log('\nServer apps on the workerd runtime\n'); code = await node('scripts/e2e-server-apps.mjs'); }
   if (code !== 0) console.error(`\n--- server log ---\n${log.slice(-5000)}${runtime ? `\n--- runtime log ---\n${rtLog.slice(-5000)}` : ''}${preview ? `\n--- preview log ---\n${pvLog.slice(-3000)}` : ''}`);
