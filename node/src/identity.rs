@@ -57,8 +57,22 @@ impl Identity {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 create_dir(dir)?;
                 let doc = Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new()).map_err(|_| "could not make a key pair")?;
-                write_private(&path, doc.as_ref(), true).map_err(|e| format!("could not write {}: {e}", path.display()))?;
-                doc.as_ref().to_vec()
+                // Another process (`brod-node id` next to `brod-node run`) may be making one at the same time. Write the
+                // whole key to a file of our own, then link it into place: the link either publishes a complete key or
+                // fails because one exists, and then that one is the node's key.
+                let mut r = [0u8; 8];
+                ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut r).map_err(|_| "no randomness")?;
+                let tmp = dir.join(format!("node.key.{}.tmp", hex(&r)));
+                write_private(&tmp, doc.as_ref()).map_err(|e| format!("could not write {}: {e}", tmp.display()))?;
+                let linked = std::fs::hard_link(&tmp, &path);
+                let _ = std::fs::remove_file(&tmp);
+                match linked {
+                    Ok(()) => doc.as_ref().to_vec(),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                        std::fs::read(&path).map_err(|e| format!("could not read {}: {e}", path.display()))?
+                    }
+                    Err(e) => return Err(format!("could not write {}: {e}", path.display())),
+                }
             }
             Err(e) => return Err(format!("could not read {}: {e}", path.display())),
         };
@@ -103,7 +117,7 @@ pub fn load_joined(dir: &Path) -> Result<Option<Joined>, String> {
 pub fn save_joined(dir: &Path, j: &Joined) -> Result<(), String> {
     let path = joined_path(dir);
     let text = serde_json::json!({ "brod": j.brod, "name": j.name }).to_string();
-    write_private(&path, text.as_bytes(), false).map_err(|e| format!("could not write {}: {e}", path.display()))
+    write_private(&path, text.as_bytes()).map_err(|e| format!("could not write {}: {e}", path.display()))
 }
 
 fn create_dir(dir: &Path) -> Result<(), String> {
@@ -114,15 +128,10 @@ fn create_dir(dir: &Path) -> Result<(), String> {
     b.create(dir).map_err(|e| format!("could not create {}: {e}", dir.display()))
 }
 
-/// Write a file only its owner can read. `new`: refuse to replace one that exists.
-fn write_private(path: &Path, bytes: &[u8], new: bool) -> std::io::Result<()> {
+/// Write a file only its owner can read.
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut opts = std::fs::OpenOptions::new();
-    opts.write(true);
-    if new {
-        opts.create_new(true);
-    } else {
-        opts.create(true).truncate(true);
-    }
+    opts.write(true).create(true).truncate(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
     let mut f = opts.open(path)?;
@@ -144,6 +153,24 @@ mod tests {
     fn id_is_the_first_half_of_the_keys_sha256() {
         // SHA-256 of 32 zero bytes is 66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925.
         assert_eq!(node_id(&[0u8; 32]), "node_66687aadf862bd776c8fc18b8e9f8e20");
+    }
+
+    #[test]
+    fn processes_starting_together_get_the_same_key() {
+        let dir = temp_dir();
+        let ids: Vec<String> = (0..8)
+            .map(|_| {
+                let d = dir.clone();
+                std::thread::spawn(move || Identity::load_or_create(&d).unwrap().id)
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|t| t.join().unwrap())
+            .collect();
+        assert!(ids.iter().all(|i| *i == ids[0]), "{ids:?}");
+        assert_eq!(Identity::load_or_create(&dir).unwrap().id, ids[0]);
+        let left: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(left, vec![std::ffi::OsString::from("node.key")]);
     }
 
     #[test]
