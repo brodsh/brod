@@ -19,6 +19,7 @@
     "e2e:tls": "node scripts/e2e-tls.mjs",
     "e2e:nodes": "node scripts/e2e-nodes.mjs",
     "e2e:containers": "node scripts/e2e-containers.mjs",
+    "e2e:postgres": "node scripts/e2e-postgres.mjs",
     "gen:og": "node scripts/gen-og.mjs"
   },
   "devDependencies": {
