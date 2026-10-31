@@ -90,8 +90,147 @@ const { payload } = await jwtVerify(token, jwks, {
 });
 ```
 
+#### In JavaScript: `@brod/auth`
+
+[`@brod/auth`](../sdk/js/README.md) does all of this in one call, in Node, Next.js (server components, route handlers,
+middleware) and Workers. It reads `BROD_ISSUER`, `BROD_APP_ID` and `BROD_IDENTITY_JWKS` from the environment, accepts
+only `EdDSA`, allows 30 seconds of clock skew, and fetches and caches the JWKS when there is no inline copy:
+
+```js
+import { currentUser } from '@brod/auth';
+
+const user = await currentUser(request); // a Request, Headers, or a Node / Express request
+// null: anonymous (an open path, or a public app with nobody signed in)
+// otherwise { id, email, name, workspace: { id, slug }, role, groups, app, claims }
+// A token that does not verify throws a BrodAuthError with status 401.
+```
+
+In Next.js, `currentUserFromHeaders()` from `@brod/auth/next` reads the current request in server components and
+route handlers. On workerd, pass the Worker's env: `currentUser(request, { env })`. The
+[README](../sdk/js/README.md) has examples for each, and the 403 pattern for an app that keeps its own users table.
+
+#### In other languages
+
+Any JWT library with EdDSA (Ed25519) support verifies the token. In each, allow only `EdDSA`, pick the key by `kid`,
+and check `iss`, `aud` and `exp`.
+
+Python, with [PyJWT](https://pyjwt.readthedocs.io/) (`pip install "pyjwt[crypto]"`):
+
+```python
+import json, os
+import jwt
+
+ISSUER = os.environ["BROD_ISSUER"]
+AUDIENCE = "brod:app:" + os.environ["BROD_APP_ID"]
+KEYS = {k["kid"]: jwt.PyJWK(k).key for k in json.loads(os.environ["BROD_IDENTITY_JWKS"])["keys"]}
+# Without BROD_IDENTITY_JWKS: jwt.PyJWKClient(ISSUER + "/.well-known/jwks.json").get_signing_key_from_jwt(token).key
+
+def brod_user(token):
+    """The verified claims, or None for an anonymous request. Raises jwt.InvalidTokenError for a bad token."""
+    if not token:
+        return None
+    key = KEYS.get(jwt.get_unverified_header(token).get("kid"))
+    if key is None:
+        raise jwt.InvalidTokenError("unknown key")
+    return jwt.decode(token, key, algorithms=["EdDSA"], audience=AUDIENCE, issuer=ISSUER,
+                      leeway=30, options={"require": ["exp", "iat", "sub"]})
+
+# Flask: brod_user(request.headers.get("x-brod-identity"))
+```
+
+Go, with [golang-jwt](https://github.com/golang-jwt/jwt) (`go get github.com/golang-jwt/jwt/v5`):
+
+```go
+package brod
+
+import (
+	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"os"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+)
+
+// Keys reads BROD_IDENTITY_JWKS (or the body of <BROD_ISSUER>/.well-known/jwks.json): key id to Ed25519 public key.
+func Keys(jwks []byte) (map[string]ed25519.PublicKey, error) {
+	var set struct {
+		Keys []struct{ Kty, Crv, Kid, X string }
+	}
+	if err := json.Unmarshal(jwks, &set); err != nil {
+		return nil, err
+	}
+	keys := map[string]ed25519.PublicKey{}
+	for _, k := range set.Keys {
+		if k.Kty != "OKP" || k.Crv != "Ed25519" {
+			continue
+		}
+		x, err := base64.RawURLEncoding.DecodeString(k.X)
+		if err != nil || len(x) != ed25519.PublicKeySize {
+			return nil, errors.New("bad Ed25519 key")
+		}
+		keys[k.Kid] = ed25519.PublicKey(x)
+	}
+	return keys, nil
+}
+
+// User returns the verified claims, or nil for an anonymous request (an open path, or a public app).
+func User(r *http.Request, keys map[string]ed25519.PublicKey) (jwt.MapClaims, error) {
+	token := r.Header.Get("X-Brod-Identity")
+	if token == "" {
+		return nil, nil
+	}
+	claims := jwt.MapClaims{}
+	_, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (any, error) {
+		kid, _ := t.Header["kid"].(string)
+		if k, ok := keys[kid]; ok {
+			return k, nil
+		}
+		return nil, errors.New("unknown key")
+	},
+		jwt.WithValidMethods([]string{"EdDSA"}),
+		jwt.WithIssuer(os.Getenv("BROD_ISSUER")),
+		jwt.WithAudience("brod:app:"+os.Getenv("BROD_APP_ID")),
+		jwt.WithExpirationRequired(),
+		jwt.WithIssuedAt(),
+		jwt.WithLeeway(30*time.Second))
+	if err != nil {
+		return nil, err
+	}
+	return claims, nil
+}
+```
+
+Rust, with [jsonwebtoken](https://crates.io/crates/jsonwebtoken) (`cargo add jsonwebtoken --features rust_crypto`
+and `cargo add serde_json`; from version 10 on, jsonwebtoken needs a crypto backend feature, `rust_crypto` or
+`aws_lc_rs`):
+
+```rust
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header, jwk::JwkSet};
+
+/// The verified claims, or None for an anonymous request (an open path, or a public app).
+/// `jwks` is BROD_IDENTITY_JWKS parsed once with serde_json (or the body of <BROD_ISSUER>/.well-known/jwks.json).
+pub fn brod_user(token: Option<&str>, jwks: &JwkSet) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
+    let Some(token) = token.filter(|t| !t.is_empty()) else { return Ok(None) };
+    let kid = decode_header(token)?.kid.ok_or("no kid")?;
+    let jwk = jwks.find(&kid).ok_or("unknown key")?;
+    let mut v = Validation::new(Algorithm::EdDSA);
+    v.set_issuer(&[std::env::var("BROD_ISSUER")?]);
+    v.set_audience(&[format!("brod:app:{}", std::env::var("BROD_APP_ID")?)]);
+    v.set_required_spec_claims(&["exp", "iss", "aud", "sub"]);
+    v.leeway = 30;
+    Ok(Some(decode::<serde_json::Value>(token, &DecodingKey::from_jwk(jwk)?, &v)?.claims))
+}
+```
+
+These three were checked against a token signed the way Brod signs (PyJWT 2.15, golang-jwt 5.3, jsonwebtoken 11.1):
+a valid token verifies, a missing one is anonymous, and another app's audience is refused.
+
 Agents can ask the `get_auth_integration` tool for this contract and ready-made snippets for Next.js, Node, Python,
-Go, Rust and workerd. A `@brod/auth` package that wraps it is planned.
+Go, Rust and workerd. The Next.js, Node and workerd ones use `@brod/auth`, with the plain `jose` code beside them.
 
 The signing key is `IDENTITY_SIGNING_KEY`. A self-hosted server generates one on first start; a hosted server refuses
 to start without one. Changing it invalidates tokens already handed out, which matters little at five minutes.
