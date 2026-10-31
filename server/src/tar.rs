@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Unpack a .tar, .tar.gz or .zip bundle in memory (and pack a .tar.gz). Handles ustar prefixes, GNU long names and pax path records,
 // and the stored and deflated entries of a zip (what Finder and Explorer make).
-use flate2::read::{DeflateDecoder, MultiGzDecoder};
+use flate2::read::DeflateDecoder;
 use std::io::Read;
 
 use crate::problem::{Problem, Result};
@@ -31,13 +31,31 @@ fn octal(s: &str) -> Option<usize> {
 }
 
 fn gunzip(body: &[u8]) -> Result<Vec<u8>> {
+    gunzip_capped(body, UNPACKED_BYTES, "The unpacked bundle")
+}
+
+/// Decompress every gzip member in `body`, up to `cap` bytes. Zero bytes after a member end the stream: macOS bsdtar
+/// (`tar -czf -`) pads its output to a 10240-byte block, which is not another member.
+pub fn gunzip_capped(body: &[u8], cap: usize, what: &str) -> Result<Vec<u8>> {
+    use flate2::bufread::GzDecoder;
+    let bad = || Problem::new(400, "bad_bundle", "The upload is not a valid gzip file.");
     let mut out = Vec::new();
-    let mut dec = MultiGzDecoder::new(body).take(UNPACKED_BYTES as u64 + 1);
-    dec.read_to_end(&mut out).map_err(|_| Problem::new(400, "bad_bundle", "The upload is not a valid gzip file."))?;
-    if out.len() > UNPACKED_BYTES {
-        return Err(crate::http::too_large("The unpacked bundle", UNPACKED_BYTES));
+    let mut rest = body;
+    loop {
+        let mut dec = GzDecoder::new(rest);
+        let room = (cap + 1).saturating_sub(out.len()) as u64;
+        (&mut dec).take(room).read_to_end(&mut out).map_err(|_| bad())?;
+        if out.len() > cap {
+            return Err(crate::http::too_large(what, cap));
+        }
+        rest = dec.into_inner();
+        if rest.iter().all(|b| *b == 0) {
+            return Ok(out);
+        }
+        if !(rest.len() >= 2 && rest[0] == 0x1f && rest[1] == 0x8b) {
+            return Err(bad());
+        }
     }
-    Ok(out)
 }
 
 pub fn unpack(body: &[u8]) -> Result<Vec<BundleFile>> {
@@ -397,6 +415,26 @@ pub mod tests {
         assert!(unpack(&locked).unwrap_err().message.contains("password"));
         let big = vec![b'a'; FILE_BYTES + 10];
         assert!(unpack(&zip(&[("big.bin", &big, true)])).unwrap()[0].bytes.len() == FILE_BYTES + 1);
+    }
+
+    #[test]
+    fn reads_a_tar_gz_padded_with_zeros_and_several_members() {
+        // macOS bsdtar pads `tar -czf -` to a 10240-byte block after the gzip member.
+        let mut padded = gzip(&tar(&[entry("index.html", "<h1>hi</h1>")]));
+        padded.resize(10240, 0);
+        assert_eq!(unpack(&padded).unwrap()[0].bytes, b"<h1>hi</h1>");
+        // Two members are one stream (what `cat a.gz b.gz` makes), padding or not.
+        let whole = tar(&[entry("a.txt", "a"), entry("b.txt", "b")]);
+        let (one, two) = whole.split_at(1024);
+        let mut joined = gzip(one);
+        joined.extend(gzip(two));
+        assert_eq!(unpack(&joined).unwrap().len(), 2);
+        joined.extend([0u8; 300]);
+        assert_eq!(unpack(&joined).unwrap().len(), 2);
+        // Anything else after a member is not gzip.
+        let mut junk = gzip(&whole);
+        junk.extend(b"trailing garbage");
+        assert_eq!(unpack(&junk).unwrap_err().code, "bad_bundle");
     }
 
     #[test]
