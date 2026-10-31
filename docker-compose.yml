@@ -1,4 +1,5 @@
-# Brod: the server, its Postgres database, the runtime for server apps and a node (brod-node) on the same machine.
+# Brod: the server, its Postgres database, the runtime for server apps, a node (brod-node) on the same machine that
+# runs container apps, and the image registry for those apps.
 #   cp .env.example .env      (then set BROD_ADMIN_EMAIL)
 #   docker compose up -d
 #   docker compose logs brod  (the sign-in link and the line that connects your agent)
@@ -22,6 +23,10 @@ services:
       BROD_RUNTIME_SECRET_FILE: /run/brod/runtime-secret
       # Where Brod writes a join token for the node below while no node has joined: a volume that holds nothing else.
       BROD_NODE_JOIN_TOKEN_FILE: /run/brod-node/token
+      # The registry below, for container apps' images. Brod signs its tokens and writes their certificate to the
+      # registry-cert volume; the signing key is generated into brod-data's secrets.env (REGISTRY_SIGNING_KEY).
+      BROD_REGISTRY_URL: http://registry:5000
+      BROD_REGISTRY_CERT_FILE: /run/brod-registry/registry-token.crt
     ports:
       # Only this machine can reach it. Use "8080:8080" (and a proxy with HTTPS) to let others in.
       - "127.0.0.1:8080:8080"
@@ -30,6 +35,7 @@ services:
       - postgres-socket:/var/run/postgresql
       - runtime-secret:/run/brod
       - node-join:/run/brod-node
+      - registry-cert:/run/brod-registry
     depends_on:
       postgres:
         condition: service_healthy
@@ -80,7 +86,9 @@ services:
 
   # A node on this machine. It joins and connects exactly as a node on another machine does: it dials Brod's
   # /_node/connect, proves its key, and Brod reaches it over that connection. It joins once, with the token Brod wrote
-  # to the node-join volume; its key and id stay in node-state.
+  # to the node-join volume; its key and id stay in node-state. It builds container apps' images and runs them.
+  # On the host's network, with NET_ADMIN, so it can reach each app's bridge directly and put iptables rules in place
+  # that keep app containers off private networks, the cloud metadata service and this machine (Linux only).
   node:
     image: ghcr.io/brodsh/brod-node:${BROD_VERSION:-latest}
     build:
@@ -88,15 +96,39 @@ services:
       dockerfile: deploy/node/Dockerfile
     restart: unless-stopped
     init: true
+    network_mode: host
+    cap_add: [NET_ADMIN]
     environment:
-      BROD_URL: http://brod:8080
+      # Brod's published port on this machine (see brod's ports above).
+      BROD_URL: http://127.0.0.1:8080
       BROD_NODE_JOIN_TOKEN_FILE: /run/brod-node/token
       BROD_NODE_NAME: ${BROD_NODE_NAME:-local}
+      BROD_NODE_REACH: ip
     volumes:
       - node-state:/var/lib/brod-node
       - node-join:/run/brod-node:ro
-      # Only this service sees the Docker socket: it will run app containers (phase 2). Nothing else in this file does.
+      # Only this service sees the Docker socket: it builds and runs app containers. Nothing else in this file does.
       - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      brod:
+        condition: service_healthy
+
+  # The image registry for container apps. Only Brod talks to it, with short-lived tokens it signs: no port is
+  # published, and nodes get images through Brod. Unused images are deleted nightly; to reclaim their disk space run
+  #   docker compose exec registry registry garbage-collect --delete-untagged /etc/docker/registry/config.yml
+  registry:
+    image: registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+    restart: unless-stopped
+    environment:
+      REGISTRY_AUTH: token
+      REGISTRY_AUTH_TOKEN_REALM: http://brod:8080/v1/registry/token
+      REGISTRY_AUTH_TOKEN_SERVICE: brod-registry
+      REGISTRY_AUTH_TOKEN_ISSUER: brod
+      REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE: /run/brod-registry/registry-token.crt
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+    volumes:
+      - registry-data:/var/lib/registry
+      - registry-cert:/run/brod-registry:ro
     depends_on:
       brod:
         condition: service_healthy
@@ -109,3 +141,5 @@ volumes:
   runtime-secret:
   node-join:
   node-state:
+  registry-data:
+  registry-cert:
