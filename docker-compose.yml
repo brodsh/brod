@@ -5,7 +5,8 @@
 #   docker compose logs brod  (the sign-in link and the line that connects your agent)
 # No password or secret needs setting: Brod generates its secrets into the brod-data volume and shares only the
 # runtime's secret with the runtime, and Postgres is reached only through a socket the two containers share, with no
-# network port.
+# network port. Container apps that ask for a database (request_database) get one in apps-postgres, a second Postgres
+# with no network at all: apps reach it only through their node and Brod (brod-db.internal), never directly.
 # For a server with a domain and HTTPS, see docs/deploy-production.md.
 name: brod
 
@@ -27,6 +28,10 @@ services:
       # registry-cert volume; the signing key is generated into brod-data's secrets.env (REGISTRY_SIGNING_KEY).
       BROD_REGISTRY_URL: http://registry:5000
       BROD_REGISTRY_CERT_FILE: /run/brod-registry/registry-token.crt
+      # apps-postgres below, through its socket. Its admin password is generated into brod-data's secrets.env
+      # (APPS_DATABASE_PASSWORD) and written to the apps-postgres-secret volume for apps-postgres's first start.
+      BROD_APPS_DATABASE_URL: postgres://brod_admin@%2Fvar%2Frun%2Fapps-postgresql/postgres
+      BROD_APPS_DATABASE_PASSWORD_FILE: /run/brod-apps-postgres/password
     ports:
       # Only this machine can reach it. Use "8080:8080" (and a proxy with HTTPS) to let others in.
       - "127.0.0.1:8080:8080"
@@ -36,6 +41,8 @@ services:
       - runtime-secret:/run/brod
       - node-join:/run/brod-node
       - registry-cert:/run/brod-registry
+      - apps-postgres-socket:/var/run/apps-postgresql
+      - apps-postgres-secret:/run/brod-apps-postgres
     depends_on:
       postgres:
         condition: service_healthy
@@ -58,6 +65,34 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+
+  # Apps' databases, separate from Brod's own: one database and one role per app (databases.rs). No network at all,
+  # not even a private one: Brod is the only client, through the shared socket, and apps reach their database only
+  # through Brod's tunnel to their node. Password authentication on the socket too, so each app's role needs its own
+  # password. Brod's image carries pg_dump and pg_restore of the same major version for backups.
+  apps-postgres:
+    image: postgres:17-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826
+    restart: unless-stopped
+    network_mode: none
+    command: ["postgres", "-c", "listen_addresses="]
+    environment:
+      POSTGRES_USER: brod_admin
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD_FILE: /run/brod-apps-postgres/password
+      POSTGRES_INITDB_ARGS: --auth-local=scram-sha-256 --auth-host=scram-sha-256
+    volumes:
+      - apps-postgres-data:/var/lib/postgresql/data
+      - apps-postgres-socket:/var/run/postgresql
+      - apps-postgres-secret:/run/brod-apps-postgres:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "brod_admin"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    depends_on:
+      # Brod writes the password file before it reports healthy.
+      brod:
+        condition: service_healthy
 
   runtime:
     image: ghcr.io/brodsh/brod-runtime:${BROD_VERSION:-latest}
@@ -143,3 +178,6 @@ volumes:
   node-state:
   registry-data:
   registry-cert:
+  apps-postgres-data:
+  apps-postgres-socket:
+  apps-postgres-secret:
