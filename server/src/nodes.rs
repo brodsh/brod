@@ -7,7 +7,12 @@
 //                          client over the upgraded connection and the node an HTTP/2 server, so Brod can send the
 //                          node requests (`request`) though the node is behind NAT and has no open port
 //   POST /_node/heartbeat  every 10 s, signed with the node's key: version, capabilities, resource usage
-// Every endpoint but join checks the node's key. The operator's API is under /v1/admin/nodes (ADMIN_SECRET).
+// Every endpoint but join checks the node's key. The operator's API is under /v1/admin/nodes (ADMIN_SECRET):
+//   POST   /v1/admin/nodes/join-tokens            a join token, good once for 15 minutes
+//   GET    /v1/admin/nodes, /v1/admin/nodes/<id>  nodes with their status, connection, capabilities and resources
+//   POST   /v1/admin/nodes/<id>/drain|disable|enable
+//   DELETE /v1/admin/nodes/<id>                   refused while connected, unless disabled first
+//   *      /v1/admin/nodes/<id>/tunnel/<path>     a request sent to the node through its tunnel, streamed both ways
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -530,7 +535,8 @@ pub fn mint(c: &Connection, created_by: &str) -> Result<(String, i64)> {
     Ok((token, expires_at))
 }
 
-/// /v1/admin/nodes/*, with the admin secret: join tokens, the node list, drain, disable, enable and delete.
+/// /v1/admin/nodes/*, with the admin secret: join tokens, the node list, drain, disable, enable, delete, and a request
+/// sent through a node's tunnel.
 pub async fn admin(st: &State, req: &mut Req, seg: &[String]) -> Result<Response> {
     let given = crate::control::Credentials::of(req).bearer().unwrap_or_default();
     if st.cfg.admin_secret.is_empty() || !safe_equal(&given, &st.cfg.admin_secret) {
@@ -588,6 +594,20 @@ pub async fn admin(st: &State, req: &mut Req, seg: &[String]) -> Result<Response
             tracing::info!("node {id}: {action} by the operator, now {}", node.name());
             let connected = st.nodes.connected(&id);
             Ok(json_ok(json!({ "node": st.db.call(move |c| view(c, &id, connected)).await? })))
+        }
+        // The operator (and the e2e tests) can send a node a request through its tunnel: /v1/admin/nodes/<id>/tunnel/<path>.
+        (_, Some(id), Some("tunnel"), _) => {
+            let prefix = format!("/v1/admin/nodes/{id}/tunnel");
+            let rest = req.path.strip_prefix(&prefix).filter(|r| r.starts_with('/')).unwrap_or("/").to_string();
+            let target = if req.query.is_empty() { rest } else { format!("{rest}?{}", req.query) };
+            let mut fwd = axum::http::Request::builder().method(req.method.clone()).uri(target);
+            for h in ["content-type", "content-length", "accept"] {
+                if let Some(v) = req.headers.get(h) {
+                    fwd = fwd.header(h, v);
+                }
+            }
+            let fwd = fwd.body(req.take_body()).map_err(|e| Problem::new(400, "bad_request", format!("Not a request for a node: {e}")))?;
+            request(st, id, fwd).await
         }
         (Method::DELETE, Some(id), None, false) => {
             let (id, connected) = (id.to_string(), st.nodes.connected(id));

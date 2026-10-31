@@ -116,9 +116,10 @@ async fn dial(base: &str, node: &TestNode, challenge: &str, sig: Option<String>,
     status
 }
 
+/// Wait until the node's tunnel is up and its row says online (the row is updated just after the tunnel is kept).
 async fn wait_connected(st: &State, id: &str) {
     for _ in 0..200 {
-        if st.nodes.connected(id) {
+        if st.nodes.connected(id) && status_of(st, id).await == "online" {
             return;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;

@@ -178,7 +178,7 @@ async fn run(cfg: Config) {
     {
         let st = st.clone();
         tokio::spawn(async move {
-            let mut tick = tokio::time::interval(Duration::from_secs(5));
+            let mut tick = tokio::time::interval(Duration::from_secs(2));
             loop {
                 tick.tick().await;
                 if let Err(e) = brod::nodes::sweep(&st).await {
