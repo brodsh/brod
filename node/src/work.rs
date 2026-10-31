@@ -9,14 +9,20 @@
 //!   GET    /v1/images/<image id>                   {"exists": bool}
 //!   POST   /v1/images/load                         body: an image archive (docker load); {"ok", "message"}
 //!   DELETE /v1/images/<image id>
-//!   PUT    /v1/containers/<name>                   create it: {image, env, port, cpu, memory_mb, network, trusted, labels}
+//!   PUT    /v1/containers/<name>                   create it: {image, env, port, cpu, memory_mb, network, trusted, labels,
+//!                                                  database (the app id: brod-db.internal reaches its database, db.rs),
+//!                                                  cmd (a command instead of the image's), once (no restarts)}
 //!   POST   /v1/containers/<name>/start             start it; {"address"}
+//!   POST   /v1/containers/<name>/restart           restart it; {"address"}
+//!   POST   /v1/containers/<name>/run               {timeout_s}: start a one-off container and wait for it to exit; its
+//!                                                  {"exit_code", "timed_out", "lines"} (killed once the time is up)
 //!   POST   /v1/containers/<name>/health            {path, timeout_s}: wait until it answers below 500; {"ok", "status", "error"}
 //!   POST   /v1/containers/<name>/stop
 //!   DELETE /v1/containers/<name>
 //!   GET    /v1/containers/<name>                   {"running", "exit_code", "address"}
 //!   GET    /v1/containers/<name>/logs?since=<cursor>  {"lines": [{stream, at, message}], "cursor"}
 //!   *      /v1/proxy/<name>/<path>                 the request, forwarded to the container
+//!   /v1/db/...                                     the database proxy (db.rs)
 //!
 //! Containers run hardened: read-only root file system with a small tmpfs at /tmp, every capability dropped,
 //! no-new-privileges, a non-root user (10001 unless the image names a non-root USER; root only for a trusted Brod), a
@@ -103,6 +109,12 @@ impl Default for Work {
     }
 }
 
+impl Work {
+    pub fn docker(&self) -> &Docker {
+        &self.docker
+    }
+}
+
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
@@ -115,11 +127,11 @@ pub fn full(status: u16, content_type: &str, body: impl Into<Bytes>) -> Response
         .expect("response")
 }
 
-fn reply(status: u16, v: Value) -> Response<Body> {
+pub(crate) fn reply(status: u16, v: Value) -> Response<Body> {
     full(status, "application/json", v.to_string())
 }
 
-fn fail(status: u16, code: &str, m: impl Into<String>) -> Response<Body> {
+pub(crate) fn fail(status: u16, code: &str, m: impl Into<String>) -> Response<Body> {
     reply(status, json!({ "error": { "code": code, "message": m.into() } }))
 }
 
@@ -134,7 +146,7 @@ impl http_body::Body for Chan {
     }
 }
 
-fn channel() -> (mpsc::Sender<Bytes>, Body) {
+pub(crate) fn channel() -> (mpsc::Sender<Bytes>, Body) {
     let (tx, rx) = mpsc::channel(64);
     (tx, Chan(rx).boxed())
 }
@@ -196,6 +208,19 @@ pub async fn handle(node: Arc<Node>, req: Request<Incoming>) -> Response<Body> {
             Err(r) => r,
         },
         (&Method::POST, ["containers", name, "start"]) => answer(start(&node, name).await),
+        (&Method::POST, ["containers", name, "restart"]) => {
+            lock(&node.work.addresses).remove(*name);
+            let restarted = node.work.docker.call("POST", &format!("/containers/{name}/restart?t=10"), None).await;
+            answer(match restarted {
+                Ok((s, v)) if s >= 300 => Err(message(s, &v)),
+                Ok(_) => start(&node, name).await,
+                Err(e) => Err(e),
+            })
+        }
+        (&Method::POST, ["containers", name, "run"]) => match read_json(req).await {
+            Ok(v) => answer(run_once(&node, name, &v).await),
+            Err(r) => r,
+        },
         (&Method::POST, ["containers", name, "health"]) => match read_json(req).await {
             Ok(v) => reply(200, health(&node, name, &v).await),
             Err(r) => r,
@@ -522,21 +547,33 @@ pub fn container_body(spec: &Value, user: &str, reach: Reach) -> Value {
         "RestartPolicy": { "Name": "unless-stopped" },
         "LogConfig": { "Type": "json-file", "Config": { "max-size": "10m", "max-file": "3" } },
     });
+    if let Some(hosts) = spec["extra_hosts"].as_array().filter(|h| !h.is_empty()) {
+        host["ExtraHosts"] = Value::Array(hosts.clone());
+    }
+    if spec["once"].as_bool() == Some(true) {
+        host["RestartPolicy"] = json!({ "Name": "no" });
+    }
     let exposed = format!("{port}/tcp");
     if reach == Reach::Publish {
         host["PortBindings"] = json!({ &exposed: [{ "HostIp": "127.0.0.1", "HostPort": "" }] });
     }
-    json!({
+    let mut body = json!({
         "Image": spec["image"],
         "User": user,
         "Env": env,
         "Labels": labels,
         "ExposedPorts": { exposed: {} },
         "HostConfig": host,
-    })
+    });
+    if let Some(cmd) = spec["cmd"].as_array().filter(|c| !c.is_empty()) {
+        body["Cmd"] = Value::Array(cmd.clone());
+    }
+    body
 }
 
-async fn ensure_network(node: &Node, network: &str) -> Result<Option<String>, String> {
+/// The app's bridge, made if it is not there yet, with its network rules: a warning when the rules could not be put in
+/// place, and the bridge as Docker describes it.
+async fn ensure_network(node: &Node, network: &str) -> Result<(Option<String>, Value), String> {
     let d = &node.work.docker;
     let (status, mut v) = d.call("GET", &format!("/networks/{}", q(network)), None).await?;
     if status == 404 {
@@ -546,11 +583,43 @@ async fn ensure_network(node: &Node, network: &str) -> Result<Option<String>, St
     } else if status >= 300 {
         return Err(message(status, &v));
     }
-    let subnet = v["IPAM"]["Config"].as_array().and_then(|c| c.iter().find_map(|c| c["Subnet"].as_str().filter(|s| !s.contains(':'))));
-    Ok(match subnet {
-        Some(s) => crate::firewall::apply(s).await,
+    let config = v["IPAM"]["Config"].as_array().and_then(|c| c.iter().find(|c| c["Subnet"].as_str().is_some_and(|s| !s.contains(':'))));
+    let (subnet, gateway) = (config.and_then(|c| c["Subnet"].as_str()), config.and_then(|c| c["Gateway"].as_str()));
+    let warning = match subnet {
+        Some(s) => crate::firewall::apply(s, gateway).await,
         None => Some("No network rules: the bridge has no IPv4 subnet.".into()),
-    })
+    };
+    Ok((warning, v))
+}
+
+/// Make sure the app's bridge has its database listener (db.rs). Where it listens, and what the container's
+/// brod-db.internal points at.
+pub async fn database_listener(
+    node: &Node,
+    network: &str,
+    app: &str,
+    port_hint: Option<u16>,
+) -> Result<(std::net::SocketAddr, String), String> {
+    let v = node.work.docker.ok("GET", &format!("/networks/{}", q(network)), None).await?;
+    let bind = crate::db::bind_for(node, node.work.reach, &v, port_hint).await?;
+    let extra = bind.extra_host.clone();
+    Ok((node.db.ensure(network, app, bind)?, extra))
+}
+
+/// The node's own address on a bridge, joining it first (attach: the node is itself a container).
+pub async fn own_address(node: &Node, network: &str) -> Result<std::net::Ipv4Addr, String> {
+    let d = &node.work.docker;
+    let me = std::fs::read_to_string("/etc/hostname").unwrap_or_default().trim().to_string();
+    let (s, r) = d.call("POST", &format!("/networks/{}/connect", q(network)), Some(&json!({ "Container": me }))).await?;
+    let already = r["message"].as_str().is_some_and(|m| m.contains("already exists"));
+    if s >= 300 && !already {
+        return Err(format!("The node could not join the app's network: {}", message(s, &r)));
+    }
+    let v = d.ok("GET", &format!("/containers/{}/json", q(&me)), None).await?;
+    v["NetworkSettings"]["Networks"][network]["IPAddress"]
+        .as_str()
+        .and_then(|ip| ip.parse().ok())
+        .ok_or_else(|| "The node has no address on the app's network.".to_string())
 }
 
 async fn create(node: &Node, name: &str, spec: &Value) -> Result<Value, String> {
@@ -560,12 +629,25 @@ async fn create(node: &Node, name: &str, spec: &Value) -> Result<Value, String> 
     let img = d.ok("GET", &format!("/images/{}/json", q(image)), None).await?;
     let user = user_for(img["Config"]["User"].as_str().unwrap_or(""), spec["trusted"].as_bool().unwrap_or(false))?;
     let mut warnings = vec![];
-    if let Some(w) = ensure_network(node, network).await? {
-        warnings.push(w);
+    let (warning, _) = ensure_network(node, network).await?;
+    warnings.extend(warning);
+    let mut spec = spec.clone();
+    if let Some(app) = spec["database"].as_str().filter(|a| valid_name(a)).map(String::from) {
+        // The app's database through brod-db.internal: a listener on its bridge, and the extra host pointing there.
+        let (addr, extra) = database_listener(node, network, &app, None).await?;
+        spec["extra_hosts"] = json!([format!("{}:{extra}", crate::db::HOST)]);
+        if let Some(url) = spec["env"]["DATABASE_URL"].as_str().map(String::from) {
+            spec["env"]["DATABASE_URL"] = json!(crate::db::with_port(&url, addr.port()));
+        }
+        if !spec["labels"].is_object() {
+            spec["labels"] = json!({});
+        }
+        spec["labels"]["brod.db"] = json!(app);
+        spec["labels"]["brod.db.port"] = json!(addr.port().to_string());
     }
     let _ = d.call("DELETE", &format!("/containers/{name}?force=true"), None).await;
     lock(&node.work.addresses).remove(name);
-    let v = d.ok("POST", &format!("/containers/create?name={name}"), Some(&container_body(spec, &user, node.work.reach))).await?;
+    let v = d.ok("POST", &format!("/containers/create?name={name}"), Some(&container_body(&spec, &user, node.work.reach))).await?;
     Ok(json!({ "id": v["Id"], "user": user, "warnings": warnings }))
 }
 
@@ -626,6 +708,31 @@ async fn inspect(node: &Node, name: &str) -> Result<Value, String> {
     }
     let running = v["State"]["Running"].as_bool().unwrap_or(false);
     Ok(json!({ "exists": true, "running": running, "exit_code": v["State"]["ExitCode"], "oom": v["State"]["OOMKilled"] }))
+}
+
+/// Start a one-off container (a migration) and wait for it to exit, killing it after timeout_s. Its exit code and output.
+async fn run_once(node: &Node, name: &str, v: &Value) -> Result<Value, String> {
+    let d = &node.work.docker;
+    let secs = v["timeout_s"].as_u64().unwrap_or(600).clamp(1, 3600);
+    let (status, r) = d.call("POST", &format!("/containers/{name}/start"), None).await?;
+    if status >= 300 && status != 304 {
+        return Err(message(status, &r));
+    }
+    let wait = async {
+        let res = d.send("POST", &format!("/containers/{name}/wait"), None, empty()).await?;
+        let bytes = res.into_body().collect().await.map_err(|e| e.to_string())?.to_bytes();
+        let v: Value = serde_json::from_slice(&bytes).map_err(|_| format!("Docker's wait answered {}", String::from_utf8_lossy(&bytes)))?;
+        v["StatusCode"].as_i64().ok_or_else(|| format!("Docker's wait answered {v}"))
+    };
+    let (exit_code, timed_out) = match tokio::time::timeout(Duration::from_secs(secs), wait).await {
+        Ok(code) => (Some(code?), false),
+        Err(_) => {
+            let _ = d.call("POST", &format!("/containers/{name}/kill"), None).await;
+            (None, true)
+        }
+    };
+    let lines = logs(node, name, None).await.map(|l| l["lines"].clone()).unwrap_or(json!([]));
+    Ok(json!({ "exit_code": exit_code, "timed_out": timed_out, "lines": lines }))
 }
 
 async fn health(node: &Node, name: &str, v: &Value) -> Value {

@@ -5,6 +5,7 @@
 //!   GET  /v1/info   the node's id, name, version, capabilities and usage (as in a heartbeat)
 //!   POST /v1/echo   the request body streamed straight back, to check the tunnel end to end
 //!   /v1/builds, /v1/images, /v1/containers, /v1/proxy   workloads (work.rs)
+//!   /v1/db/accept, /v1/db/conns/<id>                    the database proxy (db.rs)
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,6 +18,9 @@ use crate::Node;
 use crate::work::{Body, BoxError, full};
 
 async fn handle(node: Arc<Node>, req: Request<Incoming>) -> Result<Response<Body>, Infallible> {
+    if crate::db::handles(req.uri().path()) {
+        return Ok(crate::db::handle(node, req).await);
+    }
     if crate::work::handles(req.uri().path()) {
         return Ok(crate::work::handle(node, req).await);
     }

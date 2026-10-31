@@ -14,6 +14,7 @@
 //! node next to Brod in docker-compose.yml): BROD_URL and BROD_NODE_JOIN_TOKEN_FILE (or BROD_NODE_JOIN_TOKEN); the node
 //! waits for a token there and joins once. BROD_URL also overrides the address `join` saved. BROD_NODE_NAME names it.
 mod brod;
+mod db;
 mod docker;
 mod firewall;
 mod identity;
@@ -50,6 +51,8 @@ pub struct Node {
     pub name: String,
     pub dir: PathBuf,
     pub work: work::Work,
+    /// The database proxy's listeners and the connections waiting for Brod (db.rs).
+    pub db: db::Proxy,
 }
 
 fn main() -> ExitCode {
@@ -151,9 +154,17 @@ async fn run(dir: &Path) -> Result<(), String> {
     let j = joined(dir).await?;
     let me = Identity::load_or_create(dir)?;
     let url = std::env::var("BROD_URL").ok().filter(|u| !u.trim().is_empty()).unwrap_or(j.brod);
-    let node = Arc::new(Node { me, brod: Brod::parse(&url)?, name: j.name, dir: dir.to_path_buf(), work: work::Work::default() });
+    let node = Arc::new(Node {
+        me,
+        brod: Brod::parse(&url)?,
+        name: j.name,
+        dir: dir.to_path_buf(),
+        work: work::Work::default(),
+        db: db::Proxy::default(),
+    });
     log!("{} ({}) for {}; state in {}", node.me.id, node.name, node.brod.url, dir.display());
     tokio::spawn(heartbeats(node.clone()));
+    tokio::spawn(db::restore(node.clone()));
     tokio::select! {
         _ = connect_loop(node) => {}
         _ = shutdown() => log!("stopping"),
