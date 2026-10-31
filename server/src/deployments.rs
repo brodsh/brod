@@ -1404,17 +1404,17 @@ mod tests {
             (),
         )
         .unwrap();
-        assert!(transition(&db, "d1", "scheduled", "building").unwrap());
-        assert!(!transition(&db, "d1", "scheduled", "building").unwrap(), "only from the state it is in");
-        assert!(transition(&db, "d1", "building", "failed").unwrap());
-        assert!(transition(&db, "d1", "failed", "serving").is_err(), "never out of failed");
+        assert!(transition(db, "d1", "scheduled", "building").unwrap());
+        assert!(!transition(db, "d1", "scheduled", "building").unwrap(), "only from the state it is in");
+        assert!(transition(db, "d1", "building", "failed").unwrap());
+        assert!(transition(db, "d1", "failed", "serving").is_err(), "never out of failed");
         for s in ["pulling", "starting", "healthy"] {
             db.run("UPDATE deployments SET state = ? WHERE id = 'd1'", [s]).unwrap();
-            assert!(transition(&db, "d1", s, "failed").unwrap());
+            assert!(transition(db, "d1", s, "failed").unwrap());
         }
         db.run("UPDATE deployments SET state = 'healthy' WHERE id = 'd1'", ()).unwrap();
-        assert!(transition(&db, "d1", "healthy", "serving").unwrap());
-        let d = get(&db, "d1").unwrap().unwrap();
+        assert!(transition(db, "d1", "healthy", "serving").unwrap());
+        let d = get(db, "d1").unwrap().unwrap();
         assert!(d.ready_at.is_some() && d.stopped_at.is_none());
     }
 
