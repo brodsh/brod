@@ -125,12 +125,48 @@ pub fn generate() -> String {
 /// The frameworks get_auth_integration has a snippet for.
 pub const FRAMEWORKS: [&str; 6] = ["nextjs", "node", "python", "go", "rust", "workerd"];
 
-/// One framework's install line and verification code. `{ISS}` and `{JWKS_URL}` are filled in by `integration`.
-fn snippet(framework: &str) -> (&'static str, &'static str) {
+/// One framework's snippet. `{ISS}` and `{JWKS_URL}` are filled in by `integration`.
+struct Snippet {
+    install: &'static str,
+    code: &'static str,
+    /// The same with jose alone, for code that cannot take the @brod/auth package.
+    fallback: Option<(&'static str, &'static str)>,
+}
+
+/// One framework's install line and verification code.
+fn snippet(framework: &str) -> Snippet {
+    let plain = |install, code| Snippet { install, code, fallback: None };
     match framework {
-        "nextjs" => (
-            "npm install jose",
-            r#"// lib/brod.ts: the signed-in person, from the token the Brod gateway adds to every request.
+        "nextjs" => Snippet {
+            install: "npm install @brod/auth",
+            code: r#"// The signed-in person, from the token the Brod gateway adds to every request (x-brod-identity).
+// @brod/auth checks it against BROD_ISSUER, BROD_APP_ID and BROD_IDENTITY_JWKS from env (EdDSA only).
+
+// app/page.tsx. Server components, route handlers and server actions all use the same call.
+import { currentUserFromHeaders, requireUserFromHeaders } from '@brod/auth/next';
+
+export default async function Page() {
+  const user = await currentUserFromHeaders(); // null: anonymous (an open path, or a public app with nobody signed in)
+  return <p>Hello {user?.name ?? 'stranger'}</p>; // user: { id, email, name, workspace: { id, slug }, role, groups }
+}
+
+// app/api/me/route.ts: someone must be signed in. A missing or invalid token is a BrodAuthError with status 401.
+import { BrodAuthError } from '@brod/auth';
+export async function GET() {
+  try {
+    const user = await requireUserFromHeaders();
+    return Response.json({ email: user.email, role: user.role });
+  } catch (e) {
+    if (e instanceof BrodAuthError) return Response.json({ error: e.code }, { status: e.status });
+    throw e;
+  }
+}
+
+// middleware.ts (proxy.ts in Next.js 16) gets the request: currentUser(request) from '@brod/auth'.
+// Without env (outside Brod): currentUser(request, { issuer: '{ISS}', appId: '<app id>' }) fetches {JWKS_URL}."#,
+            fallback: Some((
+                "npm install jose",
+                r#"// lib/brod.ts: the same with jose alone.
 import { headers } from 'next/headers';
 import { createLocalJWKSet, createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 
@@ -148,10 +184,26 @@ export async function brodUser(): Promise<JWTPayload | null> {
   });
   return payload; // { sub, email, name, role, groups, workspace: { id, slug } }
 }"#,
-        ),
-        "node" => (
-            "npm install jose",
-            r#"import { createLocalJWKSet, createRemoteJWKSet, jwtVerify } from 'jose';
+            )),
+        },
+        "node" => Snippet {
+            install: "npm install @brod/auth",
+            code: r#"import { currentUser, requireUser } from '@brod/auth';
+
+// req: a Node http.IncomingMessage, an Express or Fastify request, a fetch Request, or Headers.
+// Checks x-brod-identity against BROD_ISSUER, BROD_APP_ID and BROD_IDENTITY_JWKS from env (EdDSA only).
+const user = await currentUser(req); // null: anonymous (an open path, or a public app with nobody signed in)
+// user: { id, email, name, workspace: { id, slug }, role, groups }. An invalid token throws a BrodAuthError (status 401).
+
+// Express: every route below needs someone signed in.
+app.use(async (req, res, next) => {
+  try { req.user = await requireUser(req); next(); }
+  catch (e) { res.status(e.status ?? 500).json({ error: e.code ?? 'error' }); }
+});
+// Without env (outside Brod): currentUser(req, { issuer: '{ISS}', appId: '<app id>' }) fetches {JWKS_URL}."#,
+            fallback: Some((
+                "npm install jose",
+                r#"import { createLocalJWKSet, createRemoteJWKSet, jwtVerify } from 'jose';
 
 const jwks = process.env.BROD_IDENTITY_JWKS
   ? createLocalJWKSet(JSON.parse(process.env.BROD_IDENTITY_JWKS))
@@ -168,8 +220,9 @@ export async function brodUser(req) {
   });
   return payload; // { sub, email, name, role, groups, workspace: { id, slug } }
 }"#,
-        ),
-        "python" => (
+            )),
+        },
+        "python" => plain(
             "pip install \"pyjwt[crypto]\"",
             r#"import json, os
 import jwt  # PyJWT
@@ -191,7 +244,7 @@ def brod_user(headers):
         key = _remote.get_signing_key_from_jwt(token).key
     return jwt.decode(token, key, algorithms=["EdDSA"], audience=AUDIENCE, issuer=ISSUER)"#,
         ),
-        "go" => (
+        "go" => plain(
             "go get github.com/golang-jwt/jwt/v5",
             r#"package brod
 
@@ -244,7 +297,7 @@ func User(r *http.Request, keys map[string]ed25519.PublicKey) (jwt.MapClaims, er
 	return claims, nil
 }"#,
         ),
-        "rust" => (
+        "rust" => plain(
             "cargo add jsonwebtoken serde_json",
             r#"use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header, jwk::JwkSet};
 
@@ -260,9 +313,20 @@ pub fn brod_user(token: Option<&str>, jwks: &JwkSet) -> Result<Option<serde_json
     Ok(Some(decode::<serde_json::Value>(token, &DecodingKey::from_jwk(jwk)?, &v)?.claims))
 }"#,
         ),
-        _ => (
-            "Bundle jose into _worker.js (esbuild), or use the x-brod-user-* headers directly (see the note below).",
-            r#"import { createLocalJWKSet, jwtVerify } from 'jose';
+        _ => Snippet {
+            install: "npm install @brod/auth, then bundle it into _worker.js (npx esbuild src/worker.js --bundle --format=esm --outfile=_worker.js), or use the x-brod-user-* headers directly (see the note below).",
+            code: r#"import { currentUser } from '@brod/auth';
+
+export default {
+  async fetch(request, env) {
+    // A Worker has no process.env: pass env (BROD_ISSUER, BROD_APP_ID, BROD_IDENTITY_JWKS). EdDSA only.
+    const user = await currentUser(request, { env }); // null: anonymous (an open path, or a public app)
+    return Response.json({ hello: user?.name ?? 'stranger' });
+  },
+};"#,
+            fallback: Some((
+                "Bundle jose into _worker.js (esbuild).",
+                r#"import { createLocalJWKSet, jwtVerify } from 'jose';
 
 export default {
   async fetch(request, env) {
@@ -278,7 +342,8 @@ export default {
     return Response.json({ hello: user?.name ?? 'stranger' });
   },
 };"#,
-        ),
+            )),
+        },
     }
 }
 
@@ -293,8 +358,12 @@ pub fn integration(cfg: &crate::config::Config, framework: Option<&str>, runtime
     };
     let mut snippets = serde_json::Map::new();
     for f in chosen {
-        let (install, code) = snippet(f);
-        snippets.insert(f.into(), json!({ "install": install, "code": fill(code) }));
+        let s = snippet(f);
+        let mut entry = json!({ "install": s.install, "code": fill(s.code) });
+        if let Some((install, code)) = s.fallback {
+            entry["without_package"] = json!({ "install": install, "code": fill(code) });
+        }
+        snippets.insert(f.into(), entry);
     }
     let workerd_note = "Inside a Brod server app (_worker.js on workerd) the gateway is the only way in and strips any x-brod-* header a visitor sends, so the x-brod-user-id, x-brod-user-email, x-brod-user-name (URI-encoded), x-brod-role and x-brod-groups headers can be used as they are. Verify the token when identity must be trusted beyond that: when you pass it on to another service, or in code that could also be reached some other way.";
     json!({
@@ -335,7 +404,7 @@ pub fn integration(cfg: &crate::config::Config, framework: Option<&str>, runtime
         },
         "workerd_note": workerd_note,
         "snippets": snippets,
-        "package": "@brod/auth, a small package that does this in one call for Node, Next.js and Workers, is coming. Until then use the snippets.",
+        "package": "@brod/auth (npm install @brod/auth) does all of this in one call for Node, Next.js (server components, route handlers, middleware) and Workers: currentUser(request) returns { id, email, name, workspace, role, groups, app } or null when anonymous, and throws a BrodAuthError (status 401) for a token that does not verify. The nextjs, node and workerd snippets use it; each also has without_package, the same with jose alone. Python, Go and Rust use their usual JWT library.",
     })
 }
 
@@ -426,7 +495,19 @@ mod tests {
         for (f, s) in all["snippets"].as_object().unwrap() {
             let code = s["code"].as_str().unwrap();
             assert!(!code.contains("{ISS}") && !code.contains("{JWKS_URL}"), "{f}");
-            assert!(code.contains("EdDSA") && code.contains("x-brod-identity") || code.contains("X-Brod-Identity") || f == "rust", "{f}");
+            if ["nextjs", "node", "workerd"].contains(&f.as_str()) {
+                // The JavaScript ones use the package, and keep the jose-only code beside it.
+                assert!(s["install"].as_str().unwrap().contains("@brod/auth") && code.contains("from '@brod/auth"), "{f}");
+                let raw = s["without_package"]["code"].as_str().unwrap();
+                assert!(raw.contains("from 'jose'") && raw.contains("'EdDSA'") && raw.contains("x-brod-identity"), "{f}");
+                assert!(!raw.contains("{ISS}") && !raw.contains("{JWKS_URL}"), "{f}");
+            } else {
+                assert!(
+                    code.contains("EdDSA") && (code.contains("x-brod-identity") || code.contains("X-Brod-Identity") || f == "rust"),
+                    "{f}"
+                );
+                assert!(s.get("without_package").is_none(), "{f}");
+            }
         }
         let one = integration(&cfg, Some("python"), Some("container"), None);
         assert_eq!(one["snippets"].as_object().unwrap().len(), 1);
