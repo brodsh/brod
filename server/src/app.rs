@@ -173,7 +173,9 @@ pub async fn may_have_certificate(st: &State, domain: &str) -> Result<bool> {
             st.db.call(move |c| c.exists("SELECT 1 FROM workspaces WHERE slug = ?", [w])).await?
         }
         [a, w] => {
-            let (a, w) = (a.clone(), w.clone());
+            // `<app>--staging.<workspace>` is the app's staging address and needs a certificate of its own.
+            let a = a.strip_suffix(crate::util::STAGING_SUFFIX).unwrap_or(a).to_string();
+            let w = w.clone();
             st.db
                 .call(move |c| {
                     c.exists("SELECT 1 FROM apps a JOIN workspaces w ON w.id = a.workspace_id WHERE w.slug = ? AND a.slug = ?", [w, a])
