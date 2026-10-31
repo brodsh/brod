@@ -79,6 +79,40 @@ pub struct Config {
     pub network: NetworkPolicy,
     /// DEV_MODE only: a smaller free plan storage (DEV_FREE_STORAGE_MB), so tests can run out of it.
     pub dev_free_storage_mb: Option<i64>,
+    /// BROD_CONTAINERS: who may deploy container apps (deployments.rs). Default trusted self-hosted, off hosted.
+    pub containers: Containers,
+    /// BROD_REGISTRY_URL and the key Brod signs registry tokens with (registry.rs). None: no registry, so no containers.
+    pub registry: Option<RegistryConfig>,
+}
+
+/// BROD_CONTAINERS. `Off`: container apps are refused. `Trusted`: every workspace is trusted, so an image may even run
+/// as root. `On`: containers for everyone, never as root.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Containers {
+    Off,
+    Trusted,
+    On,
+}
+
+impl Containers {
+    pub fn name(self) -> &'static str {
+        match self {
+            Containers::Off => "off",
+            Containers::Trusted => "trusted",
+            Containers::On => "on",
+        }
+    }
+}
+
+/// Brod's image registry (CNCF Distribution with token auth). Only Brod talks to it.
+#[derive(Clone, Debug)]
+pub struct RegistryConfig {
+    /// Where the registry listens, for example http://registry:5000. Never published.
+    pub url: String,
+    /// REGISTRY_SIGNING_KEY: an ECDSA P-256 key, PKCS#8 in base64, that signs registry tokens.
+    pub key_pkcs8: Vec<u8>,
+    /// BROD_REGISTRY_CERT_FILE: where Brod writes the certificate of that key for the registry's rootcertbundle.
+    pub cert_file: PathBuf,
 }
 
 /// BROD_NETWORK. `Log` (the default) lets every request through and records the undeclared ones, so makers can fix
@@ -150,6 +184,13 @@ impl Config {
                     generated.push(k.to_string());
                 }
             }
+        }
+        // The registry key is not one of GENERATED (it is a PKCS#8 key, not 32 hex bytes): self-hosted, it is added to
+        // secrets.env the first time a registry is configured.
+        if !hosted && set(&vars, "BROD_REGISTRY_URL") && !set(&vars, "REGISTRY_SIGNING_KEY") {
+            let key = registry_key_from_secrets(&data_dir)?;
+            vars.insert("REGISTRY_SIGNING_KEY".into(), key);
+            generated.push("REGISTRY_SIGNING_KEY".into());
         }
         let mut cfg = Config::from_vars(&vars)?;
         cfg.generated_secrets = generated;
@@ -362,7 +403,46 @@ impl Config {
                 ));
             }
         }
+        let containers = match get("BROD_CONTAINERS").as_deref() {
+            None => {
+                if hosted {
+                    Containers::Off
+                } else {
+                    Containers::Trusted
+                }
+            }
+            Some("off") | Some("0") => Containers::Off,
+            Some("trusted") => Containers::Trusted,
+            Some("on") | Some("1") => Containers::On,
+            Some(other) => {
+                return Err(ConfigError(format!(
+                    "BROD_CONTAINERS must be \"off\", \"trusted\" (every workspace is trusted, the self-hosted default) or \"on\", not {other:?}."
+                )));
+            }
+        };
+        let registry = match get("BROD_REGISTRY_URL") {
+            None => None,
+            Some(url) => {
+                if !(url.starts_with("http://") || url.starts_with("https://")) {
+                    return Err(ConfigError(
+                        "BROD_REGISTRY_URL must be an http:// or https:// address, such as http://registry:5000.".into(),
+                    ));
+                }
+                let key = get("REGISTRY_SIGNING_KEY")
+                    .ok_or_else(|| ConfigError("BROD_REGISTRY_URL needs REGISTRY_SIGNING_KEY (generated self-hosted).".into()))?;
+                use base64::Engine;
+                let key_pkcs8 = base64::engine::general_purpose::STANDARD
+                    .decode(key.as_bytes())
+                    .ok()
+                    .filter(|k| crate::registry::check_key(k))
+                    .ok_or_else(|| ConfigError("REGISTRY_SIGNING_KEY must be an ECDSA P-256 PKCS#8 key in base64.".into()))?;
+                let cert_file = get("BROD_REGISTRY_CERT_FILE").map(PathBuf::from).unwrap_or_else(|| data_dir.join("registry-token.crt"));
+                Some(RegistryConfig { url: url.trim_end_matches('/').to_string(), key_pkcs8, cert_file })
+            }
+        };
         Ok(Config {
+            containers,
+            registry,
             mode,
             generated_secrets: Vec::new(),
             warnings,
@@ -458,6 +538,34 @@ fn load_or_create_secrets(data_dir: &std::path::Path) -> Result<HashMap<String, 
         write_private(&path, &text).map_err(fail)?;
     }
     Ok(out)
+}
+
+/// REGISTRY_SIGNING_KEY from `<data>`/secrets.env, appended there with a fresh key when it is missing.
+fn registry_key_from_secrets(data_dir: &std::path::Path) -> Result<String, ConfigError> {
+    let path = data_dir.join("secrets.env");
+    let fail = |e: std::io::Error| ConfigError(format!("Could not keep the registry key in {}: {e}", path.display()));
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(fail(e)),
+    };
+    if let Some(v) = text.lines().filter_map(|l| l.split_once('=')).find(|(k, _)| k.trim() == "REGISTRY_SIGNING_KEY").map(|(_, v)| v.trim())
+    {
+        return Ok(v.to_string());
+    }
+    let key = crate::registry::new_key();
+    let mut text = if text.is_empty() {
+        String::from("# Generated by Brod on first start. Keep this file private; back it up with the database.\n")
+    } else {
+        text
+    };
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&format!("REGISTRY_SIGNING_KEY={key}\n"));
+    std::fs::create_dir_all(data_dir).map_err(fail)?;
+    write_private(&path, &text).map_err(fail)?;
+    Ok(key)
 }
 
 /// Write a file only its owner can read.
