@@ -175,7 +175,14 @@ async fn run(cfg: Config) {
             let mut tick = tokio::time::interval(Duration::from_secs(3600));
             loop {
                 tick.tick().await;
-                if let Err(e) = st.db.call(|c| brod::analytics::purge(c)).await {
+                if let Err(e) = st
+                    .db
+                    .call({
+                        let cfg = st.cfg.clone();
+                        move |c| brod::analytics::purge(c, &cfg)
+                    })
+                    .await
+                {
                     tracing::warn!("could not delete old analytics: {}", e.message);
                 }
             }

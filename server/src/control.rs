@@ -8,7 +8,7 @@ use crate::abuse;
 use crate::config::Config;
 use crate::db::{Sql, event, tx};
 use crate::market::read_tree;
-use crate::model::{ACCESS, AppRow, Caller, User, Workspace, field, js_string, limits, plan, present, truthy};
+use crate::model::{ACCESS, AppRow, Caller, User, Workspace, field, js_string, limits, present, truthy};
 use crate::people::{self, require_role};
 use crate::problem::{Problem, Result};
 use crate::runtime::{self, ServerInfo};
@@ -432,7 +432,7 @@ pub fn list_apps(conn: &Connection, cfg: &Config, c: &Caller) -> Result<Value> {
     let running = apps.iter().filter(|a| a.status == "live").count();
     let described: Vec<Value> = apps.iter().map(|a| described(conn, cfg, c, a).map(Value::Object)).collect::<Result<_>>()?;
     Ok(
-        json!({ "workspace": c.workspace.slug, "plan": crate::model::plan_label(&c.workspace), "running_apps": running, "app_limit": crate::model::limit_json(plan(&c.workspace).apps), "apps": described }),
+        json!({ "workspace": c.workspace.slug, "plan": crate::model::plan_label(&c.workspace), "running_apps": running, "app_limit": crate::model::limit_json(crate::allowances::effective(conn, cfg, &c.workspace)?.apps), "apps": described }),
     )
 }
 
@@ -696,7 +696,7 @@ pub(crate) fn check_rate(conn: &Connection, c: &Caller) -> Result<()> {
 fn plan_full(conn: &Connection, cfg: &Config, c: &Caller, verb: &str) -> Result<()> {
     let running =
         conn.all("SELECT slug FROM apps WHERE workspace_id = ? AND status = 'live'", [&c.workspace.id], |r| r.get::<_, String>(0))?;
-    let limit = plan(&c.workspace).apps;
+    let limit = crate::allowances::effective(conn, cfg, &c.workspace)?.apps;
     if running.len() as i64 >= limit {
         return Err(Problem::new(
             402,
@@ -2098,7 +2098,7 @@ pub async fn invite_from(st: &State, c: &Caller, o: Map<String, Value>) -> Resul
     st.db
         .call(move |conn| {
             let getter = |s: &str| get_app(conn, &c2, s);
-            let ci = people::check_invite(conn, &c2, &o, &getter)?;
+            let ci = people::check_invite(conn, &cfg, &c2, &o, &getter)?;
             let summary = match &ci.app {
                 Some(a) => format!(
                     "Invite {} to {} as {}{}",

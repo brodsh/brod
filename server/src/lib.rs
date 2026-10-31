@@ -5,6 +5,7 @@
 
 pub mod abuse;
 pub mod admin;
+pub mod allowances;
 pub mod analytics;
 pub mod api;
 pub mod app;

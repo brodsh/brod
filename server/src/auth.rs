@@ -468,6 +468,7 @@ pub async fn serve(st: &State, req: &mut Req) -> Result<Option<Response>> {
         same_origin(&cfg, req)?;
         let b = input(req).await?;
         let hash = sha256_hex(&text(&b, "token"));
+        let cfg2 = cfg.clone();
         enum Outcome {
             Expired,
             Used,
@@ -488,6 +489,7 @@ pub async fn serve(st: &State, req: &mut Req) -> Result<Option<Response>> {
                 if c.run("UPDATE login_links SET used_at = ? WHERE hash = ? AND used_at IS NULL", params![now(), hash])? == 0 {
                     return Ok(Outcome::Used);
                 }
+                crate::allowances::check_new_user(c, &cfg2, &email)?;
                 let user = people::verified_user(c, &email, "")?;
                 Ok(Outcome::Signed(return_to, people::create_session(c, &user.id, None, None)?))
             })
@@ -596,9 +598,11 @@ pub async fn serve(st: &State, req: &mut Req) -> Result<Option<Response>> {
             )));
         }
         let name = claims["name"].as_str().unwrap_or("").to_string();
+        let cfg2 = cfg.clone();
         let token = st
             .db
             .call(move |c| {
+                crate::allowances::check_new_user(c, &cfg2, &email)?;
                 let user = people::verified_user(c, &email, &name)?;
                 people::create_session(c, &user.id, None, None)
             })
@@ -702,10 +706,11 @@ pub async fn serve(st: &State, req: &mut Req) -> Result<Option<Response>> {
     if p == "/auth/invite" && m == Method::POST {
         same_origin(&cfg, req)?;
         let token = text(&input(req).await?, "token");
+        let cfg2 = cfg.clone();
         let (to, session) = st
             .db
             .call(move |c| {
-                let a = people::accept_invite(c, &token)?;
+                let a = people::accept_invite(c, &cfg2, &token)?;
                 let to = match a.app_ref {
                     Some(s) => format!("/auth/app?app={s}&return=%2F"),
                     None => format!("/w/{}", a.workspace_slug),

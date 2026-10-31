@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use crate::config::Config;
 use crate::db::{Sql, tx};
 use crate::http::Req;
-use crate::model::{Caller, Workspace, plan, plan_named};
+use crate::model::{Caller, Workspace};
 use crate::problem::{Problem, Result};
 use crate::state::State;
 use crate::util::{iso, now, sha256_hex};
@@ -176,7 +176,7 @@ pub fn mb(bytes: i64) -> String {
 /// Refuse to store `adding` more bytes when that would go over the plan's storage.
 pub fn check_storage(conn: &Connection, cfg: &Config, w: &Workspace, adding: i64) -> Result<()> {
     let used = workspace_storage(conn, &w.id)?.total();
-    let limit = plan(w).storage;
+    let limit = crate::allowances::effective(conn, cfg, w)?.storage;
     if used + adding > limit {
         return Err(Problem::new(
             402,
@@ -197,7 +197,7 @@ pub fn check_storage(conn: &Connection, cfg: &Config, w: &Workspace, adding: i64
 }
 
 /// The same check for an app's own files, from the runtime, which knows only the app id.
-pub fn check_app_storage(conn: &Connection, app_id: &str, adding: i64) -> Result<()> {
+pub fn check_app_storage(conn: &Connection, cfg: &Config, app_id: &str, adding: i64) -> Result<()> {
     // A marketplace preview sandbox: it lives for one capture and its files are removed right after (preview.rs).
     if app_id.starts_with("lst_") {
         return Ok(());
@@ -208,7 +208,7 @@ pub fn check_app_storage(conn: &Connection, app_id: &str, adding: i64) -> Result
         })?;
     let Some((wid, plan_name)) = row else { return Err(Problem::new(404, "not_found", "No such app.")) };
     let used = workspace_storage(conn, &wid)?.total();
-    let limit = plan_named(&plan_name).storage;
+    let limit = crate::allowances::for_id(conn, cfg, &wid, &plan_name)?.storage;
     if adding > 0 && used + adding > limit {
         return Err(Problem::new(507, "storage_limit", format!("The workspace's storage is full ({} of {}).", mb(used), mb(limit))));
     }
@@ -222,7 +222,7 @@ pub fn add_file_bytes(conn: &Connection, app_id: &str, delta: i64) -> Result<()>
 
 /// The runtime reports an app's database size after writes (POST /_runtime/usage). Record it and say whether the
 /// workspace is now out of storage, so the runtime refuses writes that would grow it further.
-pub fn report_data_bytes(conn: &Connection, app_id: &str, bytes: i64) -> Result<Value> {
+pub fn report_data_bytes(conn: &Connection, cfg: &Config, app_id: &str, bytes: i64) -> Result<Value> {
     conn.run("UPDATE apps SET data_bytes = ? WHERE id = ?", params![bytes.max(0), app_id])?;
     let row: Option<(String, String)> =
         conn.first("SELECT w.id, w.plan FROM apps a JOIN workspaces w ON w.id = a.workspace_id WHERE a.id = ?", [app_id], |r| {
@@ -231,7 +231,7 @@ pub fn report_data_bytes(conn: &Connection, app_id: &str, bytes: i64) -> Result<
     // An app deleted meanwhile: nothing to hold back.
     let Some((wid, plan_name)) = row else { return Ok(json!({ "full": false })) };
     let used = workspace_storage(conn, &wid)?.total();
-    let limit = plan_named(&plan_name).storage;
+    let limit = crate::allowances::for_id(conn, cfg, &wid, &plan_name)?.storage;
     Ok(json!({ "full": used >= limit, "used": used, "limit": limit }))
 }
 
@@ -283,7 +283,7 @@ fn clamp_days(days: Option<i64>) -> i64 {
 }
 
 /// GET /v1/usage: views per app per day, and storage per app, for the whole workspace.
-pub fn workspace_usage(conn: &Connection, c: &Caller, days: Option<i64>) -> Result<Value> {
+pub fn workspace_usage(conn: &Connection, cfg: &Config, c: &Caller, days: Option<i64>) -> Result<Value> {
     crate::people::require_role(c, "builder", "see usage")?;
     let days = last_days(clamp_days(days));
     let apps: Vec<(String, String, i64, i64)> = conn.all(
@@ -313,7 +313,7 @@ pub fn workspace_usage(conn: &Connection, c: &Caller, days: Option<i64>) -> Resu
     let s = workspace_storage(conn, &c.workspace.id)?;
     Ok(json!({
         "days": days, "apps": out, "total_views": views_total, "total_visitors": visitors_total,
-        "storage": { "bundles": s.bundles, "files": s.files, "data": s.data, "total": s.total(), "limit": crate::model::limit_json(plan(&c.workspace).storage) },
+        "storage": { "bundles": s.bundles, "files": s.files, "data": s.data, "total": s.total(), "limit": crate::model::limit_json(crate::allowances::effective(conn, cfg, &c.workspace)?.storage) },
     }))
 }
 
@@ -368,12 +368,13 @@ mod tests {
                     [200 * crate::model::MB],
                 )?;
                 let w = Workspace { id: "ws_q".into(), slug: "q".into(), name: "Q".into(), plan: "free".into(), color: String::new(), icon: String::new(), created_at: 1 };
-                let cfg = Config::for_tests();
+                let mut cfg = Config::for_tests();
+                cfg.mode = crate::config::Mode::Hosted;
                 let fits = check_storage(c, &cfg, &w, 40 * crate::model::MB).is_ok();
                 let over = check_storage(c, &cfg, &w, 41 * crate::model::MB).unwrap_err();
                 let solo = check_storage(c, &cfg, &Workspace { plan: "solo".into(), ..w }, 41 * crate::model::MB).is_ok();
-                let files_full = check_app_storage(c, "app_q", 41 * crate::model::MB).unwrap_err().status;
-                let shrink_ok = check_app_storage(c, "app_q", -5).is_ok();
+                let files_full = check_app_storage(c, &cfg, "app_q", 41 * crate::model::MB).unwrap_err().status;
+                let shrink_ok = check_app_storage(c, &cfg, "app_q", -5).is_ok();
                 Ok((fits, over, solo, files_full, shrink_ok))
             })
             .await
@@ -387,6 +388,8 @@ mod tests {
         let db = test_db();
         let r = db
             .call(|c| {
+                let mut cfg = Config::for_tests();
+                cfg.mode = crate::config::Mode::Hosted;
                 c.run("INSERT INTO workspaces (id, slug, name, created_at) VALUES ('ws_d','d','D',1)", ())?;
                 c.run("INSERT INTO users (id, email, created_at) VALUES ('usr_d','d@d.test',1)", ())?;
                 for a in ["app_d1", "app_d2"] {
@@ -395,14 +398,14 @@ mod tests {
                         params![a, a, a],
                     )?;
                 }
-                let some = report_data_bytes(c, "app_d1", 100 * crate::model::MB)?;
-                let full = report_data_bytes(c, "app_d2", 150 * crate::model::MB)?;
+                let some = report_data_bytes(c, &cfg, "app_d1", 100 * crate::model::MB)?;
+                let full = report_data_bytes(c, &cfg, "app_d2", 150 * crate::model::MB)?;
                 let total = workspace_storage(c, "ws_d")?;
                 // Deleting data in one app makes room again.
-                let freed = report_data_bytes(c, "app_d2", 10 * crate::model::MB)?;
+                let freed = report_data_bytes(c, &cfg, "app_d2", 10 * crate::model::MB)?;
                 // A file write counts the databases too.
-                let file_refused = check_app_storage(c, "app_d1", 200 * crate::model::MB).is_err();
-                let gone = report_data_bytes(c, "app_missing", 1)?;
+                let file_refused = check_app_storage(c, &cfg, "app_d1", 200 * crate::model::MB).is_err();
+                let gone = report_data_bytes(c, &cfg, "app_missing", 1)?;
                 Ok((some, full, total.data, freed, file_refused, gone))
             })
             .await

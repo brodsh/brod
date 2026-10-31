@@ -148,7 +148,7 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
             }
             if m == Method::PATCH && s(1).is_some() {
                 let (who, role) = (one(s(1)), body_str(&req.json_object().await?, "role"));
-                return Ok(json(db(Box::new(move |conn, _, c| people::set_person_role(conn, c, &who, &role))).await?));
+                return Ok(json(db(Box::new(move |conn, cfg, c| people::set_person_role(conn, cfg, c, &who, &role))).await?));
             }
             if m == Method::DELETE && s(1).is_some() {
                 let who = one(s(1));
@@ -340,7 +340,7 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
             if m == Method::GET {
                 crate::usage::flush(st).await?;
                 let days = req.param("days").and_then(|d| d.parse().ok());
-                return Ok(json(db(Box::new(move |conn, _, c| crate::usage::workspace_usage(conn, c, days))).await?));
+                return Ok(json(db(Box::new(move |conn, cfg, c| crate::usage::workspace_usage(conn, cfg, c, days))).await?));
             }
         }
         Some("analytics") => {
@@ -349,7 +349,7 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
                 crate::analytics::flush(st).await?;
                 let num = |k: &str| req.param(k).and_then(|d| d.parse::<i64>().ok());
                 let (days, tz, app) = (num("days"), num("tz"), req.param("app"));
-                return Ok(json(db(Box::new(move |conn, _, c| crate::analytics::report(conn, c, app.as_deref(), days, tz))).await?));
+                return Ok(json(db(Box::new(move |conn, cfg, c| crate::analytics::report(conn, cfg, c, app.as_deref(), days, tz))).await?));
             }
         }
         Some("deploys") => {

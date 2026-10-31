@@ -7,7 +7,7 @@ use serde_json::{Map, Value, json};
 
 use crate::config::Config;
 use crate::db::{Sql, event, tx};
-use crate::model::{AppRow, Caller, User, Workspace, field, limits, plan, present, rank};
+use crate::model::{AppRow, Caller, User, Workspace, field, limits, present, rank};
 use crate::problem::{Problem, Result};
 use crate::util::{app_url, is_email, js_slice, js_trim, norm_email, now, random_id, sha256_hex, workspace_slugify};
 
@@ -141,6 +141,7 @@ pub fn create_workspace(conn: &Connection, cfg: &Config, user: &User, name: &str
             "On this server only workspace admins can create workspaces. Ask an admin to invite you.",
         ));
     }
+    crate::allowances::check_new_workspace(conn, cfg)?;
     let t = now();
     // Hosted, the service's terms of use must be accepted once. A self-hosted server has no such terms.
     if !accept_terms && cfg.mode == crate::config::Mode::Hosted {
@@ -239,7 +240,7 @@ pub fn describe_workspace(conn: &Connection, cfg: &Config, c: &Caller) -> Result
         |r| Ok(json!({ "name": r.get::<_, String>(0)?, "members": r.get::<_, i64>(1)? })),
     )?;
     let apps = conn.count("SELECT COUNT(*) AS n FROM apps WHERE workspace_id = ? AND status = 'live'", [&c.workspace.id])?;
-    let p = plan(&c.workspace);
+    let p = crate::allowances::effective(conn, cfg, &c.workspace)?;
     Ok(json!({
         "workspace": c.workspace.slug, "name": c.workspace.name, "home": home_url(cfg, &c.workspace), "your_role": c.role,
         "plan": crate::model::plan_label(&c.workspace), "running_apps": apps, "app_limit": crate::model::limit_json(p.apps),
@@ -318,8 +319,7 @@ fn admins(conn: &Connection, w: &Workspace) -> Result<i64> {
     conn.count("SELECT COUNT(*) AS n FROM members WHERE workspace_id = ? AND role = 'admin'", [&w.id])
 }
 
-fn member_limit(c: &Caller) -> Problem {
-    let p = plan(&c.workspace);
+fn member_limit(c: &Caller, p: &crate::model::Plan) -> Problem {
     Problem::new(
         402,
         "member_limit",
@@ -333,7 +333,7 @@ fn member_limit(c: &Caller) -> Problem {
 
 const ROLES: [&str; 4] = ["admin", "builder", "member", "guest"];
 
-pub fn set_person_role(conn: &Connection, c: &Caller, who: &str, role: &str) -> Result<Value> {
+pub fn set_person_role(conn: &Connection, cfg: &Config, c: &Caller, who: &str, role: &str) -> Result<Value> {
     require_role(c, "admin", "change workspace roles")?;
     if !ROLES.contains(&role) {
         return Err(Problem::new(400, "bad_role", "Workspace roles are admin, builder, member and guest."));
@@ -342,8 +342,9 @@ pub fn set_person_role(conn: &Connection, c: &Caller, who: &str, role: &str) -> 
     if p.role == "admin" && role != "admin" && admins(conn, &c.workspace)? <= 1 {
         return Err(Problem::new(409, "last_admin", "A workspace needs at least one admin."));
     }
-    if p.role == "guest" && role != "guest" && member_count(conn, &c.workspace)? >= plan(&c.workspace).members {
-        return Err(member_limit(c));
+    let limits = crate::allowances::effective(conn, cfg, &c.workspace)?;
+    if p.role == "guest" && role != "guest" && member_count(conn, &c.workspace)? >= limits.members {
+        return Err(member_limit(c, &limits));
     }
     tx(conn, |x| {
         x.run("UPDATE members SET role = ? WHERE workspace_id = ? AND user_id = ?", params![role, c.workspace.id, p.id])?;
@@ -400,6 +401,7 @@ pub struct CheckedInvite {
 /// Check an invite without sending it, so an agent's request can be validated before it waits for a person to confirm.
 pub fn check_invite(
     conn: &Connection,
+    cfg: &Config,
     c: &Caller,
     o: &Map<String, Value>,
     get_app: &dyn Fn(&str) -> Result<AppRow>,
@@ -439,8 +441,9 @@ pub fn check_invite(
         }
         app_role = Some(r);
     }
-    if role != "guest" && member_count(conn, &c.workspace)? >= plan(&c.workspace).members {
-        return Err(member_limit(c));
+    let limits = crate::allowances::effective(conn, cfg, &c.workspace)?;
+    if role != "guest" && member_count(conn, &c.workspace)? >= limits.members {
+        return Err(member_limit(c, &limits));
     }
     Ok(CheckedInvite { email, role, app, app_role })
 }
@@ -460,7 +463,7 @@ pub fn invite(
     o: &Map<String, Value>,
     get_app: &dyn Fn(&str) -> Result<AppRow>,
 ) -> Result<(Value, Option<Email>)> {
-    let CheckedInvite { email, role, app, app_role } = check_invite(conn, c, o, get_app)?;
+    let CheckedInvite { email, role, app, app_role } = check_invite(conn, cfg, c, o, get_app)?;
     // Someone already in the workspace who is being given an app gets the grant straight away.
     let existing: Option<(String, String)> = conn.first(
         "SELECT u.id, m.role FROM users u JOIN members m ON m.user_id = u.id AND m.workspace_id = ? WHERE u.email = ?",
@@ -559,7 +562,7 @@ pub struct Accepted {
 }
 
 /// Accept an invite. The emailed link proves the address, so it also signs the person in.
-pub fn accept_invite(conn: &Connection, token: &str) -> Result<Accepted> {
+pub fn accept_invite(conn: &Connection, cfg: &Config, token: &str) -> Result<Accepted> {
     let hash = sha256_hex(token);
     let gone = || Problem::new(410, "invite_gone", "This invitation has expired, was already used, or was withdrawn. Ask for a new one.");
     struct Inv {
@@ -596,6 +599,7 @@ pub fn accept_invite(conn: &Connection, token: &str) -> Result<Accepted> {
     if conn.run("UPDATE invites SET used_at = ? WHERE id = ? AND used_at IS NULL", params![now(), inv.id])? == 0 {
         return Err(Problem::new(410, "invite_gone", "This invitation was already used."));
     }
+    crate::allowances::check_new_user(conn, cfg, &inv.email)?;
     let user = verified_user(conn, &inv.email, "")?;
     tx(conn, |x| {
         // Keep a higher role if they already have one.
