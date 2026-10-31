@@ -138,10 +138,14 @@ check('create a named agent connection', agent.status === 201 && agent.body.name
 const client = new Client({ name: 'e2e', version: '1.0.0' });
 await client.connect(new StreamableHTTPClientTransport(new URL(API + '/mcp'), { requestInit: { headers: { authorization: `Bearer ${agent.body.token}` } } }));
 const tools = await client.listTools();
-check('MCP lists 13 tools', tools.tools.length === 13, tools.tools.map(t => t.name).join(','));
+check('MCP lists 15 tools', tools.tools.length === 15, tools.tools.map(t => t.name).join(','));
 const tool = async (name, args = {}) => { const r = await client.callTool({ name, arguments: args }); return { isError: r.isError, data: r.structuredContent ?? JSON.parse(r.content[0].text) }; };
 const gw = await tool('get_workspace');
 check('get_workspace explains groups, roles and the identity contract', gw.data.workspace === W && gw.data.identity?.how.includes('/_brod/me') && gw.data.default_app_roles.length === 3);
+const ai = await tool('get_auth_integration', { framework: 'python' });
+check('get_auth_integration gives the JWT contract and a snippet for one framework', !ai.isError && ai.data.identity?.jwks_url === `${API}/.well-known/jwks.json`
+  && ai.data.identity.issuer === API && Object.keys(ai.data.snippets).join() === 'python' && ai.data.snippets.python.code.includes(API), JSON.stringify(ai.data).slice(0, 300));
+check('get_auth_integration refuses an unknown framework', (await tool('get_auth_integration', { framework: 'cobol' })).isError);
 
 // ---------- 2. deploy, private by default, one sign-in handed to the app's host ----------
 
@@ -156,7 +160,7 @@ check('owner signs in once and lands on version 1', aliceApp.status === 200 && a
 check('the app host gets its own session cookie, never the platform one', !!alice.jars[appHost(url)]?.brod_session && !alice.jars[appHost(url)]?.brod_platform);
 const me = await alice.go(url + '/_brod/me');
 const meBody = JSON.parse(me.body);
-check('/_brod/me gives the person, their app role and a signed token', me.status === 200 && meBody.user.email === alice.email && meBody.role === 'owner' && /^[\w-]+\.[\w-]+$/.test(meBody.token));
+check('/_brod/me gives the person, their app role and a signed JWT', me.status === 200 && meBody.user.email === alice.email && meBody.role === 'owner' && /^[\w-]+\.[\w-]+\.[\w-]+$/.test(meBody.token));
 check('the client library is served on the app host', (await alice.go(url + '/_brod/client.js')).body.includes('Brod'));
 const js = await alice.go(url + '/assets/app.js');
 check('asset served with the right type', js.status === 200 && js.headers['content-type'].startsWith('text/javascript'));
