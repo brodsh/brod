@@ -80,6 +80,10 @@ This page is generated from `.env.example` by `node scripts/config-docs.mjs`. Ed
 | `REGISTRY_SIGNING_KEY` |  | Signs the registry's tokens: an ECDSA P-256 key, PKCS#8 in base64. Generated into &lt;BROD_DATA_DIR&gt;/secrets.env self-hosted if not set. |
 | `BROD_REGISTRY_CERT_FILE` |  | Where Brod writes the certificate of that key, for the registry's REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE. Default: &lt;BROD_DATA_DIR&gt;/registry-token.crt. Compose sets this. |
 | `BROD_CONTAINER_PREFIX` | `brod` | What the names of app containers, networks and images on nodes start with. |
+| `BROD_APPS_DATABASE_URL` | `postgres://brod_admin@%2Fvar%2Frun%2Fapps-postgresql/postgres` | Container apps' databases (request_database): the admin URL of apps-postgres, a Postgres server of its own, never Brod's database. Unset: request_database answers database_unavailable. Compose sets this (a socket, no network). |
+| `APPS_DATABASE_PASSWORD` |  | The admin password for BROD_APPS_DATABASE_URL. Generated into &lt;BROD_DATA_DIR&gt;/secrets.env self-hosted if not set. |
+| `BROD_APPS_DATABASE_PASSWORD_FILE` |  | Where Brod writes that password, for apps-postgres's POSTGRES_PASSWORD_FILE. Compose sets this. |
+| `BROD_PG_BIN_DIR` |  | The folder with pg_dump and pg_restore for backups, of the same major version as apps-postgres. Default: the PATH. Brod's image sets this. |
 | `BROD_NETWORK` | `log` | Where apps may send data: log (record undeclared hosts), enforce (refuse them) or off. |
 | `BROD_VERSION` | `latest` | The image version Compose runs. |
 

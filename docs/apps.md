@@ -607,10 +607,11 @@ for one explicitly and is refused without a Dockerfile.
   `node_modules/`, `.git/` and `.next/` are always left out: install dependencies in the Dockerfile.
 - The deploy answers at once with a `deployment` (`scheduled`). Call `get_deployment` (or
   `GET /v1/apps/<slug>/deployments/<id>`) until its `state` is `serving` or `failed`. States: `scheduled`,
-  `building`, `pulling`, `starting`, `healthy`, `serving`, then `draining` and `stopped` once another version
-  replaces it.
-- A failed deployment answers the problem `build_failed` (the image did not build) or `deployment_failed` (it built
-  but did not start or pass its health check), with the last 50 lines of its log. Nothing changes for visitors: the
+  `building`, `pulling`, `migrating` (only with a [`migrate`](#databases) command), `starting`, `healthy`, `serving`,
+  then `draining` and `stopped` once another version replaces it.
+- A failed deployment answers the problem `build_failed` (the image did not build), `migration_failed` (its
+  [`migrate`](#databases) command failed) or `deployment_failed` (it built but did not start or pass its health
+  check), with the last 50 lines of its log. Nothing changes for visitors: the
   version that was serving keeps serving.
 - The build output and the container's output go to the app's logs (`get_logs`).
 
@@ -623,6 +624,7 @@ them:
 | `health` | `/` | A path Brod requests after starting the container. Any answer below 500 within 60 s means healthy. |
 | `cpu` | `0.5` | CPUs reserved for it, 0.1 to 16. |
 | `memory_mb` | `512` | Memory, 64 to 65536 MB. It is the container's hard limit; there is no swap. |
+| `migrate` | none | A shell command run once in the new image before it serves, such as `npx prisma migrate deploy`. See [Databases](#databases). |
 
 **What the container gets.** The person, as headers on every request (`x-brod-identity` and the `x-brod-user-*`
 headers, exactly as server apps get them; anything a client sends under those names is removed), plus
@@ -662,6 +664,61 @@ from time to time. A node builds with `docker buildx` (a `docker-container` buil
 | `BROD_NODE_BUILD_MEMORY` / `BROD_NODE_BUILD_CPUS` | `2g` / `2` | The builder's limits. |
 | `BROD_NODE_BUILD_TIMEOUT` | `900` | Seconds a build may take. |
 | `BROD_NODE_REACH` | by platform | How it reaches containers: `ip` (Linux host), `attach` (the node in a container joins each app's network) or `publish` (a port on 127.0.0.1; macOS and Windows). |
+
+### Databases
+
+A container app can have one Postgres database of its own. The MCP tool `request_database` creates it; an agent
+needs no confirmation, and calling it again changes nothing.
+The app's next deploy gets `DATABASE_URL`:
+
+```
+postgres://app_<id>:<password>@brod-db.internal:5432/app_<id>?sslmode=disable
+```
+
+Use it as it is. `brod-db.internal` is not a database server: it is the app's node, which carries the connection to
+Brod over the node's own encrypted connection, and Brod to the database server. `sslmode=disable` is correct: that
+link is the encryption. Nodes have no network access to the database server at all.
+
+- **One app, one database.** The app's role (`app_<id>`) owns its database and nothing else. It cannot create roles
+  or databases, and Postgres refuses it `CONNECT` on every other app's database. Brod also checks every connection
+  before it reaches Postgres: through an app's `brod-db.internal`, only that app's database, as that app's role, is
+  reachable, and only from a node that runs one of its deployments. At most 20 connections at a time.
+- **`DATABASE_URL` is Brod's.** `set_secret` refuses to set or remove it while the database exists. An app that
+  already has its own `DATABASE_URL` secret is refused a managed database (`database_url_set`) until that secret is
+  removed. `get_status` shows the database (name, size, backups), never its password.
+- **Migrations.** `migrate` in `brod.json` (or `deploy_app`'s `migrate`) is a shell command (`/bin/sh -c`) run once
+  in a one-off container of the new image, with the app's environment and `DATABASE_URL`, before the new version
+  starts. Its output goes to the deployment log. If it exits non-zero or runs longer than 10 minutes the deployment
+  fails with `migration_failed` and the version that was serving keeps serving. One migration runs per app at a
+  time. It runs only for a newly built image: a rollback, or `publish_staging`, does not run it again.
+
+> **A rollback does not undo a migration.** Rolling back serves the old code against the database as the newer
+> migration left it. Write migrations the old version can live with (add before you remove), or restore a backup.
+>
+> **Staging shares the live database.** A staging version gets the same `DATABASE_URL` as live, and its migration
+> changes the live database the moment it is deployed to staging, before anyone publishes it.
+
+**Backups.** Brod backs up every managed database once a day (`pg_dump`, custom format) and keeps the newest of each
+of the last 7 days and of each of the last 4 weeks. Backups are encrypted (AES-256-GCM, with a key derived from
+`SECRETS_KEY`) before they reach file storage, under `backups/<database id>/`. With folder storage they are on the
+same machine as the database, and `backup_database` and `get_status` warn about it: use S3 storage to keep them
+elsewhere. `backup_database` backs up now.
+
+- **Restoring** replaces the app's database with a backup (`restore_database`, the latest by default). It needs a
+  person: an agent gets a `confirm_url`, and nothing changes until it is confirmed. Brod restores into a new
+  database, checks it, swaps it in, keeps the replaced one as `<name>_before_<time>` for 24 hours, and restarts the
+  app's containers.
+- **Restore drill.** Once a week Brod restores each database's latest backup into a scratch database, compares the
+  row counts of every table with those taken at backup time, and drops it. `get_status` shows when a backup was last
+  proved this way; a failed drill is logged loudly.
+- **Deleting the app** takes a final backup, kept for 30 days, then drops the database and its role. If that backup
+  fails the app is not deleted.
+
+**Operating it.** `docker-compose.yml` runs `apps-postgres`, a Postgres 17 separate from Brod's own database, with no
+network at all: Brod reaches it through a shared socket. Its admin password is generated into `secrets.env`
+(`APPS_DATABASE_PASSWORD`). Brod's image carries `pg_dump` and `pg_restore` of the same major version. Without
+`BROD_APPS_DATABASE_URL`, `request_database` answers `database_unavailable`. The admin can back up every database
+now with `POST /v1/admin/backups/run` and run the drill with `POST /v1/admin/backups/drill`.
 
 ## Limits
 

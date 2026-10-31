@@ -7,6 +7,8 @@
 //   health     the path Brod checks before sending it traffic (default "/"; healthy is any status below 500)
 //   cpu        CPUs (default 0.5)
 //   memory_mb  memory in MB (default 512)
+//   migrate    a shell command run once from the new image before it starts serving (deployments.rs), for example
+//              "npm run migrate"; a failure stops the deployment and what is live keeps serving
 // The upload may be up to 200 MB. Brod filters the build context before it leaves for a node: it honours the
 // bundle's .dockerignore, and drops node_modules/, .git/ and .next/ wherever they are (they are rebuilt inside the
 // image, and only make the context large). The filtered context is kept as a plain tar in <data>/builds/ until the
@@ -33,6 +35,10 @@ pub struct Spec {
     pub health: String,
     pub cpu: f64,
     pub memory_mb: i64,
+    /// A command run with /bin/sh -c in a one-off container of the new image before it serves. Schema changes it makes
+    /// are not undone by a rollback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migrate: Option<String>,
     /// The image's manifest digest in Brod's registry (apps/<app id>@<digest>), once pushed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
@@ -49,7 +55,17 @@ pub struct Spec {
 
 impl Default for Spec {
     fn default() -> Spec {
-        Spec { port: 8080, health: "/".into(), cpu: 0.5, memory_mb: 512, digest: None, image_id: None, platform: None, pruned: false }
+        Spec {
+            port: 8080,
+            health: "/".into(),
+            cpu: 0.5,
+            memory_mb: 512,
+            migrate: None,
+            digest: None,
+            image_id: None,
+            platform: None,
+            pruned: false,
+        }
     }
 }
 
@@ -86,6 +102,12 @@ impl Spec {
             }
             Some(_) => return Err(bad(format!("\"health\" in {from} is a path such as \"/healthz\"."))),
         }
+        match o.get("migrate") {
+            None | Some(Value::Null) => {}
+            Some(Value::String(m)) if m.trim().is_empty() => self.migrate = None,
+            Some(Value::String(m)) if m.len() <= 4096 && !m.contains('\0') => self.migrate = Some(m.trim().to_string()),
+            Some(_) => return Err(bad(format!("\"migrate\" in {from} is a shell command such as \"npm run migrate\" (at most 4 KB)."))),
+        }
         if let Some(c) = num("cpu")? {
             if !(0.1..=16.0).contains(&c) {
                 return Err(bad(format!("\"cpu\" in {from} is between 0.1 and 16 CPUs.")));
@@ -112,7 +134,7 @@ impl Spec {
 
 /// The container settings deploy_app was given: its "runtime" and the keys Spec::apply reads. None: none given.
 pub fn options_from(o: &Map<String, Value>) -> Option<Map<String, Value>> {
-    let keys = ["runtime", "port", "health", "cpu", "memory_mb", "memory"];
+    let keys = ["runtime", "port", "health", "cpu", "memory_mb", "memory", "migrate"];
     let m: Map<String, Value> =
         keys.iter().filter_map(|k| o.get(*k).filter(|v| !v.is_null()).map(|v| (k.to_string(), v.clone()))).collect();
     (!m.is_empty()).then_some(m)
@@ -502,7 +524,11 @@ pub fn spec_of(manifest: Option<&[u8]>, options: Option<&Map<String, Value>>) ->
 
 /// The spec as get_status and get_deployment show it.
 pub fn spec_view(spec: &Spec) -> Value {
-    json!({ "port": spec.port, "health": spec.health, "cpu": spec.cpu, "memory_mb": spec.memory_mb, "image": spec.digest, "platform": spec.platform })
+    let mut v = json!({ "port": spec.port, "health": spec.health, "cpu": spec.cpu, "memory_mb": spec.memory_mb, "image": spec.digest, "platform": spec.platform });
+    if let Some(m) = &spec.migrate {
+        v["migrate"] = json!(m);
+    }
+    v
 }
 
 #[cfg(test)]

@@ -184,6 +184,8 @@ Each action is recorded in the workspace's audit log (`GET /v1/events`) as by `B
 | `POST /v1/admin/workspaces/:workspace/suspend` `{reason}` | Suspend a workspace. `reason` is required. |
 | `POST /v1/admin/workspaces/:workspace/unsuspend` `{note?}` | Lift a suspension |
 | `POST /v1/admin/workspaces/:workspace/trust` `{note?}` | Let a new workspace open apps to everyone before it is a day old |
+| `POST /v1/admin/backups/run` | Back up every container app's database now ([apps.md](apps.md#databases)) |
+| `POST /v1/admin/backups/drill` | Run the restore drill now: restore each database's latest backup into a scratch database and compare row counts |
 
 ```sh
 A="Authorization: Bearer $ADMIN_SECRET"

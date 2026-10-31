@@ -6,6 +6,13 @@
 //   scheduled -> building   the node builds the context with docker buildx (15 minutes at most)
 //             -> pulling    Brod copies the image into its registry as apps/<app id>:v<n> and records its digest, then
 //                           has the node load it (skipped when the node has it already)
+//             -> migrating  with a `migrate` command (containers.rs) and a newly built image: the command runs with
+//                           /bin/sh -c in a one-off container of the new image, with the same environment and
+//                           hardening, for up to 10 minutes and one at a time per app. A non-zero exit fails the
+//                           deployment (migration_failed) before anything is switched. Schema changes it makes are NOT
+//                           undone by a rollback, and staging shares the live database: a migration deployed to
+//                           staging changes the database live is using. Rollbacks and publish_staging reuse an image
+//                           and do not run it again.
 //             -> starting   the node creates the container, hardened (node/src/work.rs), with BROD_ISSUER,
 //                           BROD_APP_ID, BROD_IDENTITY_JWKS and the app's secrets in its environment, and starts it
 //             -> healthy    it answered its health path below 500 within 60 s
@@ -65,16 +72,19 @@ pub fn allowed(from: &str, to: &str) -> bool {
         (from, to),
         ("scheduled", "building" | "pulling")
             | ("building", "pulling")
-            | ("pulling", "starting")
+            | ("pulling", "starting" | "migrating")
+            | ("migrating", "starting")
             | ("starting", "healthy")
             | ("healthy", "serving" | "stopped")
             | ("serving", "draining")
             | ("draining", "stopped")
-    ) || (to == "failed" && matches!(from, "scheduled" | "building" | "pulling" | "starting" | "healthy"))
+    ) || (to == "failed" && matches!(from, "scheduled" | "building" | "pulling" | "migrating" | "starting" | "healthy"))
 }
 
 /// Not finished yet: scheduled to healthy.
-pub const IN_PROGRESS: [&str; 5] = ["scheduled", "building", "pulling", "starting", "healthy"];
+pub const IN_PROGRESS: [&str; 6] = ["scheduled", "building", "pulling", "migrating", "starting", "healthy"];
+/// How long a migration may run.
+const MIGRATE_SECS: u64 = 600;
 
 /// The prefix of the containers, networks and images Brod makes on nodes (BROD_CONTAINER_PREFIX, default "brod").
 pub fn prefix() -> &'static str {
@@ -556,7 +566,8 @@ async fn steps(st: &State, d: &Deployment, log: &mut Log) -> Step<()> {
         Spec::parse(s.as_deref())
     };
     log.line(format!("deployment {} of v{n} on node {node}", d.id)).await;
-    if spec.digest.is_none() {
+    let fresh = spec.digest.is_none();
+    if fresh {
         if !move_to(st, d, "scheduled", "building").await.map_err(failed("build_failed"))? {
             return Ok(());
         }
@@ -585,16 +596,40 @@ async fn steps(st: &State, d: &Deployment, log: &mut Log) -> Step<()> {
     let fail = failed("deployment_failed");
     let image = spec.image_id.clone().ok_or_else(|| fail(Problem::internal("the version has no image id")))?;
     pull(st, &registry, &node, &app_id, n, &spec, log).await.map_err(&fail)?;
-    if !move_to(st, d, "pulling", "starting").await.map_err(&fail)? {
-        return Ok(());
-    }
     let name = container_of(&d.id);
     let env = environment(st, &app_id).await.map_err(&fail)?;
-    let body = json!({
+    let database = {
+        let app_id = app_id.clone();
+        st.db.call(move |c| c.exists("SELECT 1 FROM databases WHERE app_id = ?", [&app_id])).await.map_err(&fail)?
+    };
+    let mut body = json!({
         "image": image, "env": env, "port": spec.port, "cpu": spec.cpu, "memory_mb": spec.memory_mb,
         "network": network_of(&app_id), "trusted": st.cfg.containers == Containers::Trusted,
         "labels": { "brod.app": app_id, "brod.deployment": d.id, "brod.version": n.to_string() },
     });
+    if database {
+        // The node gives it brod-db.internal, which reaches the app's database through the tunnel (databases.rs).
+        body["database"] = json!(app_id);
+    }
+    match spec.migrate.as_deref().filter(|_| fresh) {
+        Some(command) => {
+            if !move_to(st, d, "pulling", "migrating").await.map_err(&fail)? {
+                return Ok(());
+            }
+            migrate(st, d, &node, &name, &body, command, log).await.map_err(failed("migration_failed"))?;
+            if !move_to(st, d, "migrating", "starting").await.map_err(&fail)? {
+                return Ok(());
+            }
+        }
+        None => {
+            if spec.migrate.is_some() {
+                log.line("not migrating again: this version's image was deployed before").await;
+            }
+            if !move_to(st, d, "pulling", "starting").await.map_err(&fail)? {
+                return Ok(());
+            }
+        }
+    }
     let made = node_call(st, &node, Method::PUT, &format!("/v1/containers/{name}"), Some(body), 120).await.map_err(&fail)?;
     {
         let (id, name) = (d.id.clone(), name.clone());
@@ -634,6 +669,64 @@ async fn steps(st: &State, d: &Deployment, log: &mut Log) -> Step<()> {
     let served = serve(st, d).await.map_err(&fail)?;
     log.line(served).await;
     Ok(())
+}
+
+/// One migration per app at a time, whichever deployment runs it.
+fn migration_lock(app_id: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: std::sync::OnceLock<std::sync::Mutex<HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>> =
+        std::sync::OnceLock::new();
+    let mut m = LOCKS.get_or_init(Default::default).lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    m.retain(|_, l| std::sync::Arc::strong_count(l) > 1);
+    m.entry(app_id.to_string()).or_default().clone()
+}
+
+/// Run the version's migrate command in a one-off container of the new image, with the environment, hardening and
+/// database access the app's container gets. Its output goes to the log; a non-zero exit is migration_failed.
+async fn migrate(st: &State, d: &Deployment, node: &str, name: &str, body: &Value, command: &str, log: &mut Log) -> Result<()> {
+    let lock = migration_lock(&d.app_id);
+    let _held = lock.lock().await;
+    let one_off = format!("{name}-migrate");
+    let mut spec = body.clone();
+    spec["cmd"] = json!(["/bin/sh", "-c", command]);
+    spec["once"] = json!(true);
+    spec["labels"]["brod.migrate"] = json!("1");
+    log.line(format!("migrating: {command} (up to {} minutes)", MIGRATE_SECS / 60)).await;
+    node_call(st, node, Method::PUT, &format!("/v1/containers/{one_off}"), Some(spec), 120).await?;
+    let ran = node_call(
+        st,
+        node,
+        Method::POST,
+        &format!("/v1/containers/{one_off}/run"),
+        Some(json!({ "timeout_s": MIGRATE_SECS })),
+        MIGRATE_SECS + 60,
+    )
+    .await;
+    let _ = node_call(st, node, Method::DELETE, &format!("/v1/containers/{one_off}"), None, 30).await;
+    let ran = ran?;
+    let lines: Vec<&str> = ran["lines"].as_array().into_iter().flatten().map(|x| x["message"].as_str().unwrap_or("")).collect();
+    let lines = collapse(&lines);
+    for line in &lines {
+        log.line(format!("  migrate: {line}")).await;
+    }
+    let tail = lines.iter().rev().take(20).rev().cloned().collect::<Vec<_>>().join("\n");
+    if ran["timed_out"].as_bool() == Some(true) {
+        return Err(Problem::new(
+            422,
+            "migration_failed",
+            format!("The migration did not finish within {} minutes and was stopped. Last output:\n{tail}", MIGRATE_SECS / 60),
+        ));
+    }
+    match ran["exit_code"].as_i64() {
+        Some(0) => {
+            log.line("migrated (exit code 0)").await;
+            Ok(())
+        }
+        code => Err(Problem::new(
+            422,
+            "migration_failed",
+            format!("The migration exited with code {}. Last output:\n{tail}", code.map(|c| c.to_string()).unwrap_or_else(|| "?".into())),
+        )),
+    }
 }
 
 /// Send the build context to the node and follow the build's output.
@@ -998,7 +1091,11 @@ pub fn get_deployment(conn: &Connection, c: &Caller, slug: &str, id: Option<&str
     let d = d.ok_or_else(|| Problem::new(404, "not_found", format!("{} has no such deployment.", app.slug)))?;
     if d.state == "failed" {
         let code = d.error_code.clone().unwrap_or_else(|| "deployment_failed".into());
-        let what = if code == "build_failed" { "did not build" } else { "did not start" };
+        let what = match code.as_str() {
+            "build_failed" => "did not build",
+            "migration_failed" => "did not migrate",
+            _ => "did not start",
+        };
         let live = app.live_version.map(|v| format!("v{v} is still live")).unwrap_or_else(|| "nothing is live".into());
         return Err(Problem::new(
             422,
@@ -1310,6 +1407,27 @@ pub async fn reconcile(st: &State) -> Result<()> {
     Ok(())
 }
 
+/// Restart the app's serving containers (after its database was restored): their connections were ended. The
+/// containers restarted.
+pub async fn restart(st: &State, app_id: &str) -> Vec<String> {
+    let id = app_id.to_string();
+    let list = st
+        .db
+        .call(move |c| c.all("SELECT * FROM deployments WHERE app_id = ? AND state = 'serving'", [&id], Deployment::from_row))
+        .await
+        .unwrap_or_default();
+    let mut done = vec![];
+    for d in list {
+        let Some(node) = &d.node_id else { continue };
+        let name = container_of(&d.id);
+        match node_call(st, node, Method::POST, &format!("/v1/containers/{name}/restart"), None, 60).await {
+            Ok(_) => done.push(name),
+            Err(e) => tracing::warn!(deployment = %d.id, "could not restart a container: {}", e.message),
+        }
+    }
+    done
+}
+
 /// Bring a serving container's new output into the app's logs.
 async fn pump_logs(st: &State, d: &Deployment) {
     let Some(node) = &d.node_id else { return };
@@ -1401,11 +1519,12 @@ mod tests {
 
     #[test]
     fn states_only_move_forward() {
-        let path = ["scheduled", "building", "pulling", "starting", "healthy", "serving", "draining", "stopped"];
+        let path = ["scheduled", "building", "pulling", "migrating", "starting", "healthy", "serving", "draining", "stopped"];
         for w in path.windows(2) {
             assert!(allowed(w[0], w[1]), "{} -> {}", w[0], w[1]);
         }
         assert!(allowed("scheduled", "pulling"), "a rollback skips the build");
+        assert!(allowed("pulling", "starting"), "no migrate command, no migration");
         for s in IN_PROGRESS {
             assert!(allowed(s, "failed"), "{s} can fail");
         }
@@ -1451,7 +1570,7 @@ mod tests {
         assert!(!transition(db, "d1", "scheduled", "building").unwrap(), "only from the state it is in");
         assert!(transition(db, "d1", "building", "failed").unwrap());
         assert!(transition(db, "d1", "failed", "serving").is_err(), "never out of failed");
-        for s in ["pulling", "starting", "healthy"] {
+        for s in ["pulling", "migrating", "starting", "healthy"] {
             db.run("UPDATE deployments SET state = ? WHERE id = 'd1'", [s]).unwrap();
             assert!(transition(db, "d1", s, "failed").unwrap());
         }

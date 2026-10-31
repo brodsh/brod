@@ -95,6 +95,9 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
     if s(0) == Some("admin") && s(1) == Some("nodes") {
         return crate::nodes::admin(st, &mut req, &seg).await;
     }
+    if s(0) == Some("admin") && s(1) == Some("backups") {
+        return crate::backups::admin(st, &mut req, &seg).await;
+    }
     if s(0) == Some("admin") {
         return crate::abuse::serve(st, &mut req, &seg).await;
     }
