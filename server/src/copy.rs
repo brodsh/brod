@@ -38,6 +38,8 @@ pub const TABLES: &[&str] = &[
     "oauth_codes",
     "stripe_events",
     "visits",
+    "nodes",
+    "node_join_tokens",
     "visit_visitors",
     "page_views",
     "app_events",

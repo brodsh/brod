@@ -29,7 +29,7 @@ hex = "0.4"
 hkdf = "0.12"
 hmac = "0.12"
 http-body-util = "0.1"
-hyper = { version = "1", features = ["server", "http1", "http2"] }
+hyper = { version = "1", features = ["server", "client", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto", "service"] }
 instant-acme = { version = "0.8", default-features = false, features = ["ring", "hyper-rustls", "rcgen"] }
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "builder", "hostname", "tokio1-rustls", "ring", "webpki-roots"] }
@@ -38,6 +38,7 @@ memchr = "2"
 percent-encoding = "2"
 postgres = "0.19"
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+ring = "0.17"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "http2", "json"] }
 ring = "0.17"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

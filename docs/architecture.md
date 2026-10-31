@@ -67,6 +67,10 @@ fails. `deploy/Caddyfile` also answers 404 for `/_caddy/*` and `/_runtime/*` as 
 | `POST /_runtime/stopped` | the supervisor, before it restarts workerd | Same. Feeds `watchdog.rs`. |
 | `http://<token>.brod-preview.internal` (any path) | the preview sidecar's Chromium | Only on `Via::Internal`. The token is 32 hex characters, names one listing release and expires after two minutes (`preview.rs`). |
 | `/v1/admin/*` | the operator | Public, but needs `Authorization: Bearer <ADMIN_SECRET>` (`abuse.rs::serve`). |
+| `POST /_node/join` | `brod-node join`, or the node in Compose | Public. Needs an unused, unexpired one-time join token (only its SHA-256 is stored) and the node key's signature of it (`nodes.rs`). |
+| `POST /_node/challenge`, `GET /_node/connect` | `brod-node run` | Public on every listener (not internal-only, and Caddy forwards it with its Upgrade). Connect needs the node key's signature of a single-use challenge, and refuses unknown or disabled nodes. After `101` Brod is the HTTP/2 client over the connection (`nodes::request`). |
+| `POST /_node/heartbeat` | `brod-node run`, every 10 s | Public. Signed by the node key over method, path, node id, timestamp and body hash; refused beyond 60 s of skew or when replayed. |
+| `/v1/admin/nodes/*` | the operator | `Authorization: Bearer <ADMIN_SECRET>` (`nodes.rs::admin`): join tokens, list, drain, disable, enable, delete, and requests through a node's tunnel. |
 
 The runtime exposes its own endpoints on port 8081: `/_runtime/check`, `/_runtime/wipe`, `/_runtime/sizes`,
 `/_runtime/health`, and app requests. host.js refuses every request without the shared `BROD_RUNTIME_SECRET`

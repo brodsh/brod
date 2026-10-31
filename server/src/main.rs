@@ -173,6 +173,20 @@ async fn run(cfg: Config) {
             }
         });
     }
+    // Nodes (nodes.rs): a join token for the node next to Brod, and nodes that went quiet marked offline.
+    brod::nodes::write_local_join_token(&st).await;
+    {
+        let st = st.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(2));
+            loop {
+                tick.tick().await;
+                if let Err(e) = brod::nodes::sweep(&st).await {
+                    tracing::warn!("could not check nodes: {}", e.message);
+                }
+            }
+        });
+    }
     // Server apps' databases are measured in the runtime: refresh their sizes every 10 minutes.
     if st.cfg.runtime.is_some() {
         let st = st.clone();

@@ -1,4 +1,4 @@
-# Every push and pull request: no secrets in the history, dependency licenses and advisories, the Rust server's
+# Every push and pull request: no secrets in the history, dependency licenses and advisories, the Rust crates'
 # format, lints, unit tests and end-to-end suites (on SQLite and on Postgres), the Node unit tests, and the Docker
 # images and Compose stack (built and started, never pushed). Actions are pinned by commit; Dependabot updates them.
 name: CI
@@ -60,10 +60,13 @@ jobs:
         run: cargo deny --manifest-path server/Cargo.toml --config deny.toml check
       - name: cargo deny (runtime supervisor)
         run: cargo deny --manifest-path deploy/runtime/supervisor/Cargo.toml --config deny.toml check
+      - name: cargo deny (node)
+        run: cargo deny --manifest-path node/Cargo.toml --config deny.toml check
       - name: cargo audit
         run: |
           cargo audit --file server/Cargo.lock --deny warnings
           cargo audit --file deploy/runtime/supervisor/Cargo.lock --deny warnings
+          cargo audit --file node/Cargo.lock --deny warnings
       - name: npm audit
         run: npm audit --audit-level=low
 
@@ -88,25 +91,30 @@ jobs:
             ~/.cargo/git
             server/target
             deploy/runtime/supervisor/target
-          key: rust-${{ runner.os }}-${{ hashFiles('server/Cargo.lock', 'deploy/runtime/supervisor/Cargo.lock') }}
+            node/target
+          key: rust-${{ runner.os }}-${{ hashFiles('server/Cargo.lock', 'deploy/runtime/supervisor/Cargo.lock', 'node/Cargo.lock') }}
       - name: Format
         run: |
           cargo fmt --manifest-path server/Cargo.toml --check
           cargo fmt --manifest-path deploy/runtime/supervisor/Cargo.toml --check
+          cargo fmt --manifest-path node/Cargo.toml --check
       - name: Lints
         run: |
           cargo clippy --manifest-path server/Cargo.toml --all-targets --locked -- -D warnings
           cargo clippy --manifest-path deploy/runtime/supervisor/Cargo.toml --all-targets --locked -- -D warnings
+          cargo clippy --manifest-path node/Cargo.toml --all-targets --locked -- -D warnings
       - name: API docs build without warnings
         env:
           RUSTDOCFLAGS: -D warnings
         run: |
           cargo doc --no-deps --manifest-path server/Cargo.toml --locked
           cargo doc --no-deps --manifest-path deploy/runtime/supervisor/Cargo.toml --locked
+          cargo doc --no-deps --manifest-path node/Cargo.toml --locked
       - name: Unit tests
         run: |
           cargo test --manifest-path server/Cargo.toml --locked
           cargo test --manifest-path deploy/runtime/supervisor/Cargo.toml --locked
+          cargo test --manifest-path node/Cargo.toml --locked
       - name: Chromium for marketplace previews (deploy/preview/)
         run: npx playwright install --with-deps chromium
       - name: End-to-end tests, server apps on workerd
@@ -121,6 +129,10 @@ jobs:
           BROD_BIN: server/target/release/brod
       - name: End-to-end tests, app files in S3
         run: npm run e2e:rust:s3
+        env:
+          BROD_BIN: server/target/release/brod
+      - name: End-to-end tests, nodes (join, the reversed tunnel, heartbeats, offline, drain/disable/delete)
+        run: npm run e2e:nodes
         env:
           BROD_BIN: server/target/release/brod
       - name: End-to-end tests, Brod's own HTTPS against Pebble (Let's Encrypt's test CA)

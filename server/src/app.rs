@@ -7,7 +7,8 @@
 //   anything else, /v1/*  -> REST control-plane API (agents with a token, the dashboard with a session)
 //   anything else         -> sign-in, invitations, confirmations and workspace home pages,
 //                            the connections page and OAuth sign-in for agents (connect.rs)
-// Plus /_caddy/ask, which Caddy calls before it gets a certificate for a host.
+// Plus /_caddy/ask, which Caddy calls before it gets a certificate for a host, and /_node/*, where nodes join and
+// connect (nodes.rs).
 use axum::body::Body;
 use axum::http::Method;
 use axum::http::header::CONTENT_LENGTH;
@@ -100,6 +101,8 @@ async fn api_host(st: State, mut req: Req) -> Response {
     let r = match req.path.as_str() {
         "/_caddy/ask" if is_internal(&st, &req) => caddy_ask(&st, &req).await,
         p if p.starts_with("/_runtime/") && is_internal(&st, &req) => crate::runtime::internal(&st, req).await,
+        // Nodes dial in here: public on every listener, and every endpoint but join checks the node's key (nodes.rs).
+        p if p.starts_with("/_node/") => crate::nodes::serve(&st, req).await,
         "/mcp" => crate::mcp::serve(&st, req).await,
         // The public key apps check identity tokens with (identity.rs). Anyone may read it, from anywhere.
         "/.well-known/jwks.json" if req.method == Method::GET => Ok(json_response(
@@ -192,7 +195,7 @@ pub async fn may_have_certificate(st: &State, domain: &str) -> Result<bool> {
 }
 
 /// Make a Req from what hyper hands us.
-pub fn request(st: &State, parts: axum::http::request::Parts, body: axum::body::Body) -> std::result::Result<Req, Problem> {
+pub fn request(st: &State, mut parts: axum::http::request::Parts, body: axum::body::Body) -> std::result::Result<Req, Problem> {
     let host = parts
         .headers
         .get("host")
@@ -230,6 +233,7 @@ pub fn request(st: &State, parts: axum::http::request::Parts, body: axum::body::
         query: parts.uri.query().unwrap_or("").to_string(),
         peer: parts.extensions.get::<crate::http::Peer>().map(|p| p.0),
         via,
+        upgrade: parts.extensions.remove::<hyper::upgrade::OnUpgrade>(),
         headers: parts.headers,
         body: std::sync::Mutex::new(body),
     })
