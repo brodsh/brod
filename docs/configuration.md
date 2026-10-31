@@ -70,6 +70,16 @@ This page is generated from `.env.example` by `node scripts/config-docs.mjs`. Ed
 | `RUNTIME_STALL_MS` | `5000` | Runtime container: restart workerd when it has not answered for this many milliseconds (an app stuck in a loop). |
 | `RUNTIME_MEMORY_MB` | `1536` | Runtime container: restart workerd when it uses more memory than this, in MB. |
 | `RUNTIME_MEM_LIMIT` | `2g` | Runtime container: the hard memory ceiling Docker enforces. Keep it above RUNTIME_MEMORY_MB. |
+
+## Container apps
+
+| Variable | Example or default | What it does |
+| --- | --- | --- |
+| `BROD_CONTAINERS` | `trusted` | Container apps: a source folder with a Dockerfile, built and run on a node (docs/apps.md, Container apps). They need a node with Docker and the registry below. Who may deploy them: "trusted" (every workspace; an image may even run as root), "on" (every workspace, never as root) or "off". Default: trusted self-hosted, off hosted. |
+| `BROD_REGISTRY_URL` | `http://registry:5000` | The image registry (registry:2 with token auth) only Brod talks to. Unset: no container apps. Compose sets this. |
+| `REGISTRY_SIGNING_KEY` |  | Signs the registry's tokens: an ECDSA P-256 key, PKCS#8 in base64. Generated into &lt;BROD_DATA_DIR&gt;/secrets.env self-hosted if not set. |
+| `BROD_REGISTRY_CERT_FILE` |  | Where Brod writes the certificate of that key, for the registry's REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE. Default: &lt;BROD_DATA_DIR&gt;/registry-token.crt. Compose sets this. |
+| `BROD_CONTAINER_PREFIX` | `brod` | What the names of app containers, networks and images on nodes start with. |
 | `BROD_NETWORK` | `log` | Where apps may send data: log (record undeclared hosts), enforce (refuse them) or off. |
 | `BROD_VERSION` | `latest` | The image version Compose runs. |
 

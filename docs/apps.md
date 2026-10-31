@@ -452,6 +452,78 @@ a health check. An app lists them as `open_paths` in its `brod.json` (`server/sr
 - `get_status` shows `open_paths`: what is approved, what the live and staging versions declare, what is open and what
   waits for a confirmation.
 
+## Container apps
+
+An app in any language: a source folder with a `Dockerfile` at its top. Brod builds the image on a node, keeps it in
+its own registry and runs it as a container behind the same gateway as every other app: the same sign-in, access
+rules, [identity headers](#the-identity-contract), [open paths](#open-paths), staging and rollback. A working example
+is in [`examples/container-app`](../examples/container-app).
+
+**Deploying.** Upload the source like any bundle: `deploy_app` without `files` gives an upload address, and
+`tar -czf - -C <source folder> . | curl -sS -X PUT --data-binary @- "<upload_url>"` sends it. Small sources can be
+passed inline as `files`. A `Dockerfile` at the top is what makes it a container app; `"runtime": "container"` asks
+for one explicitly and is refused without a Dockerfile.
+
+- The source may be up to 200 MB (a tar.gz). `.dockerignore` is honoured when Brod writes the build context, and
+  `node_modules/`, `.git/` and `.next/` are always left out: install dependencies in the Dockerfile.
+- The deploy answers at once with a `deployment` (`scheduled`). Call `get_deployment` (or
+  `GET /v1/apps/<slug>/deployments/<id>`) until its `state` is `serving` or `failed`. States: `scheduled`,
+  `building`, `pulling`, `starting`, `healthy`, `serving`, then `draining` and `stopped` once another version
+  replaces it.
+- A failed deployment answers the problem `build_failed` (the image did not build) or `deployment_failed` (it built
+  but did not start or pass its health check), with the last 50 lines of its log. Nothing changes for visitors: the
+  version that was serving keeps serving.
+- The build output and the container's output go to the app's logs (`get_logs`).
+
+**Settings** come from `brod.json` at the top of the source, and `deploy_app`'s arguments of the same names override
+them:
+
+| Setting | Default | What |
+| --- | --- | --- |
+| `port` | `8080` | The port the app listens on. It also gets it as `$PORT`. |
+| `health` | `/` | A path Brod requests after starting the container. Any answer below 500 within 60 s means healthy. |
+| `cpu` | `0.5` | CPUs reserved for it, 0.1 to 16. |
+| `memory_mb` | `512` | Memory, 64 to 65536 MB. It is the container's hard limit; there is no swap. |
+
+**What the container gets.** The person, as headers on every request (`x-brod-identity` and the `x-brod-user-*`
+headers, exactly as server apps get them; anything a client sends under those names is removed), plus
+`x-forwarded-host`, `x-forwarded-proto` and `x-forwarded-for`. Its environment has `BROD_ISSUER`, `BROD_APP_ID` and
+`BROD_IDENTITY_JWKS`, enough to verify `x-brod-identity` without calling Brod, and the app's secrets. A changed secret
+reaches the container at its next deploy (or rollback).
+
+**How it runs.** As the image's `USER`, or `10001:10001` when it sets none. An image that asks for root is refused
+unless the workspace is trusted (`BROD_CONTAINERS=trusted`). With a read-only root file system and a writable `/tmp`, every Linux capability dropped,
+no privilege escalation, at most 512 processes, and its own bridge network. On a Linux node with iptables, it can
+reach the internet but not private addresses (10/8, 172.16/12, 192.168/16, 100.64/10), link-local ones (the cloud
+metadata service at 169.254.169.254), other apps or the node itself. On macOS and Windows (Docker Desktop) there are
+no such rules: a node there is for development only, and the deploy log says so.
+
+**Requests** have the same rules as for server apps: at most 32 MB of body (`413` above that) and 60 s until the
+answer starts. When the node that runs the app is offline, visitors get `503`.
+
+**Updates and rollback.** A new version starts next to the one serving; the gateway switches once it is healthy, and
+the old container drains for 30 s, then stops. `rollback` to an earlier container version starts it again from its
+stored image, without a rebuild. Staging works as for any app: the staging version runs in its own container, and
+`publish_staging` moves it to live without a rebuild. Brod keeps the images of the live and staging versions and the
+last 5 others; older ones are deleted from the registry each night and cannot be rolled back to.
+
+**Operating it.** `BROD_CONTAINERS` sets who may deploy container apps (`trusted` self-hosted by default, `off`
+hosted; see [configuration.md](configuration.md)); with it off, or without a registry, a deploy is refused with
+`containers_unavailable`. `docker-compose.yml` runs the registry (`registry:2`, no published port: only Brod talks to
+it, with short-lived tokens scoped to one app's repository `apps/<app id>`) and a node with Docker access. Nodes get
+images from Brod over their own connection, never from the registry. The nightly clean-up deletes manifests; to free
+their disk space run
+`docker compose exec registry registry garbage-collect --delete-untagged /etc/docker/registry/config.yml`
+from time to time. A node builds with `docker buildx` (a `docker-container` builder, 15 minutes at most) and reads:
+
+| Node variable | Default | What |
+| --- | --- | --- |
+| `BROD_NODE_DOCKER_SOCKET` | `/var/run/docker.sock` | The Docker Engine API. |
+| `BROD_NODE_BUILDER` | `brod-builder` | The buildx builder it creates and builds with. |
+| `BROD_NODE_BUILD_MEMORY` / `BROD_NODE_BUILD_CPUS` | `2g` / `2` | The builder's limits. |
+| `BROD_NODE_BUILD_TIMEOUT` | `900` | Seconds a build may take. |
+| `BROD_NODE_REACH` | by platform | How it reaches containers: `ip` (Linux host), `attach` (the node in a container joins each app's network) or `publish` (a port on 127.0.0.1; macOS and Windows). |
+
 ## Limits
 
 | What | Limit |
