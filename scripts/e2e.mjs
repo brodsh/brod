@@ -359,6 +359,12 @@ const stagingUrl = url.replace(`//${APP}.`, `//${APP}--staging.`);
 check('an agent\'s update to a live app lands on staging, not live', out.environment === 'staging' && out.live_version === 1 && out.staging?.version === 2
   && out.staging_url === stagingUrl && out.staging.url === stagingUrl, JSON.stringify(out));
 check('visitors still get version 1 while version 2 is on staging', (await anon.go(url + '/')).body.includes('v1'));
+// The TLS front (Caddy's on-demand ask, or Brod's own TLS) must agree to a certificate for the staging address.
+// Asked on the internal listener: 127.0.0.1 is neither the API host nor under APPS_DOMAIN.
+const askCert = async host => (await fetch(`${API.replace('//localhost', '//127.0.0.1')}/_caddy/ask?domain=${host}`)).status;
+const appsHost = new URL(API).hostname;
+check('a staging address may get a TLS certificate', await askCert(`${APP}--staging.${W}.${appsHost}`) === 200);
+check('a staging address of an app that does not exist may not', await askCert(`no-such-app--staging.${W}.${appsHost}`) === 404);
 const anonStaging = await anon.go(stagingUrl + '/');
 check('a visitor is sent to sign in on staging, even for a public app', anonStaging.status === 302 && anonStaging.headers.location.includes(`app=${APP}--staging.${W}`), JSON.stringify(anonStaging.headers.location));
 const ownStaging = await alice.open(stagingUrl + '/');
