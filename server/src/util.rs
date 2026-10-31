@@ -426,7 +426,6 @@ pub fn js_trim(s: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn passwords_hash_with_pbkdf2_as_webcrypto_does() {
