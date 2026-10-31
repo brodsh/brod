@@ -686,7 +686,8 @@ or file write over the storage allowance is refused with `storage_limit`.
 
 What is not here yet:
 
-- Server apps run JavaScript (and WebAssembly) only. Containers and other languages are not supported.
+- Container apps need a `Dockerfile`; projects without one are not detected and built automatically yet. Managed
+  Postgres for container apps is not built yet.
 - Old versions are kept until someone deletes them (`DELETE /v1/apps/:slug/versions/:n`). They count toward storage.
   There is no clean-up job.
 - Blocking paths by role, company sign-in (SAML/OIDC) and deploy-before-sign-up are not built yet.
