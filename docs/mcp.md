@@ -70,11 +70,12 @@ Use the Streamable HTTP transport at `/mcp` with the header `Authorization: Bear
 
 | Tool | What it does |
 | --- | --- |
-| `deploy_app` | Deploy a new app or a new version: files inline (up to 1 MB), or a one-time upload address for a bigger build. Returns the address. |
+| `deploy_app` | Deploy a new app or a new version: files inline (up to 1 MB), or a one-time upload address for a bigger build. Returns the address. A source with a `Dockerfile` becomes a [container app](apps.md#container-apps) (`port`, `health`, `cpu`, `memory_mb`). |
 | `list_apps` | The workspace's apps: address, status, who can open each, live version. |
 | `get_files` | The files of an app's current version (or a named one), to change them. |
 | `get_status` | One app: access, roles, who it is shared with, versions, what is on staging, custom domains, secret names, open paths (approved, open, waiting). |
 | `get_logs` | An app's activity (deploys, access changes, refusals) and, for server apps, recent requests with console output and errors. |
+| `get_deployment` | A [container app](apps.md#container-apps)'s deployment: its state (building, serving, failed) and the last 50 lines of its log. A failed one answers `build_failed` or `deployment_failed`. |
 | `set_secret` | Store or remove an encrypted secret the app's server code reads as `env.NAME`. Values cannot be read back. |
 | `publish_staging` | Make the version on staging live, or discard it. |
 | `rollback` | Serve an earlier version. Takes effect on the next request. |
@@ -87,7 +88,7 @@ Use the Streamable HTTP transport at `/mcp` with the header `Authorization: Bear
 | `get_workspace` | The workspace's groups, default roles and access modes, and how an app reads the signed-in person. |
 
 A read-only connection (OAuth scope `brod:read`, or a token made read-only) sees only `list_apps`, `get_files`,
-`get_status`, `get_logs`, `get_auth_integration` and `get_workspace`.
+`get_status`, `get_logs`, `get_deployment`, `get_auth_integration` and `get_workspace`.
 
 The server also sends instructions with `initialize`. They tell the agent to ask before changing a live app, to deploy
 updates to staging first, and to pass `base_version` so it never overwrites someone else's work.
