@@ -133,6 +133,14 @@ async fn run(cfg: Config) {
         }
         Err(e) => tracing::warn!("first-start setup failed: {}", e.message),
     }
+    // Operators (operator.rs): BROD_ADMIN_EMAIL, or self-hosted the first workspace's admin. Runs after setup, which may
+    // just have made that person.
+    let c3 = st.cfg.clone();
+    match st.db.call(move |c| brod::operator::bootstrap(c, &c3)).await {
+        Ok(0) => tracing::info!("no operator yet: set BROD_ADMIN_EMAIL, or the admin API takes ADMIN_SECRET"),
+        Ok(n) => tracing::info!("{n} operator(s)"),
+        Err(e) => tracing::warn!("operator bootstrap failed: {}", e.message),
+    }
     if let Some(tls) = st.cfg.tls.clone()
         && let Err(e) = brod::tls::start(st.clone(), tls).await
     {
