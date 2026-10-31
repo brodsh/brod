@@ -301,7 +301,9 @@ try {
   check('a failing health check fails as deployment_failed, with the container\'s output', d4.status === 422 && d4.body?.error?.code === 'deployment_failed'
     && d4.body.error.log?.some(l => /listening on 3000, v4/.test(l)), JSON.stringify(d4.body).slice(0, 2500));
   check('and v2 still serves', (await alice.go(url + '/')).body.includes('hello from v2'));
-  check('the failed container is removed', !dockerQuiet('ps', '-a', '--format', '{{.Names}}').split('\n').includes(cname(sick.body.deployment.id)));
+  // Removal runs in the background after the deployment is marked failed.
+  check('the failed container is removed', Boolean(await until(async () =>
+    !dockerQuiet('ps', '-a', '--format', '{{.Names}}').split('\n').includes(cname(sick.body.deployment.id)), 15000)));
 
   const back = await alice.api(`/v1/apps/${slug}/rollback`, { json: { version: 1 } });
   const d5 = await settle(slug, back.body?.deployment?.id);
