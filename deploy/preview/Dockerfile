@@ -2,7 +2,7 @@
 # Build from the repository root:
 #   docker build -f deploy/preview/Dockerfile -t brod-preview .
 # The image already holds the browsers for this Playwright version; keep the two in step with package-lock.json.
-FROM mcr.microsoft.com/playwright:v1.56.1-noble@sha256:f1e7e01021efd65dd1a2c56064be399f3e4de00fd021ac561325f2bfbb2b837a
+FROM mcr.microsoft.com/playwright:v1.64.1-noble@sha256:47b510dd9230bf0b9bfc9b20102241e577ea7a99334ab4c3ca19f19770e9b8ea
 WORKDIR /srv
 RUN npm init -y >/dev/null && npm install --no-audit --no-fund playwright@1.56.1
 COPY deploy/preview/server.mjs deploy/preview/guard.mjs /srv/
