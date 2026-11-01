@@ -128,6 +128,22 @@ This page is generated from `.env.example` by `node scripts/config-docs.mjs`. Ed
 | `BROD_PREVIEW_URL` | `http://preview:8790` | Where Brod reaches the preview sidecar that screenshots marketplace listings (deploy/compose.preview.yml). |
 | `BROD_PREVIEW_SECRET` |  | Shared with the preview sidecar; at least 16 random characters. |
 
+## Instance settings
+
+| Variable | Example or default | What it does |
+| --- | --- | --- |
+| `BROD_LIMIT_RUNNING_APPS` | `unlimited` | The operators change these in the admin console (/admin, docs/plans/admin-mode.md); BROD_MARKETPLACE and BROD_ABUSE_CHECKS above are instance settings too. Setting one here locks it: the console shows it read-only. A number or "unlimited". Running (live) apps per workspace; paused apps do not count. A hosted workspace's plan applies instead, unless an operator overrides it. Default: unlimited. |
+| `BROD_LIMIT_MEMBERS` | `unlimited` | Members per workspace. Guests do not count. Default: unlimited. |
+| `BROD_LIMIT_STORAGE_MB` | `unlimited` | Storage per workspace in MB: bundles, files and app data. Default: unlimited. |
+| `BROD_LIMIT_ANALYTICS_DAYS` | `365` | Days of analytics a workspace keeps. Default: 365. |
+| `BROD_MAX_WORKSPACES` | `unlimited` | Workspaces on this server. Existing ones are never removed. Default: unlimited. |
+| `BROD_MAX_USERS` | `unlimited` | People with an account on this server. People who already have one can always sign in. Default: unlimited. |
+| `BROD_WORKSPACE_CREATION` | `workspace_admins` | Who may create a workspace: operators, workspace_admins or anyone_verified. Default: workspace_admins self-hosted, anyone_verified hosted. |
+| `BROD_ALLOWED_EMAIL_DOMAINS` |  | Comma-separated email domains allowed to sign up, such as acme.com. Empty: any domain. Invitations still work. |
+| `BROD_RATE_DEPLOYS_PER_HOUR` | `30` | Deploys per workspace per hour. |
+| `BROD_RATE_CALLS_PER_MINUTE` | `600` | REST and MCP calls per connection per minute. |
+| `BROD_RATE_WORKSPACES_PER_USER_DAY` | `3` | Workspaces one person may create per day. |
+
 ## Hosted only
 
 | Variable | Example or default | What it does |

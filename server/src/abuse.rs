@@ -16,14 +16,14 @@ use crate::http::{Req, notice};
 use crate::model::{ACCESS, AppRow, Caller};
 use crate::problem::{Problem, Result};
 use crate::state::State;
-use crate::util::{iso, js_slice, js_trim, now, safe_equal};
+use crate::util::{iso, js_slice, js_trim, now};
 
 pub const SIGN_IN_LINKS_PER_IP_HOUR: i64 = 20; // on top of the 5 an hour per email address
 pub const OAUTH_CLIENTS_PER_IP_HOUR: i64 = 10;
 pub const WORKSPACES_PER_USER_DAY: i64 = 3;
 pub const REPORTS_PER_IP_HOUR: i64 = 10;
 /// Calls one agent connection, or one person's session, may make to the REST API and MCP in a minute.
-pub const CALLS_PER_MINUTE: u32 = 600;
+pub const CALLS_PER_MINUTE: i64 = 600;
 /// A workspace this young cannot open apps to people outside it (password, signed_in, public).
 pub const NEW_WORKSPACE_MS: i64 = 24 * HOUR;
 pub const HOUR: i64 = 3_600_000;
@@ -155,12 +155,13 @@ pub fn taken_down_page() -> Response {
 pub struct CallLimits(Mutex<HashMap<String, (i64, u32)>>);
 
 impl CallLimits {
-    /// Count one call by `c`; refuse it with 429 once there have been CALLS_PER_MINUTE this minute.
-    pub fn check(&self, c: &Caller) -> Result<()> {
-        self.check_at(&format!("{}:{}", c.user.id, c.actor), now())
+    /// Count one call by `c`; refuse it with 429 once there have been `per_minute` this minute (rate.calls_per_minute,
+    /// CALLS_PER_MINUTE by default).
+    pub fn check(&self, c: &Caller, per_minute: i64) -> Result<()> {
+        self.check_at(&format!("{}:{}", c.user.id, c.actor), now(), per_minute)
     }
 
-    fn check_at(&self, key: &str, at: i64) -> Result<()> {
+    fn check_at(&self, key: &str, at: i64, per_minute: i64) -> Result<()> {
         let window = at / 60_000;
         let mut calls = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         if calls.len() > 10_000 {
@@ -171,7 +172,7 @@ impl CallLimits {
             *entry = (window, 0);
         }
         entry.1 += 1;
-        if entry.1 > CALLS_PER_MINUTE {
+        if i64::from(entry.1) > per_minute {
             return Err(Problem::new(
                 429,
                 "rate_limited",
@@ -281,10 +282,9 @@ fn text(o: &Map<String, Value>, key: &str, max: usize) -> String {
 ///   POST apps/`<workspace>`/`<app>`/takedown {reason}, /restore, /clear (the phishing check's flag)
 ///   POST workspaces/`<workspace>`/suspend {reason}, /unsuspend, /trust (may open apps to everyone before it is a day old)
 pub async fn serve(st: &State, req: &mut Req, seg: &[String]) -> Result<Response> {
-    let given = crate::control::Credentials::of(req).bearer().unwrap_or_default();
-    if st.cfg.admin_secret.is_empty() || !safe_equal(&given, &st.cfg.admin_secret) {
-        return Err(Problem::new(401, "unauthorized", "The admin API needs the admin secret."));
-    }
+    // An operator signed in on the dashboard, or the admin secret (operator.rs). The audit log names who it was.
+    let op = crate::operator::authenticate(st, req).await?;
+    let actor = op.actor.clone();
     let s = |i: usize| seg.get(i).map(String::as_str).filter(|x| !x.is_empty());
     let (what, a, b, action) = (s(1).map(String::from), s(2).map(String::from), s(3).map(String::from), s(4).map(String::from));
     let m = req.method.clone();
@@ -339,7 +339,7 @@ pub async fn serve(st: &State, req: &mut Req, seg: &[String]) -> Result<Response
                         x.run("UPDATE reports SET status = ?, resolved_at = ?, note = ? WHERE id = ?", params![status, t, note, id])?;
                         if let Some(ws) = &ws {
                             let detail = if note.is_empty() { id.to_string() } else { format!("{id}: {note}") };
-                            event(x, ws, OPERATOR, Some(&app_id), &format!("report_{status}"), &detail)?;
+                            event(x, ws, &actor, Some(&app_id), &format!("report_{status}"), &detail)?;
                         }
                         Ok(())
                     })?;
@@ -366,14 +366,14 @@ pub async fn serve(st: &State, req: &mut Req, seg: &[String]) -> Result<Response
                                     "UPDATE reports SET status = 'resolved', resolved_at = ?, note = ? WHERE app_id = ? AND status = 'open'",
                                     params![t, format!("taken down: {reason}"), app.id],
                                 )?;
-                                event(x, &app.workspace_id, OPERATOR, Some(&app.id), "takedown", &reason)
+                                event(x, &app.workspace_id, &actor, Some(&app.id), "takedown", &reason)
                             })?;
                             return Ok(Some(json!({ "workspace": ws, "app": slug, "taken_down": true, "reason": reason })));
                         }
                         "restore" => {
                             tx(conn, |x| {
                                 x.run("UPDATE apps SET taken_down_at = NULL, takedown_reason = '' WHERE id = ?", [&app.id])?;
-                                event(x, &app.workspace_id, OPERATOR, Some(&app.id), "restore", &text(&o, "note", 500))
+                                event(x, &app.workspace_id, &actor, Some(&app.id), "restore", &text(&o, "note", 500))
                             })?;
                             return Ok(Some(json!({ "workspace": ws, "app": slug, "taken_down": false })));
                         }
@@ -387,7 +387,7 @@ pub async fn serve(st: &State, req: &mut Req, seg: &[String]) -> Result<Response
                                     "UPDATE reports SET status = 'resolved', resolved_at = ?, note = 'cleared' WHERE app_id = ? AND kind = 'automatic' AND status = 'open'",
                                     params![t, app.id],
                                 )?;
-                                event(x, &app.workspace_id, OPERATOR, Some(&app.id), "scan_cleared", &text(&o, "note", 500))?;
+                                event(x, &app.workspace_id, &actor, Some(&app.id), "scan_cleared", &text(&o, "note", 500))?;
                                 Ok(n)
                             })?;
                             return Ok(Some(json!({ "workspace": ws, "app": slug, "cleared_versions": cleared })));
@@ -412,21 +412,21 @@ pub async fn serve(st: &State, req: &mut Req, seg: &[String]) -> Result<Response
                             }
                             tx(conn, |x| {
                                 x.run("UPDATE workspaces SET suspended_at = ?, suspended_reason = ? WHERE id = ?", params![t, reason, id])?;
-                                event(x, &id, OPERATOR, None, "suspend", &reason)
+                                event(x, &id, &actor, None, "suspend", &reason)
                             })?;
                             return Ok(Some(json!({ "workspace": ws, "suspended": true, "reason": reason })));
                         }
                         "unsuspend" => {
                             tx(conn, |x| {
                                 x.run("UPDATE workspaces SET suspended_at = NULL, suspended_reason = '' WHERE id = ?", [&id])?;
-                                event(x, &id, OPERATOR, None, "unsuspend", &text(&o, "note", 500))
+                                event(x, &id, &actor, None, "unsuspend", &text(&o, "note", 500))
                             })?;
                             return Ok(Some(json!({ "workspace": ws, "suspended": false })));
                         }
                         "trust" => {
                             tx(conn, |x| {
                                 x.run("UPDATE workspaces SET trusted_at = COALESCE(trusted_at, ?) WHERE id = ?", params![t, id])?;
-                                event(x, &id, OPERATOR, None, "trust", &text(&o, "note", 500))
+                                event(x, &id, &actor, None, "trust", &text(&o, "note", 500))
                             })?;
                             return Ok(Some(json!({ "workspace": ws, "trusted": true })));
                         }
@@ -452,12 +452,12 @@ mod tests {
     fn limits_calls_per_connection_per_minute() {
         let limits = CallLimits::default();
         for _ in 0..CALLS_PER_MINUTE {
-            limits.check_at("usr_1:claude", 60_000).unwrap();
+            limits.check_at("usr_1:claude", 60_000, CALLS_PER_MINUTE).unwrap();
         }
-        assert_eq!(limits.check_at("usr_1:claude", 60_001).unwrap_err().status, 429);
+        assert_eq!(limits.check_at("usr_1:claude", 60_001, CALLS_PER_MINUTE).unwrap_err().status, 429);
         // Another connection, and the next minute, start again.
-        limits.check_at("usr_1:cursor", 60_002).unwrap();
-        limits.check_at("usr_1:claude", 120_000).unwrap();
+        limits.check_at("usr_1:cursor", 60_002, CALLS_PER_MINUTE).unwrap();
+        limits.check_at("usr_1:claude", 120_000, CALLS_PER_MINUTE).unwrap();
     }
 
     #[test]

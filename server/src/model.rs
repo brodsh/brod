@@ -147,6 +147,7 @@ pub struct Caller {
 
 /// Plan allowances. Only running apps count; guests do not count as members. Storage counts every kept version's
 /// bundle and every file a server app keeps in env.FILES.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Plan {
     pub apps: i64,
     pub members: i64,
@@ -181,10 +182,17 @@ pub fn limit_json(n: i64) -> serde_json::Value {
     if n == UNLIMITED { serde_json::Value::Null } else { n.into() }
 }
 
+/// A plan's allowances as shown in the plan list. What a workspace may actually use is `allowances::effective`,
+/// which also applies the operator's override and, when self-hosted, the instance settings.
 pub fn plan_named(name: &str) -> Plan {
     if self_hosted() {
         return Plan { apps: UNLIMITED, members: UNLIMITED, storage: UNLIMITED, analytics_days: SELF_HOSTED_ANALYTICS_DAYS };
     }
+    plan_table(name)
+}
+
+/// The paid plans of a hosted server.
+pub fn plan_table(name: &str) -> Plan {
     match name {
         "solo" => Plan { apps: 15, members: 1, storage: 5 * 1024 * MB, analytics_days: 365 },
         "team" => Plan { apps: 50, members: 25, storage: 25 * 1024 * MB, analytics_days: 730 },
@@ -196,9 +204,6 @@ pub fn plan_named(name: &str) -> Plan {
 static FREE_STORAGE: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
 pub fn set_free_storage(bytes: i64) {
     let _ = FREE_STORAGE.set(bytes);
-}
-pub fn plan(w: &Workspace) -> Plan {
-    plan_named(&w.plan)
 }
 
 pub fn rank(role: &str) -> i32 {

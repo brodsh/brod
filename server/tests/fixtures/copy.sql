@@ -1,8 +1,8 @@
 -- A small SQLite database with rows in every table, for the migrate-to-postgres test (src/copy.rs).
 -- Text sorts differently in the two databases, nulls sit in nullable columns, and events were pruned, so the
 -- AUTOINCREMENT high-water mark (100) is past the largest id left.
-INSERT INTO users VALUES ('usr_a', 'ana@acme.test', 'Ana', 1700000000000, 1700000000001, 1700000000002);
-INSERT INTO users VALUES ('usr_B', 'Bo@acme.test', '', NULL, NULL, 1700000000003);
+INSERT INTO users VALUES ('usr_a', 'ana@acme.test', 'Ana', 1700000000000, 1700000000001, 1700000000002, 1700000000004);
+INSERT INTO users VALUES ('usr_B', 'Bo@acme.test', '', NULL, NULL, 1700000000003, NULL);
 INSERT INTO workspaces VALUES ('ws_1', 'acme', 'Acme', 'team', '#1f6f4a', 'A', 1700000000000, 'cus_1', 'sub_1', 'active', 1800000000000, NULL, NULL, '', 1700000001000);
 INSERT INTO members VALUES ('ws_1', 'usr_a', 'admin', 1700000000000), ('ws_1', 'usr_B', 'guest', 1700000000001);
 INSERT INTO groups VALUES ('grp_1', 'ws_1', 'finance', 1700000000000), ('grp_2', 'ws_1', 'Zebra', 1700000000000);
@@ -52,3 +52,5 @@ INSERT INTO listing_media VALUES ('med_1', 'lst_1', 'video', 'video/mp4', 2048, 
 INSERT INTO databases VALUES ('db_1', 'app_1', 'postgres', 'app_1', 'app_1', 'DATABASE_URL', 1, 8192, 2, 3);
 INSERT INTO backups VALUES ('bk_1', 'db_1', 'app_1', 'backups/db_1/20261031T000000000Z.dump.enc', 4096, 'done', 'nightly', NULL, '{"public.notes":2}', 1, 2, 3, NULL, NULL);
 INSERT INTO deployments VALUES ('dep_1', 'app_1', 2, 'live', 'node_1', 'serving', NULL, NULL, 'brod-dep-1', 'built', 0.5, 512, 1, 'ana@acme.test', 1, 2, 2, NULL, NULL, '2026-10-31T00:00:00Z');
+INSERT INTO instance_settings VALUES ('limits.max_running_apps', '5', 'ana@acme.test', 1700000000005);
+INSERT INTO workspace_limits VALUES ('ws_1', 10, NULL, -1, NULL, 'pilot', 'ana@acme.test', 1700000000006);
