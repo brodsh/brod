@@ -149,8 +149,8 @@ try {
   if (code !== 0) console.error(`\n--- server log ---\n${log.slice(-5000)}${runtime ? `\n--- runtime log ---\n${rtLog.slice(-5000)}` : ''}${preview ? `\n--- preview log ---\n${pvLog.slice(-3000)}` : ''}`);
   if (mode === 's3') {
     const files = [...fake.s3.objects.keys()];
-    const ok = files.length > 0 && files.every(k => /^brod-bundles\/(app|lst)_/.test(k));
-    console.log(`${ok ? 'PASS' : 'FAIL'}  app files are in S3 (${files.length} objects)`);
+    const ok = files.length > 0 && files.every(k => /^brod-bundles\/((app|lst)_|blobs\/[0-9a-f]{64}$)/.test(k));
+    console.log(`${ok ? 'PASS' : 'FAIL'}  app files are in S3 (${files.length} objects)${ok ? "" : " " + files.filter(k => !/^brod-bundles\/((app|lst)_|blobs\/)/.test(k)).slice(0, 5).join(", ")}`);
     if (!ok) code = 1;
   }
 } catch (e) {
