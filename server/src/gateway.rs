@@ -408,7 +408,7 @@ async fn file_response(st: &State, req: &Req, app: &AppRow, obj: Object, hit: &s
     if html {
         let page = read_capped(obj.body, crate::tar::FILE_BYTES + 1024 * 1024, "The page").await?;
         let page = with_insights(page);
-        let page = if is_public && st.cfg.abuse_checks { append_to_body(&page, REPORT_LINK) } else { page };
+        let page = if is_public && st.settings.last().flag("features.abuse_checks") { append_to_body(&page, REPORT_LINK) } else { page };
         return Ok(response(200, bytes_body(page), &headers));
     }
     headers.push(("content-length", obj.meta.size.to_string()));
@@ -453,7 +453,11 @@ fn last_index_of(hay: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 async fn special(st: &State, req: &mut Req, v: Visit) -> Result<Response> {
-    let report_link = if st.cfg.abuse_checks { "<p><small><a href=\"/_brod/report\">Report this app</a></small></p>" } else { "" };
+    let report_link = if st.settings.last().flag("features.abuse_checks") {
+        "<p><small><a href=\"/_brod/report\">Report this app</a></small></p>"
+    } else {
+        ""
+    };
     let Visit { app, visitor, decision, workspace_slug, origin, domain, staging, .. } = v;
     // What the browser stopped, or would have stopped, under the app's Content-Security-Policy (network.rs). Browsers
     // may send these without the visitor's cookies, so they are taken from anyone: they are only ever shown to the app's
@@ -613,7 +617,7 @@ async fn special(st: &State, req: &mut Req, v: Visit) -> Result<Response> {
             identity["token"] = json!(token);
             Ok(json_response(&identity, 200, &[("cache-control", "private, no-store".into())]))
         }
-        "/_brod/report" if st.cfg.abuse_checks => {
+        "/_brod/report" if st.settings.last().flag("features.abuse_checks") => {
             if req.method == Method::POST {
                 let form = if req.header("content-type").unwrap_or("").contains("application/x-www-form-urlencoded") {
                     req.form().await.unwrap_or_default()

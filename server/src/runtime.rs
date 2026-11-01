@@ -212,7 +212,7 @@ pub async fn dispatch(
     if req.method == Method::HEAD {
         return Ok(response(status, Body::empty(), &pairs));
     }
-    if app.access == "public" && html && st.cfg.abuse_checks {
+    if app.access == "public" && html && st.settings.last().flag("features.abuse_checks") {
         let page = read_capped(Body::from_stream(res.bytes_stream()), crate::tar::FILE_BYTES * 2, "The page").await?;
         return Ok(response(status, bytes_body(crate::gateway::append_to_body(&page, crate::gateway::REPORT_LINK)), &pairs));
     }
@@ -443,7 +443,14 @@ pub async fn internal(st: &State, mut req: Req) -> Result<Response> {
         let b = req.json_object().await?;
         let app = b.get("app").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let bytes = b.get("data_bytes").and_then(|v| v.as_i64()).unwrap_or(0);
-        return Ok(json(st.db.call(move |c| crate::usage::report_data_bytes(c, &app, bytes)).await?));
+        return Ok(json(
+            st.db
+                .call({
+                    let cfg = st.cfg.clone();
+                    move |c| crate::usage::report_data_bytes(c, &cfg, &app, bytes)
+                })
+                .await?,
+        ));
     }
     if let Some(rest) = path.strip_prefix("/_runtime/files/") {
         let (app_id, key) = match rest.split_once('/') {
@@ -475,7 +482,12 @@ pub async fn internal(st: &State, mut req: Req) -> Result<Response> {
                 let old = st.store.head(&full).await?.map(|m| m.size as i64).unwrap_or(0);
                 let delta = bytes.len() as i64 - old;
                 let a2 = app_id.clone();
-                st.db.call(move |c| crate::usage::check_app_storage(c, &a2, delta)).await?;
+                st.db
+                    .call({
+                        let cfg = st.cfg.clone();
+                        move |c| crate::usage::check_app_storage(c, &cfg, &a2, delta)
+                    })
+                    .await?;
                 let meta = st.store.put(&full, Bytes::from(bytes), Some(&ct)).await?;
                 st.db.call(move |c| crate::usage::add_file_bytes(c, &app_id, delta)).await?;
                 Ok(json(json!({ "key": key, "size": meta.size })))

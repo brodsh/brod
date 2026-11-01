@@ -7,10 +7,14 @@
 //                          client over the upgraded connection and the node an HTTP/2 server, so Brod can send the
 //                          node requests (`request`) though the node is behind NAT and has no open port
 //   POST /_node/heartbeat  every 10 s, signed with the node's key: version, capabilities, resource usage
-// Every endpoint but join checks the node's key. The operator's API is under /v1/admin/nodes (ADMIN_SECRET):
+// Every endpoint but join checks the node's key. The operator's API is under /v1/admin/nodes (ADMIN_SECRET or a
+// signed-in operator, see operator.rs; every change goes to the server-wide audit log):
 //   POST   /v1/admin/nodes/join-tokens            a join token, good once for 15 minutes
-//   GET    /v1/admin/nodes, /v1/admin/nodes/<id>  nodes with their status, connection, capabilities and resources
+//   GET    /v1/admin/nodes/join-tokens            unused, unexpired join tokens; DELETE .../join-tokens/<id> revokes one
+//   GET    /v1/admin/nodes, /v1/admin/nodes/<id>  nodes with their status, connection, capabilities, resources and load
+//   PATCH  /v1/admin/nodes/<id>                   {name}
 //   POST   /v1/admin/nodes/<id>/drain|disable|enable
+//   POST   /v1/admin/nodes/<id>/evacuate          drain, and start its serving deployments again on other nodes
 //   DELETE /v1/admin/nodes/<id>                   refused while connected, unless disabled first
 //   *      /v1/admin/nodes/<id>/tunnel/<path>     a request sent to the node through its tunnel, streamed both ways
 use std::collections::HashMap;
@@ -29,7 +33,7 @@ use crate::db::{Connection, Sql, params, tx};
 use crate::http::{Req, json as json_ok, json_response};
 use crate::problem::{Problem, Result};
 use crate::state::State;
-use crate::util::{now, random_bytes, safe_equal, sha256_hex};
+use crate::util::{now, random_bytes, sha256_hex};
 
 /// The Upgrade token and the prefix of every message a node signs.
 pub const PROTOCOL: &str = "brod-node/1";
@@ -530,7 +534,41 @@ fn view(c: &Connection, id: &str, connected: bool) -> Result<Value> {
         v.insert(k.into(), parsed);
     }
     v.insert("connected".into(), json!(connected));
+    let reserving = crate::scheduler::RESERVING;
+    let (serving, cpu, mb) = c
+        .first(
+            &format!(
+                "SELECT (SELECT COUNT(*) FROM deployments WHERE node_id = ?1 AND state = 'serving'),
+                   CAST(COALESCE((SELECT SUM(cpu) FROM deployments WHERE node_id = ?1 AND state IN {reserving}), 0) AS DOUBLE PRECISION),
+                   CAST(COALESCE((SELECT SUM(memory_mb) FROM deployments WHERE node_id = ?1 AND state IN {reserving}), 0) AS BIGINT)"
+            ),
+            [id],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?, r.get::<_, i64>(2)?)),
+        )?
+        .unwrap_or((0, 0.0, 0));
+    v.insert("deployments".into(), json!({ "serving": serving, "reserved_cpu": cpu, "reserved_memory_mb": mb }));
     Ok(Value::Object(v))
+}
+
+/// The join tokens not used and not expired, newest first: a prefix of the hash names one (the token itself is gone).
+fn join_tokens(c: &Connection) -> Result<Vec<Value>> {
+    c.all(
+        "SELECT hash, created_by, expires_at FROM node_join_tokens WHERE used_at IS NULL AND expires_at > ? ORDER BY expires_at DESC",
+        [now()],
+        |r| {
+            let hash: String = r.get(0)?;
+            Ok(json!({ "id": &hash[..16], "created_by": r.get::<_, String>(1)?, "expires_at": r.get::<_, i64>(2)? }))
+        },
+    )
+}
+
+/// A node's new name: trimmed, 1 to 60 characters.
+fn node_name(v: &Value) -> Result<String> {
+    let n = v["name"].as_str().map(str::trim).unwrap_or_default();
+    if n.is_empty() || n.chars().count() > 60 {
+        return Err(Problem::new(400, "bad_name", "Give the node a name of 1 to 60 characters."));
+    }
+    Ok(n.to_string())
 }
 
 /// Mint a join token: kept only as its SHA-256, good once for JOIN_TOKEN_MS. The token and when it expires.
@@ -547,10 +585,7 @@ pub fn mint(c: &Connection, created_by: &str) -> Result<(String, i64)> {
 /// /v1/admin/nodes/*, with the admin secret: join tokens, the node list, drain, disable, enable, delete, and a request
 /// sent through a node's tunnel.
 pub async fn admin(st: &State, req: &mut Req, seg: &[String]) -> Result<Response> {
-    let given = crate::control::Credentials::of(req).bearer().unwrap_or_default();
-    if st.cfg.admin_secret.is_empty() || !safe_equal(&given, &st.cfg.admin_secret) {
-        return Err(Problem::new(401, "unauthorized", "The admin API needs the admin secret."));
-    }
+    let op = crate::operator::authenticate(st, req).await?;
     let s = |i: usize| seg.get(i).map(String::as_str).filter(|x| !x.is_empty());
     let (a, b, extra) = (s(2).map(String::from), s(3).map(String::from), s(4).is_some());
     let m = req.method.clone();
@@ -558,7 +593,15 @@ pub async fn admin(st: &State, req: &mut Req, seg: &[String]) -> Result<Response
     let st2 = st.clone();
     match (m, a.as_deref(), b.as_deref(), extra) {
         (Method::POST, Some("join-tokens"), None, false) => {
-            let (token, expires_at) = st.db.call(|c| mint(c, "admin")).await?;
+            let o = op.clone();
+            let (token, expires_at) = st
+                .db
+                .call(move |c| {
+                    let r = mint(c, &o.actor)?;
+                    audit(c, &o, "node_join_token", "a node join token was made")?;
+                    Ok(r)
+                })
+                .await?;
             let command = format!("brod-node join {origin} {token}");
             Ok(json_response(&json!({ "token": token, "expires_at": expires_at, "command": command }), 201, &[]))
         }
@@ -572,6 +615,43 @@ pub async fn admin(st: &State, req: &mut Req, seg: &[String]) -> Result<Response
                 .await?;
             Ok(json_ok(json!({ "nodes": nodes })))
         }
+        (Method::GET, Some("join-tokens"), None, false) => Ok(json_ok(json!({ "tokens": st.db.call(|c| join_tokens(c)).await? }))),
+        (Method::DELETE, Some("join-tokens"), Some(prefix), false) => {
+            let (prefix, o) = (prefix.to_string(), op.clone());
+            if prefix.len() != 16 || !prefix.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err(Problem::new(404, "not_found", "There is no such join token."));
+            }
+            st.db
+                .call(move |c| {
+                    let n = c.run("DELETE FROM node_join_tokens WHERE substr(hash, 1, 16) = ? AND used_at IS NULL", [&prefix])?;
+                    if n == 0 {
+                        return Err(Problem::new(404, "not_found", "There is no such join token, or it was used."));
+                    }
+                    audit(c, &o, "node_join_token_revoked", &format!("join token {prefix} revoked"))
+                })
+                .await?;
+            Ok(json_ok(json!({ "ok": true })))
+        }
+        (Method::PATCH, Some(id), None, false) => {
+            let body: Value = serde_json::from_slice(&req.bytes(16 * 1024, "The request body").await?)
+                .map_err(|e| Problem::new(400, "bad_body", format!("The body is not JSON: {e}")))?;
+            let name = node_name(&body)?;
+            let (id, o, connected) = (id.to_string(), op.clone(), st.nodes.connected(id));
+            let node = st
+                .db
+                .call(move |c| {
+                    tx(c, |c| {
+                        if c.run("UPDATE nodes SET name = ? WHERE id = ?", params![name, id])? == 0 {
+                            return Err(Problem::new(404, "not_found", format!("There is no node {id}.")));
+                        }
+                        audit(c, &o, "node_renamed", &format!("{id} is now called {name}"))?;
+                        view(c, &id, connected)
+                    })
+                })
+                .await?;
+            Ok(json_ok(json!({ "node": node })))
+        }
+        (Method::POST, Some(id), Some("evacuate"), false) => evacuate(st, &op, id).await,
         (Method::GET, Some(id), None, false) => {
             let id = id.to_string();
             Ok(json_ok(json!({ "node": st.db.call(move |c| view(c, &id, st2.nodes.connected(&id))).await? })))
@@ -583,7 +663,7 @@ pub async fn admin(st: &State, req: &mut Req, seg: &[String]) -> Result<Response
                 "disable" => Change::Disable,
                 _ => Change::Enable { connected },
             };
-            let i = id.clone();
+            let (i, o, act) = (id.clone(), op.clone(), action.to_string());
             let node = st
                 .db
                 .call(move |c| {
@@ -593,6 +673,7 @@ pub async fn admin(st: &State, req: &mut Req, seg: &[String]) -> Result<Response
                         };
                         let to = next(from, change)?;
                         c.run("UPDATE nodes SET status = ? WHERE id = ?", params![to.name(), i])?;
+                        audit(c, &o, &format!("node_{act}"), &format!("{i} is now {}", to.name()))?;
                         Ok(to)
                     })
                 })
@@ -620,7 +701,7 @@ pub async fn admin(st: &State, req: &mut Req, seg: &[String]) -> Result<Response
         }
         (Method::DELETE, Some(id), None, false) => {
             let (id, connected) = (id.to_string(), st.nodes.connected(id));
-            let i = id.clone();
+            let (i, o) = (id.clone(), op.clone());
             st.db
                 .call(move |c| {
                     tx(c, |c| {
@@ -631,7 +712,7 @@ pub async fn admin(st: &State, req: &mut Req, seg: &[String]) -> Result<Response
                             return Err(Problem::new(409, "node_connected", "This node is connected. Disable it before removing it."));
                         }
                         c.run("DELETE FROM nodes WHERE id = ?", [&i])?;
-                        Ok(())
+                        audit(c, &o, "node_removed", &format!("{i} removed"))
                     })
                 })
                 .await?;
@@ -674,3 +755,53 @@ pub async fn write_local_join_token(st: &State) {
 
 #[cfg(test)]
 mod tests;
+
+/// Record an operator's action on nodes in the server-wide audit log.
+fn audit(c: &Connection, op: &crate::operator::Operator, action: &str, detail: &str) -> Result<()> {
+    crate::db::event(c, crate::console::SERVER, &op.actor, None, action, detail)
+}
+
+/// Evacuate a node: drain it (so nothing new lands there), then start each live or staging deployment it serves
+/// again on another node, from the same image. The deployment on this node keeps serving until the new one is healthy,
+/// then drains as after any deploy. Deployments no other node can take stay where they are and are listed with why.
+async fn evacuate(st: &State, op: &crate::operator::Operator, id: &str) -> Result<Response> {
+    let (i, o) = (id.to_string(), op.clone());
+    let connected: Vec<String> = st.nodes.connected_ids();
+    let started = st
+        .db
+        .call(move |c| {
+            let Some((_, status)) = find(c, &i)? else {
+                return Err(Problem::new(404, "not_found", format!("There is no node {i}.")));
+            };
+            if status != Status::Draining {
+                let to = next(status, Change::Drain)?;
+                c.run("UPDATE nodes SET status = ? WHERE id = ?", params![to.name(), i])?;
+            }
+            let serving = c.all(
+                "SELECT d.app_id, d.version, d.environment FROM deployments d WHERE d.node_id = ? AND d.state = 'serving' ORDER BY d.created_at",
+                [&i],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)),
+            )?;
+            let mut moved = Vec::new();
+            let mut stuck = Vec::new();
+            for (app_id, version, env) in serving {
+                let Some(app) = c.first("SELECT * FROM apps WHERE id = ?", [&app_id], crate::model::AppRow::from_row)? else {
+                    continue;
+                };
+                match crate::deployments::redeploy(c, &connected, &app, version, &env, &o.actor) {
+                    Ok(d) => moved.push((d.id.clone(), json!({ "app": app.slug, "environment": env, "version": version, "deployment": d.id, "node": d.node_id }))),
+                    Err(e) => stuck.push(json!({ "app": app.slug, "environment": env, "version": version, "error": e.message })),
+                }
+            }
+            audit(c, &o, "node_evacuate", &format!("{i}: {} deployments moving, {} staying", moved.len(), stuck.len()))?;
+            Ok((moved, stuck))
+        })
+        .await?;
+    let (moved, stuck) = started;
+    for (dep, _) in &moved {
+        crate::deployments::start(st, dep);
+    }
+    tracing::info!("node {id}: evacuate by the operator, {} moving, {} staying", moved.len(), stuck.len());
+    let moving: Vec<Value> = moved.into_iter().map(|(_, v)| v).collect();
+    Ok(json_ok(json!({ "moving": moving, "staying": stuck })))
+}

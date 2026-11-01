@@ -98,6 +98,9 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
     if s(0) == Some("admin") && s(1) == Some("backups") {
         return crate::backups::admin(st, &mut req, &seg).await;
     }
+    if s(0) == Some("admin") && crate::console::handles(&seg) {
+        return crate::console::serve(st, &mut req, &seg).await;
+    }
     if s(0) == Some("admin") {
         return crate::abuse::serve(st, &mut req, &seg).await;
     }
@@ -115,7 +118,9 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
         if s(0) == Some("me") {
             let u = user.clone();
             let ws = st.db.call(move |c| people::my_workspaces(c, &cfg, &u)).await?;
-            return Ok(json(json!({ "user": user, "workspaces": ws })));
+            let id = user.id.clone();
+            let operator = st.db.call(move |c| crate::operator::is_operator(c, &id)).await?;
+            return Ok(json(json!({ "user": user, "workspaces": ws, "operator": operator })));
         }
         let b = req.json_object().await?;
         let (name, accept) = (body_str(&b, "name"), is_true(&b, "accept_terms"));
@@ -123,7 +128,7 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
     }
 
     let c = control::authenticate_async(st, Credentials::of(&req)).await?;
-    st.calls.check(&c)?;
+    st.calls.check(&c, crate::instance::current(st).await.int("rate.calls_per_minute"))?;
     if m != Method::GET && m != Method::HEAD {
         control::require_write(&c, "make changes")?;
     }
@@ -148,7 +153,7 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
             }
             if m == Method::PATCH && s(1).is_some() {
                 let (who, role) = (one(s(1)), body_str(&req.json_object().await?, "role"));
-                return Ok(json(db(Box::new(move |conn, _, c| people::set_person_role(conn, c, &who, &role))).await?));
+                return Ok(json(db(Box::new(move |conn, cfg, c| people::set_person_role(conn, cfg, c, &who, &role))).await?));
             }
             if m == Method::DELETE && s(1).is_some() {
                 let who = one(s(1));
@@ -280,7 +285,7 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
                 }
             }
         }
-        Some("marketplace") if st.cfg.marketplace => {
+        Some("marketplace") if st.settings.last().flag("features.marketplace") => {
             if m == Method::GET && s(1).is_none() {
                 let search = req.param("search").filter(|x| !x.is_empty());
                 let mut v = db(Box::new(move |conn, _, c| crate::market::browse(conn, c, search.as_deref()))).await?;
@@ -302,7 +307,7 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
                 return Ok(created(crate::market::install(st, &c, &key, b).await?));
             }
         }
-        Some("listings") if st.cfg.marketplace => {
+        Some("listings") if st.settings.last().flag("features.marketplace") => {
             if m == Method::GET && s(1).is_none() {
                 let mut v = db(Box::new(|conn, _, c| crate::market::my_listings(conn, c))).await?;
                 v["auto_previews"] = json!(st.cfg.preview.is_some());
@@ -340,7 +345,7 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
             if m == Method::GET {
                 crate::usage::flush(st).await?;
                 let days = req.param("days").and_then(|d| d.parse().ok());
-                return Ok(json(db(Box::new(move |conn, _, c| crate::usage::workspace_usage(conn, c, days))).await?));
+                return Ok(json(db(Box::new(move |conn, cfg, c| crate::usage::workspace_usage(conn, cfg, c, days))).await?));
             }
         }
         Some("analytics") => {
@@ -349,7 +354,7 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
                 crate::analytics::flush(st).await?;
                 let num = |k: &str| req.param(k).and_then(|d| d.parse::<i64>().ok());
                 let (days, tz, app) = (num("days"), num("tz"), req.param("app"));
-                return Ok(json(db(Box::new(move |conn, _, c| crate::analytics::report(conn, c, app.as_deref(), days, tz))).await?));
+                return Ok(json(db(Box::new(move |conn, cfg, c| crate::analytics::report(conn, cfg, c, app.as_deref(), days, tz))).await?));
             }
         }
         Some("deploys") => {
@@ -411,11 +416,15 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
                         };
                         return Ok(json(control::delete_version(st, &c, &slug, n).await?));
                     }
-                    if action == "marketplace" && st.cfg.marketplace && m == Method::POST && s(3) == Some("update") {
+                    if action == "marketplace"
+                        && st.settings.last().flag("features.marketplace")
+                        && m == Method::POST
+                        && s(3) == Some("update")
+                    {
                         let b = req.json_object().await?;
                         return Ok(json(crate::market::update_install(st, &c, &slug, b).await?));
                     }
-                    if action == "marketplace" && st.cfg.marketplace && m == Method::DELETE && s(3).is_none() {
+                    if action == "marketplace" && st.settings.last().flag("features.marketplace") && m == Method::DELETE && s(3).is_none() {
                         return Ok(json(db(Box::new(move |conn, _, c| crate::market::unlink(conn, c, &slug))).await?));
                     }
                     if action == "settings" && s(3).is_none() && m == Method::GET {

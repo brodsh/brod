@@ -45,6 +45,9 @@ pub struct Config {
     /// BROD_ABUSE_CHECKS: the deploy-time phishing scan, the public report link in apps and the hold on new
     /// workspaces (abuse.rs, scan.rs). Default on when hosted, off when self-hosted.
     pub abuse_checks: bool,
+    /// Instance settings (instance.rs) whose environment variable is set, parsed: key to value. These win over the
+    /// database, and the console shows them as locked.
+    pub settings_env: std::collections::BTreeMap<&'static str, serde_json::Value>,
     /// SMTP_URL: send email through an SMTP server (email.rs), for example smtps://user:pass@smtp.example.com.
     pub smtp_url: Option<String>,
     /// Secrets that were not in the environment and came from (or were written to) `<data>`/secrets.env instead.
@@ -484,8 +487,10 @@ impl Config {
                 Some(AppsDbConfig { url, password: get("APPS_DATABASE_PASSWORD"), bin_dir: get("BROD_PG_BIN_DIR").map(PathBuf::from) })
             }
         };
+        let settings_env = crate::instance::from_env(&get).map_err(ConfigError)?;
         Ok(Config {
             apps_db,
+            settings_env,
             containers,
             registry,
             mode,

@@ -8,7 +8,7 @@ use crate::abuse;
 use crate::config::Config;
 use crate::db::{Sql, event, tx};
 use crate::market::read_tree;
-use crate::model::{ACCESS, AppRow, Caller, User, Workspace, field, js_string, limits, plan, present, truthy};
+use crate::model::{ACCESS, AppRow, Caller, User, Workspace, field, js_string, limits, present, truthy};
 use crate::people::{self, require_role};
 use crate::problem::{Problem, Result};
 use crate::runtime::{self, ServerInfo};
@@ -432,7 +432,7 @@ pub fn list_apps(conn: &Connection, cfg: &Config, c: &Caller) -> Result<Value> {
     let running = apps.iter().filter(|a| a.status == "live").count();
     let described: Vec<Value> = apps.iter().map(|a| described(conn, cfg, c, a).map(Value::Object)).collect::<Result<_>>()?;
     Ok(
-        json!({ "workspace": c.workspace.slug, "plan": crate::model::plan_label(&c.workspace), "running_apps": running, "app_limit": crate::model::limit_json(plan(&c.workspace).apps), "apps": described }),
+        json!({ "workspace": c.workspace.slug, "plan": crate::model::plan_label(&c.workspace), "running_apps": running, "app_limit": crate::model::limit_json(crate::allowances::effective(conn, cfg, &c.workspace)?.apps), "apps": described }),
     )
 }
 
@@ -678,16 +678,17 @@ fn new_slug(conn: &Connection, c: &Caller, name: &str) -> Result<String> {
     Ok(format!("{base}-{}", random_id("", 4)))
 }
 
-pub(crate) fn check_rate(conn: &Connection, c: &Caller) -> Result<()> {
+/// Refuse a deploy once the workspace has deployed `per_hour` times in the last hour (rate.deploys_per_hour).
+pub(crate) fn check_rate(conn: &Connection, c: &Caller, per_hour: i64) -> Result<()> {
     let n = conn.count(
         "SELECT COUNT(*) AS n FROM events WHERE workspace_id = ? AND action = 'deploy' AND at > ?",
         params![c.workspace.id, now() - 3_600_000],
     )?;
-    if n >= limits::DEPLOYS_PER_HOUR {
+    if n >= per_hour {
         return Err(Problem::new(
             429,
             "rate_limited",
-            format!("This workspace has deployed {} times in the last hour. Wait a little and try again.", limits::DEPLOYS_PER_HOUR),
+            format!("This workspace has deployed {per_hour} times in the last hour. Wait a little and try again."),
         ));
     }
     Ok(())
@@ -696,7 +697,7 @@ pub(crate) fn check_rate(conn: &Connection, c: &Caller) -> Result<()> {
 fn plan_full(conn: &Connection, cfg: &Config, c: &Caller, verb: &str) -> Result<()> {
     let running =
         conn.all("SELECT slug FROM apps WHERE workspace_id = ? AND status = 'live'", [&c.workspace.id], |r| r.get::<_, String>(0))?;
-    let limit = plan(&c.workspace).apps;
+    let limit = crate::allowances::effective(conn, cfg, &c.workspace)?.apps;
     if running.len() as i64 >= limit {
         return Err(Problem::new(
             402,
@@ -875,10 +876,11 @@ pub(crate) fn target_app(conn: &Connection, cfg: &Config, c: &Caller, o: &Deploy
 pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFile>) -> Result<Value> {
     {
         let (c, o) = (c.clone(), o.clone());
+        let per_hour = crate::instance::current(st).await.int("rate.deploys_per_hour");
         st.db
             .call(move |conn| {
                 require_role(&c, "builder", "deploy apps")?;
-                check_rate(conn, &c)?;
+                check_rate(conn, &c, per_hour)?;
                 abuse::check_workspace_up(conn, &c)?;
                 match o.app_slug() {
                     Some(slug) => abuse::check_up(conn, &get_app(conn, &c, slug)?),
@@ -908,7 +910,7 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFi
     let bytes: usize = files.iter().map(|f| f.bytes.len()).sum();
     // The phishing check (BROD_ABUSE_CHECKS): a flagged version still deploys, but its app stays private or people-only
     // and the operator gets a report.
-    let checks = st.cfg.abuse_checks;
+    let checks = st.settings.last().flag("features.abuse_checks");
     let (files, scan) = tokio::task::spawn_blocking(move || {
         let scan = if checks { crate::scan::scan_bundle(&files) } else { crate::scan::Scan::default() };
         (files, scan)
@@ -1541,7 +1543,7 @@ fn labels(list: &[crate::open_paths::OpenPath]) -> String {
 /// Refuse opening paths of an app to anyone where opening the app itself to anyone would be refused.
 fn check_may_open(conn: &Connection, cfg: &Config, c: &Caller, app: &AppRow) -> Result<()> {
     abuse::check_up(conn, app)?;
-    if cfg.abuse_checks {
+    if crate::instance::Settings::load(conn, cfg)?.flag("features.abuse_checks") {
         abuse::check_can_open_outside(conn, c, "public")?;
     }
     abuse::check_not_flagged(conn, app, "public")
@@ -1890,7 +1892,7 @@ pub fn set_access(
         abuse::check_up(conn, &app)?;
     }
     if opening {
-        if cfg.abuse_checks {
+        if crate::instance::Settings::load(conn, cfg)?.flag("features.abuse_checks") {
             abuse::check_can_open_outside(conn, c, &access)?;
         }
         abuse::check_not_flagged(conn, &app, &access)?;
@@ -2098,7 +2100,7 @@ pub async fn invite_from(st: &State, c: &Caller, o: Map<String, Value>) -> Resul
     st.db
         .call(move |conn| {
             let getter = |s: &str| get_app(conn, &c2, s);
-            let ci = people::check_invite(conn, &c2, &o, &getter)?;
+            let ci = people::check_invite(conn, &cfg, &c2, &o, &getter)?;
             let summary = match &ci.app {
                 Some(a) => format!(
                     "Invite {} to {} as {}{}",
