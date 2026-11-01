@@ -74,6 +74,8 @@ Use the Streamable HTTP transport at `/mcp` with the header `Authorization: Bear
 | `list_apps` | The workspace's apps: address, status, who can open each, live version. |
 | `get_files` | The files of an app's current version (or a named one), to change them, each with its `sha256` and `size`. `since` (a version number) lists only what changed since then. |
 | `diff_versions` | A unified diff between two versions of an app (`from`, `to`), capped, with the paths added, modified and deleted. |
+| `export_app` | An app as a git repository: a short-lived download address for a git bundle and a clone address (`format`: `git-bundle`). See [Git](apps.md#git). |
+| `import_app` | Turn a git commit into a new version on staging: from a public https `url`, or (without it) an upload address for a bundle. `ref`, `base_version`, `history` (`tip` or `all`), `target`, `note`. Merges when the commit descends from a known version. |
 | `get_status` | One app: access, roles, who it is shared with, versions, what is on staging, custom domains, secret names, open paths (approved, open, waiting). |
 | `get_logs` | An app's activity (deploys, access changes, refusals) and, for server apps, recent requests with console output and errors. |
 | `get_deployment` | A [container app](apps.md#container-apps)'s deployment: its state (building, serving, failed) and the last 50 lines of its log. A failed one answers `build_failed`, `migration_failed` or `deployment_failed`. |
@@ -92,7 +94,7 @@ Use the Streamable HTTP transport at `/mcp` with the header `Authorization: Bear
 | `get_workspace` | The workspace's groups, default roles and access modes, and how an app reads the signed-in person. |
 
 A read-only connection (OAuth scope `brod:read`, or a token made read-only) sees only `list_apps`, `get_files`, `diff_versions`,
-`get_status`, `get_logs`, `get_deployment`, `get_auth_integration` and `get_workspace`.
+`export_app`, `get_status`, `get_logs`, `get_deployment`, `get_auth_integration` and `get_workspace`.
 
 The server also sends instructions with `initialize`. They tell the agent to ask before changing a live app, to deploy
 updates to staging first, and to pass `base_version` so it never overwrites someone else's work.

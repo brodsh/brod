@@ -143,6 +143,8 @@ This page is generated from `.env.example` by `node scripts/config-docs.mjs`. Ed
 | `BROD_RATE_DEPLOYS_PER_HOUR` | `30` | Deploys per workspace per hour. |
 | `BROD_RATE_CALLS_PER_MINUTE` | `600` | REST and MCP calls per connection per minute. |
 | `BROD_RATE_WORKSPACES_PER_USER_DAY` | `3` | Workspaces one person may create per day. |
+| `BROD_GIT_REAL_EMAILS` | `false` | Use people's real email addresses as the author of exported git commits. Off: &lt;user id&gt;@users.noreply.&lt;apps domain&gt;. |
+| `BROD_GIT_MAX_IMPORT_MB` | `50` | Largest git bundle or repository (in MB) import_app accepts. |
 
 ## Hosted only
 

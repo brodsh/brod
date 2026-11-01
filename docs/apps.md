@@ -417,6 +417,28 @@ Marketplace releases and previews keep their own per-file layout.
 Storage use counts the unique content of an app once: the same bytes in ten versions, or twice in one version, count
 once for that app. The same bytes in two apps count once for each, so an app's usage never depends on another's.
 
+## Git
+
+An app's history is a git repository. `export_app {app}` (or `GET /v1/apps/:slug/export.bundle`) gives a git bundle;
+`git clone https://x:TOKEN@your.brod/v1/apps/notes.git` clones it over read-only smart HTTP (any user name, a Brod token
+as the password; a read-only token works). `main` is the live version, `staging` the version waiting on staging, and each
+version is a commit tagged `v<N>` with its note as the message and a `Brod-Version: N` trailer. The commits are
+deterministic: the same app exports the same ids. Authors are the person's name with
+`<user id>@users.noreply.<apps domain>`; the instance setting `BROD_GIT_REAL_EMAILS` uses real addresses instead.
+Secrets, databases and other app data are never exported. Pushing is refused (403): changes come back with import.
+
+`import_app {app, url?, ref?, base_version?, history?, target?}` (`POST /v1/apps/:slug/import`, a JSON body or a raw
+bundle) turns a commit into a new version, on staging unless `target` is `production`. Without `url` it gives an upload
+address for a bundle (`git bundle create app.bundle --all`, then `curl -X PUT --data-binary @app.bundle`). With `url`
+Brod fetches a public https repository itself, through an outbound guard that refuses private, loopback, link-local and
+metadata addresses (also after redirects), with 10 s to connect and 120 s in all.
+
+If the commit or an ancestor is one Brod exported (or imported before), that version is the merge base and the change is
+merged like a [patch](#patch-deploys-and-merging). Otherwise every file is replaced and the result has a `warning`
+("no common ancestor; replaced all files"). `history: "all"` makes one version per new first-parent commit, oldest first
+(at most 50). Refused, with the path named: symbolic links, submodules, Git LFS pointers, `.git` folders, paths with `..`
+or absolute paths, and files over the deploy limits. The pack may be up to `BROD_GIT_MAX_IMPORT_MB` (default 50).
+
 ## Access
 
 Each app has one of six access modes. You can change it at any time without a redeploy.

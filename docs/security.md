@@ -116,6 +116,14 @@ Be clear about these before you put Brod in front of people:
 - **Plain HTTP.** Without HTTPS, cookies have no `__Host-` prefix or `Secure` flag, and anything on the network can
   read sessions. The quickstart binds to `127.0.0.1` for that reason. Use HTTPS for anything else
   ([docs/deploy-production.md](deploy-production.md#https)).
+- **Git import and export.** `import_app` with a `url` makes the server fetch an address a person gave it, so the fetch
+  goes through an outbound guard: http(s) only, every resolved address must be public (no loopback, private,
+  link-local or metadata ranges, also for redirects, each of which is checked again), the connection uses the address
+  that was checked (no DNS rebinding), 10 s to connect, 120 s in all and a size cap (`BROD_GIT_MAX_IMPORT_MB`).
+  Imports refuse symbolic links, submodules, Git LFS pointers, `.git` folders, `..` and absolute paths and files over
+  the deploy limits, and then go through the normal deploy checks. Exports never contain secrets or app data, and
+  authors are `<user id>@users.noreply.<apps domain>` unless `BROD_GIT_REAL_EMAILS` is set. The git endpoint is
+  read-only (`git-receive-pack` is refused) and takes the same tokens and rate limits as the API.
 - **The operator.** Whoever runs Brod can read every app's files and database, and with `SECRETS_KEY` every app secret.
 - **Third-party requests from pages.** Brod's own pages load fonts from Google Fonts, so visitors' browsers contact
   Google. Self-hosting the fonts is on the [roadmap](roadmap.md).

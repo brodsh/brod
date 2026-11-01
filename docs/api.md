@@ -71,7 +71,10 @@ is on (`BROD_MARKETPLACE=true`, the default when hosted, off when self-hosted). 
 | `PUT /v1/uploads/:id` (a tar.gz as the body) | Upload a bundle to an upload address and deploy it. Up to 25 MB. The address is its own credential and lasts 15 minutes. |
 | `GET /v1/apps/:slug/files?version=&since=` | Same as `get_files`: a version's files inline, or a `download_url`; `since` lists only what changed |
 | `GET /v1/apps/:slug/diff?from=&to=` | Same as `diff_versions` |
-| `GET /v1/downloads/:id` | A version's files as a tar.gz. The address is its own credential and lasts 15 minutes. |
+| `GET /v1/apps/:slug/export.bundle` | The app as a git bundle (v2): `main` live, `staging`, tags `v<N>`. Same as `export_app` |
+| `GET /v1/apps/:slug.git/info/refs?service=git-upload-pack`, `POST /v1/apps/:slug.git/git-upload-pack` | Read-only git over HTTP (`git clone`). HTTP Basic (any user name, a Brod token as password) or Bearer; read-only tokens work. `git-receive-pack` answers 403 |
+| `POST /v1/apps/:slug/import` | Same as `import_app`: JSON `{url, ref?, base_version?, history?, target?, note?}`, or a git bundle as the body (`Content-Type: application/x-git-bundle`) with `ref`, `base_version`, `history`, `target` in the query. Builders and owners. A bundle PUT to an upload address also imports |
+| `GET /v1/downloads/:id` | A version's files as a tar.gz (or the git bundle from `export_app`). The address is its own credential and lasts 15 minutes. |
 
 `environment` is `staging` or `production`. `base_version` is the version the files started from. See
 [Staging](apps.md#staging) and [Several people on one app](apps.md#several-people-on-one-app).
