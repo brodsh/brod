@@ -39,6 +39,8 @@ An error answers with an HTTP status and a body like this:
 | 403 | `read_only` | A read-only connection tried to change something |
 | 404 | `not_found` | No such route, or nothing with that name |
 | 409 | `stale_base` | A deploy's `base_version` is no longer the app's current version |
+| 409 | `merge_conflict` | A patch deploy on a stale base changed the same lines or file as a newer version; `conflicts` lists them |
+| 422 | `unknown_blobs` | A patch names a `sha256` the app does not have; `missing` lists them |
 | 429 | `rate_limited` | Too many requests in the window; see `retry_after_seconds` |
 
 ## Routes
@@ -65,9 +67,10 @@ is on (`BROD_MARKETPLACE=true`, the default when hosted, off when self-hosted). 
 
 | Route | |
 | --- | --- |
-| `POST /v1/deploys` `{name?, app?, note?, environment?, base_version?, files?}` | Same as `deploy_app`. `name` makes a new app, `app` deploys a new version of one. With `files` (up to 1 MB in all) it deploys at once. Without `files` it answers with a one-time `upload_url` and a `tar \| curl` command. |
+| `POST /v1/deploys` `{name?, app?, note?, environment?, base_version?, files?, changes?, deletes?}` | Same as `deploy_app`; `changes`/`deletes` with a required `base_version` make a [patch deploy](apps.md#patch-deploys-and-merging). `name` makes a new app, `app` deploys a new version of one. With `files` (up to 1 MB in all) it deploys at once. Without `files` it answers with a one-time `upload_url` and a `tar \| curl` command. |
 | `PUT /v1/uploads/:id` (a tar.gz as the body) | Upload a bundle to an upload address and deploy it. Up to 25 MB. The address is its own credential and lasts 15 minutes. |
-| `GET /v1/apps/:slug/files?version=` | Same as `get_files`: a version's files inline, or a `download_url` |
+| `GET /v1/apps/:slug/files?version=&since=` | Same as `get_files`: a version's files inline, or a `download_url`; `since` lists only what changed |
+| `GET /v1/apps/:slug/diff?from=&to=` | Same as `diff_versions` |
 | `GET /v1/downloads/:id` | A version's files as a tar.gz. The address is its own credential and lasts 15 minutes. |
 
 `environment` is `staging` or `production`. `base_version` is the version the files started from. See

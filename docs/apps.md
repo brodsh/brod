@@ -382,6 +382,41 @@ started from, and Brod refuses it when the app has moved on.
   a number, and a deleted or refused version's number is never used again. Numbers can skip.
 - `base_version` is optional, but agents should pass it whenever they update an app.
 
+### Patch deploys and merging
+
+To change a few files, send only those. `deploy_app` and `POST /v1/deploys` take, instead of `files`, a patch:
+`base_version` (required), `changes` (path -> exactly one of `{ "content" }`, `{ "content_base64" }` or `{ "sha256" }` of
+content this app already has, as `get_files` lists it) and `deletes` (paths). Brod applies it to the base version and
+runs the result through the same checks as a full upload (paths, size limits, abuse scan, storage allowance, staging).
+A `sha256` the app does not have is refused with `422 unknown_blobs` and a `missing` list. A patch to an app or version
+that has no files to patch (a container app, a deleted version) is a 404.
+
+If the app moved on since `base_version`, Brod merges per file instead of refusing. A file only one side changed takes
+that side. A text file both sides changed is merged by line (three-way, diff3); a binary file both changed, or a file
+one side deleted and the other changed, is a conflict. Any conflict is `409 merge_conflict` with `conflicts`
+(`path`, `kind` `text`, `binary` or `delete_modify`, and `hunks` of `base`, `current`, `incoming` text) and nothing is
+deployed; fix those files against `current_version` and send the patch again. A merged deploy answers with a `patch`
+object (`base_version`, `merged_onto`, `stale_base`, `changed`, `merged`). A full upload with a stale base keeps the
+`stale_base` refusal above.
+
+`get_files` with `since=<version>` lists only the files added, modified or deleted since that version (unchanged
+ones are named, not sent). `diff_versions {app, from, to}` (`GET /v1/apps/:slug/diff?from=&to=`) returns the changed
+paths and a unified diff, capped at 100 KB. Each version records its parent, its author and its note.
+
+### How versions are stored
+
+Files are stored once by content: a blob at `blobs/<sha256>` in storage, written only when it is missing. A version is
+a manifest (path, sha256, size, mode, in path order) in the database (`version_manifests`, `manifest_entries`), so a
+deploy that changes one file uploads one blob, and rollback, staging, serving and downloads only read manifests.
+Download tarballs are built on demand and are deterministic. Versions deployed before this stored one object per
+file; each is converted the first time it is read, and its old objects are deleted
+only after the manifest is saved. Nothing is converted at start-up. Blobs no manifest refers to are removed hourly,
+once they are more than an hour old (the grace period lets a deploy that is still being committed keep its blobs).
+Marketplace releases and previews keep their own per-file layout.
+
+Storage use counts the unique content of an app once: the same bytes in ten versions, or twice in one version, count
+once for that app. The same bytes in two apps count once for each, so an app's usage never depends on another's.
+
 ## Access
 
 Each app has one of six access modes. You can change it at any time without a redeploy.
@@ -728,6 +763,7 @@ now with `POST /v1/admin/backups/run` and run the drill with `POST /v1/admin/bac
 | An uploaded bundle (tar.gz) | 25 MB |
 | A bundle, unpacked | 60 MB, 2,000 files |
 | One file | 10 MB |
+| A patch deploy | the same limits; inline `content` up to 1 MB in all |
 | Upload and download addresses | valid for 15 minutes |
 | Deploys | 30 an hour per workspace (`429 rate_limited`) |
 | `env.KV` value | 128 KB |

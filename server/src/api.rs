@@ -361,6 +361,9 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
             if m == Method::POST {
                 let b = req.json_object().await?;
                 let target = DeployTarget::from_json(&b);
+                if let Some(patch) = crate::patch::parse(&b)? {
+                    return Ok(created(crate::patch::deploy_patch(st, &c, target, patch).await?));
+                }
                 return match b.get("files") {
                     None => Ok(created(db(Box::new(move |conn, cfg, c| control::create_upload(conn, cfg, c, &target))).await?)),
                     Some(files) => {
@@ -399,7 +402,12 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
                     let slug = slug.clone();
                     if action == "files" && m == Method::GET {
                         let version = req.param("version").map(|v| json!(v));
-                        return Ok(json(control::get_files(st, &c, &slug, version).await?));
+                        let since = req.param("since").map(|v| json!(v));
+                        return Ok(json(control::get_files(st, &c, &slug, version, since).await?));
+                    }
+                    if action == "diff" && m == Method::GET {
+                        let (from, to) = (req.param("from").map(|v| json!(v)), req.param("to").map(|v| json!(v)));
+                        return Ok(json(crate::patch::diff_versions(st, &c, &slug, from.as_ref(), to.as_ref()).await?));
                     }
                     if action == "usage" && m == Method::GET {
                         crate::usage::flush(st).await?;

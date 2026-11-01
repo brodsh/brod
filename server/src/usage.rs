@@ -143,8 +143,14 @@ impl Storage {
 }
 
 pub fn workspace_storage(conn: &Connection, workspace_id: &str) -> Result<Storage> {
+    // Versions are content-addressed (versions.rs): an app pays once for each distinct file content across all its
+    // versions, so a one-file patch costs one file. A version not converted yet counts its full size until it is read.
     let bundles = conn.count(
-        "SELECT COALESCE(SUM(v.bytes), 0) FROM versions v JOIN apps a ON a.id = v.app_id WHERE a.workspace_id = ?",
+        "SELECT COALESCE(SUM(size), 0) FROM (SELECT DISTINCT e.app_id, e.sha256, e.size FROM manifest_entries e JOIN apps a ON a.id = e.app_id WHERE a.workspace_id = ?) t",
+        [workspace_id],
+    )? + conn.count(
+        "SELECT COALESCE(SUM(v.bytes), 0) FROM versions v JOIN apps a ON a.id = v.app_id WHERE a.workspace_id = ? \
+         AND NOT EXISTS (SELECT 1 FROM version_manifests m WHERE m.app_id = v.app_id AND m.version = v.n)",
         [workspace_id],
     )?;
     // Marketplace releases (copies of a version's files, kept for installers) and listing previews count for the publisher.
@@ -291,14 +297,16 @@ pub fn workspace_usage(conn: &Connection, cfg: &Config, c: &Caller, days: Option
         [&c.workspace.id],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
     )?;
-    let bundles: HashMap<String, i64> = conn
-        .all(
-            "SELECT v.app_id, SUM(v.bytes) FROM versions v JOIN apps a ON a.id = v.app_id WHERE a.workspace_id = ? GROUP BY v.app_id",
-            [&c.workspace.id],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
-        )?
-        .into_iter()
-        .collect();
+    let mut bundles: HashMap<String, i64> = HashMap::new();
+    for sql in [
+        "SELECT t.app_id, SUM(t.size) FROM (SELECT DISTINCT e.app_id, e.sha256, e.size FROM manifest_entries e JOIN apps a ON a.id = e.app_id WHERE a.workspace_id = ?) t GROUP BY t.app_id",
+        "SELECT v.app_id, SUM(v.bytes) FROM versions v JOIN apps a ON a.id = v.app_id WHERE a.workspace_id = ? \
+         AND NOT EXISTS (SELECT 1 FROM version_manifests m WHERE m.app_id = v.app_id AND m.version = v.n) GROUP BY v.app_id",
+    ] {
+        for (id, b) in conn.all(sql, [&c.workspace.id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
+            *bundles.entry(id).or_insert(0) += b;
+        }
+    }
     let mut out = Vec::new();
     let (mut views_total, mut visitors_total) = (0, 0);
     for (id, slug, files, data) in apps {
@@ -323,7 +331,7 @@ pub fn app_usage(conn: &Connection, c: &Caller, slug: &str, days: Option<i64>) -
     let app = crate::control::get_app(conn, c, slug)?;
     let days = last_days(clamp_days(days));
     let (views, visitors) = series(conn, &app.id, &days)?;
-    let bundles = conn.count("SELECT COALESCE(SUM(bytes), 0) FROM versions WHERE app_id = ?", [&app.id])?;
+    let bundles = crate::versions::app_bytes(conn, &app.id)?;
     Ok(json!({
         "app": app.slug, "days": days, "views": views, "visitors": visitors,
         "total_views": views.iter().sum::<i64>(), "total_visitors": visitors.iter().sum::<i64>(),

@@ -340,7 +340,6 @@ pub async fn serve_version(
     if path.split('/').any(|p| p == "..") {
         return Ok(notice(400, "Bad address", "That address is not valid.", ""));
     }
-    let base = format!("{}/{version}/", app.id);
 
     if let Some(server) = server {
         // A file that exists in the bundle is served as is; every other request goes to the server code.
@@ -348,7 +347,7 @@ pub async fn serve_version(
             && !path.is_empty()
             && !path.ends_with('/')
             && !runtime::is_server_path(&path)
-            && let Some(obj) = st.store.get(&format!("{base}{path}")).await?
+            && let Some(obj) = crate::versions::open_file(st, &app.id, version, &path).await?
         {
             return file_response(st, &req, app, obj, &path).await;
         }
@@ -365,11 +364,11 @@ pub async fn serve_version(
         vec![path.clone(), format!("{path}/index.html"), format!("{path}.html"), "index.html".into()]
     };
     for c in candidates {
-        if let Some(obj) = st.store.get(&format!("{base}{c}")).await? {
+        if let Some(obj) = crate::versions::open_file(st, &app.id, version, &c).await? {
             return file_response(st, &req, app, obj, &c).await;
         }
     }
-    match st.store.get(&format!("{base}404.html")).await? {
+    match crate::versions::open_file(st, &app.id, version, "404.html").await? {
         Some(custom) => Ok(response(404, custom.body, &[("content-type", "text/html; charset=utf-8".into())])),
         None => Ok(notice(404, "Not found", "This app has no page at that address.", "")),
     }

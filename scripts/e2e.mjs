@@ -138,7 +138,7 @@ check('create a named agent connection', agent.status === 201 && agent.body.name
 const client = new Client({ name: 'e2e', version: '1.0.0' });
 await client.connect(new StreamableHTTPClientTransport(new URL(API + '/mcp'), { requestInit: { headers: { authorization: `Bearer ${agent.body.token}` } } }));
 const tools = await client.listTools();
-check('MCP lists 19 tools', tools.tools.length === 19, tools.tools.map(t => t.name).join(','));
+check('MCP lists 20 tools', tools.tools.length === 20, tools.tools.map(t => t.name).join(','));
 const tool = async (name, args = {}) => { const r = await client.callTool({ name, arguments: args }); return { isError: r.isError, data: r.structuredContent ?? JSON.parse(r.content[0].text) }; };
 const gw = await tool('get_workspace');
 check('get_workspace explains groups, roles and the identity contract', gw.data.workspace === W && gw.data.identity?.how.includes('/_brod/me') && gw.data.default_app_roles.length === 3);
@@ -393,9 +393,54 @@ check('a bad base_version is refused', (await tool('deploy_app', { app: APP, bas
 // Getting the files back: a small version inline, ready to change and deploy on top of.
 const pulled = await tool('get_files', { app: APP });
 check('get_files returns the current version inline', !pulled.isError && pulled.data.version === 3 && pulled.data.environment === 'staging'
-  && JSON.stringify(pulled.data.files) === JSON.stringify([{ path: 'index.html', content: '<h1>v3</h1>' }]) && pulled.data.next_step.includes('"base_version": 3')
+  && pulled.data.files.length === 1 && pulled.data.files[0].path === 'index.html' && pulled.data.files[0].content === '<h1>v3</h1>' && /^[0-9a-f]{64}$/.test(pulled.data.files[0].sha256) && pulled.data.next_step.includes('"base_version": 3')
   && JSON.stringify(pulled.data.others_editing) === '[]' && !pulled.data.warning, JSON.stringify(pulled.data));
 check('get_files gives an older version by number', (await tool('get_files', { app: APP, version: 1 })).data.files?.some(f => f.path === 'index.html' && f.content.includes('v1')));
+// ---------- patch deploys: send only what changed; a stale base is merged per file ----------
+const LINES = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join('\n') + '\n';
+const pf = await tool('deploy_app', { name: 'Patchy', files: [{ path: 'index.html', content: '<h1>patchy v1</h1>' }, { path: 'notes.txt', content: LINES }, { path: 'old.txt', content: 'to delete' }] });
+const PA = pf.data.app;
+check('a full deploy makes version 1 of a new app', !pf.isError && pf.data.version === 1, JSON.stringify(pf.data));
+const pfiles = await tool('get_files', { app: PA });
+const shaOf = path => pfiles.data.files.find(f => f.path === path)?.sha256;
+check('get_files lists a sha256 and size for every file', pfiles.data.files.length === 3 && pfiles.data.files.every(f => /^[0-9a-f]{64}$/.test(f.sha256) && f.size > 0), JSON.stringify(pfiles.data.files));
+const p2 = await tool('deploy_app', { app: PA, base_version: 1, changes: { 'index.html': { content: '<h1>patchy v2</h1>' } } });
+check('a one-file patch deploy makes version 2', !p2.isError && p2.data.version === 2 && p2.data.based_on === 1 && p2.data.patch?.stale_base === false, JSON.stringify(p2.data));
+const p2files = await tool('get_files', { app: PA });
+check('the patch kept every other file and changed the one', p2files.data.files.length === 3 && p2files.data.files.find(f => f.path === 'index.html').content === '<h1>patchy v2</h1>'
+  && p2files.data.files.find(f => f.path === 'notes.txt').content === LINES, JSON.stringify(p2files.data.files));
+const unknown = await alice.api('/v1/deploys', { json: { app: PA, base_version: 2, changes: { 'x.txt': { sha256: 'a'.repeat(64) } } } });
+check('a patch naming an unknown sha256 is refused with the missing hashes', unknown.status === 422 && unknown.body.error?.code === 'unknown_blobs' && unknown.body.error.missing?.includes('a'.repeat(64)), JSON.stringify(unknown.body));
+const noBase = await alice.api('/v1/deploys', { json: { app: PA, changes: { 'x.txt': { content: 'x' } } } });
+check('a patch without base_version is refused', noBase.status === 400, JSON.stringify(noBase.body));
+const bySha = await tool('deploy_app', { app: PA, base_version: 2, changes: { 'copy.txt': { sha256: shaOf('notes.txt') }, 'logo.bin': { content_base64: Buffer.from([0, 1, 2, 3]).toString('base64') } }, deletes: ['old.txt'] });
+check('a patch can reuse a known sha256, add a binary file and delete a path', !bySha.isError && bySha.data.version === 3, JSON.stringify(bySha.data));
+const p3 = await tool('get_files', { app: PA });
+check('the new version has copy.txt and logo.bin and no old.txt', p3.data.files.map(f => f.path).sort().join() === 'copy.txt,index.html,logo.bin,notes.txt'
+  && p3.data.files.find(f => f.path === 'copy.txt').content === LINES, JSON.stringify(p3.data.files.map(f => f.path)));
+// Stale base: two people start from version 3.
+const mineText = LINES.replace('line 2\n', 'line 2 mine\n');
+const theirText = LINES.replace('line 11\n', 'line 11 theirs\n');
+const theirs = await tool('deploy_app', { app: PA, base_version: 3, changes: { 'notes.txt': { content: theirText } } });
+const merged = await tool('deploy_app', { app: PA, base_version: 3, changes: { 'notes.txt': { content: mineText }, 'extra.txt': { content: 'mine' } } });
+check('a stale-base patch touching other lines is merged onto the newer version', !theirs.isError && !merged.isError && merged.data.version === 5 && merged.data.patch?.stale_base === true && merged.data.patch.merged?.includes('notes.txt'), JSON.stringify([theirs.data, merged.data]));
+const mergedNotes = (await tool('get_files', { app: PA })).data.files.find(f => f.path === 'notes.txt').content;
+check('the merged file has both edits', mergedNotes.includes('line 2 mine') && mergedNotes.includes('line 11 theirs'), mergedNotes);
+const before = (await tool('get_status', { app: PA })).data.current_version;
+const clash = await alice.api('/v1/deploys', { json: { app: PA, base_version: 3, changes: { 'notes.txt': { content: LINES.replace('line 2\n', 'line 2 other\n') } } } });
+const conflict = clash.body.error?.conflicts?.[0];
+check('a stale-base patch that clashes is refused with 409 and the conflicting hunks', clash.status === 409 && clash.body.error?.code === 'merge_conflict' && conflict?.path === 'notes.txt'
+  && conflict.hunks?.length === 1 && conflict.hunks[0].incoming.includes('line 2 other') && conflict.hunks[0].current.includes('line 2 mine'), JSON.stringify(clash.body));
+check('and nothing was deployed', (await tool('get_status', { app: PA })).data.current_version === before);
+const since = await tool('get_files', { app: PA, since: 1 });
+check('get_files since=<version> returns only what changed', !since.isError && since.data.files.some(f => f.path === 'index.html') && JSON.stringify(since.data).includes('old.txt'), JSON.stringify(since.data).slice(0, 600));
+const dv = await tool('diff_versions', { app: PA, from: 1, to: 2 });
+check('diff_versions returns a unified diff', !dv.isError && dv.data.diff.includes('-<h1>patchy v1</h1>') && dv.data.diff.includes('+<h1>patchy v2</h1>'), JSON.stringify(dv.data).slice(0, 400));
+const rbp = await tool('rollback', { app: PA, version: 1 });
+check('rollback still works on a patched app', !rbp.isError && rbp.data.live_version === 1, JSON.stringify(rbp.data));
+const rbFiles = await tool('get_files', { app: PA, version: 1 });
+check('and version 1 still reads back from the manifest', rbFiles.data.files?.length === 3 && rbFiles.data.files.some(f => f.path === 'index.html' && f.content.includes('patchy v1')), JSON.stringify(rbFiles.data).slice(0, 300));
+
 await tool('publish_staging', { app: APP, discard: true });
 const etag = (await anon.go(url + '/assets/app.js')).headers.etag;
 check('unchanged file answers 304', (await anon.go(url + '/assets/app.js', { headers: { 'if-none-match': etag } })).status === 304);

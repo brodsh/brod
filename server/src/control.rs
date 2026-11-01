@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // The control plane. The REST API, the MCP endpoint and the confirmation pages call only these functions.
 use crate::db::{Connection, params};
-use bytes::Bytes;
 use serde_json::{Map, Value, json};
 
 use crate::abuse;
@@ -15,9 +14,8 @@ use crate::runtime::{self, ServerInfo};
 use crate::secrets;
 use crate::state::State;
 use crate::tar::{BundleFile, FILE_BYTES, MAX_FILES, UNPACKED_BYTES};
-use crate::util::{
-    app_url, capitalise, content_type, hash_password, iso, js_slice, js_trim, now, random_id, sha256_hex, slugify, staging_url,
-};
+use crate::util::{app_url, capitalise, hash_password, iso, js_slice, js_trim, now, random_id, sha256_hex, slugify, staging_url};
+use crate::versions;
 use base64::Engine;
 
 // ---------- who is calling ----------
@@ -873,7 +871,9 @@ pub(crate) fn target_app(conn: &Connection, cfg: &Config, c: &Caller, o: &Deploy
     Ok((app, true))
 }
 
-pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFile>) -> Result<Value> {
+/// The checks every deploy starts with, whatever it carries: the caller may deploy, is within the hourly limit, the app
+/// (when there is one) is not taken down, and the environment is valid.
+pub(crate) async fn preflight(st: &State, c: &Caller, o: &DeployTarget) -> Result<()> {
     {
         let (c, o) = (c.clone(), o.clone());
         let per_hour = crate::instance::current(st).await.int("rate.deploys_per_hour");
@@ -889,7 +889,11 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFi
             })
             .await?;
     }
-    o.check_environment()?;
+    o.check_environment()
+}
+
+pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFile>) -> Result<Value> {
+    preflight(st, c, &o).await?;
     // A Dockerfile at the top makes the bundle a container app's source (containers.rs, deployments.rs).
     if let Some(archive) = crate::containers::archive_of(&files) {
         return crate::deployments::deploy(st, c, o, archive).await;
@@ -897,6 +901,12 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFi
     if crate::containers::wants_container(o.options.as_ref()) {
         return Err(Problem::new(400, "bad_container", "\"runtime\": \"container\" needs a Dockerfile at the top of the bundle."));
     }
+    deploy_files(st, c, o, files).await
+}
+
+/// Deploy a static or server bundle: validate and scan it, store it content-addressed (versions.rs) and move the
+/// pointers. A full upload and a patch (patch.rs) both end here, so they pass the same checks.
+pub(crate) async fn deploy_files(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFile>) -> Result<Value> {
     let base = o.base()?;
     let files = normalise(files)?;
     let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
@@ -911,17 +921,23 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFi
     // The phishing check (BROD_ABUSE_CHECKS): a flagged version still deploys, but its app stays private or people-only
     // and the operator gets a report.
     let checks = st.settings.last().flag("features.abuse_checks");
-    let (files, scan) = tokio::task::spawn_blocking(move || {
+    let (prepared, scan) = tokio::task::spawn_blocking(move || {
         let scan = if checks { crate::scan::scan_bundle(&files) } else { crate::scan::Scan::default() };
-        (files, scan)
+        (versions::prepare(files), scan)
     })
     .await
     .map_err(Problem::internal)?;
-    let (app, created, n) = {
-        let (c, o, cfg) = (c.clone(), o.clone(), st.cfg.clone());
+    let entries: Vec<versions::Entry> = prepared.iter().map(|(e, _)| e.clone()).collect();
+    let (app, created, n, parent) = {
+        let (c, o, cfg, entries) = (c.clone(), o.clone(), st.cfg.clone(), entries.clone());
         st.db
             .call(move |conn| {
-                crate::usage::check_storage(conn, &cfg, &c.workspace, bytes as i64)?;
+                // Storage counts each distinct content once per app, so only contents the app does not hold yet are added.
+                let adding = match o.app_slug() {
+                    Some(slug) => versions::new_bytes(conn, &get_app(conn, &c, slug)?.id, &entries)?,
+                    None => versions::new_bytes(conn, "", &entries)?,
+                };
+                crate::usage::check_storage(conn, &cfg, &c.workspace, adding)?;
                 let (app, created) = target_app(conn, &cfg, &c, &o)?;
                 // Refuse before uploading when someone else already deployed past the base; checked again when the pointer moves.
                 if let Some(b) = base
@@ -937,35 +953,33 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFi
                         |r| r.get(0),
                     )?
                     .ok_or_else(|| Problem::new(404, "not_found", "The app was deleted during the deploy."))?;
-                Ok((app, created, n))
+                // The version this one follows: the one it was based on, else whatever was current.
+                let parent = base.or_else(|| current_version(&app));
+                Ok((app, created, n, parent))
             })
             .await?
     };
     let staging = deploy_to_staging(c, &app, created, &o);
     let note = js_slice(js_trim(o.note.as_deref().unwrap_or("")), 200);
     let note = if note.is_empty() { if created { "First version".to_string() } else { "Update".to_string() } } else { note };
-    // Files are written under a new version prefix first; visitors only see them once the pointer moves.
-    let count = files.len();
-    let mut pending = files.into_iter();
-    loop {
-        let chunk: Vec<BundleFile> = pending.by_ref().take(20).collect();
-        if chunk.is_empty() {
-            break;
-        }
-        futures_util::future::try_join_all(chunk.into_iter().map(|f| {
-            let key = format!("{}/{n}/{}", app.id, f.path);
-            let ct = content_type(&f.path);
-            let store = st.store.clone();
-            async move { store.put(&key, Bytes::from(f.bytes), Some(ct)).await }
-        }))
-        .await?;
-    }
+    // Blobs are stored first (only the ones the store lacks); visitors see them only once the manifest and the pointer
+    // move, and a refused version leaves its blobs for the next garbage collection.
+    let count = entries.len();
+    versions::store_blobs(st, &prepared).await?;
+    drop(prepared);
+    let manifest = versions::Manifest {
+        app_id: app.id.clone(),
+        version: n,
+        parent,
+        author: Some(c.user.id.clone()),
+        note: note.clone(),
+        created_at: now(),
+        entries,
+    };
     let (c2, cfg) = (c.clone(), st.cfg.clone());
     let server_json = server.as_ref().map(|s| s.to_json());
     let kind = if server.is_some() { "server" } else { "static" };
-    let prefix = format!("{}/{n}/", app.id);
-    let out = st
-        .db
+    st.db
         .call(move |conn| {
             let mut app = app;
             tx(conn, |x| {
@@ -1002,6 +1016,7 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFi
                         declared_open
                     ],
                 )?;
+                versions::insert_manifest(x, &manifest)?;
                 let from = base.map(|b| format!(" (from v{b})")).unwrap_or_default();
                 if staging {
                     x.run("UPDATE apps SET staging_version = ? WHERE id = ?", params![n, app.id])?;
@@ -1068,12 +1083,7 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFi
             }
             Ok(Value::Object(m))
         })
-        .await;
-    // A refused version never went anywhere: its files go too.
-    if out.is_err() {
-        st.store.delete_prefix(&prefix).await?;
-    }
-    out
+        .await
 }
 
 // ---------- working together ----------
@@ -1086,7 +1096,7 @@ const INLINE_FILES: i64 = 200;
  * older copy, then deploy with base_version. Small versions come inline; larger ones as a short-lived tar.gz address.
  * Getting the files counts as working on the app, so others are told (see others_editing).
  */
-pub async fn get_files(st: &State, c: &Caller, slug: &str, version: Option<Value>) -> Result<Value> {
+pub async fn get_files(st: &State, c: &Caller, slug: &str, version: Option<Value>, since: Option<Value>) -> Result<Value> {
     let (c2, slug2) = (c.clone(), slug.to_string());
     let (mut out, app_id, n, inline) = st
         .db
@@ -1142,16 +1152,21 @@ pub async fn get_files(st: &State, c: &Caller, slug: &str, version: Option<Value
         "Make your changes there, then call deploy_app with \"app\": \"{slug}\" and \"base_version\": {n}, so a change someone else deploys meanwhile is never undone. \
          These are the files as deployed (the built output): if the app was built from source with a build step, change the source if you have it rather than these."
     );
+    if let Some(since) = since.filter(|v| !matches!(v, Value::Null) && !matches!(v, Value::String(s) if s.is_empty())) {
+        return files_since(st, out, &app_id, n, &since, &slug, &then).await;
+    }
     if inline {
-        let mut files = read_tree(st, &format!("{app_id}/{n}/")).await?;
-        files.sort_by(|a, b| a.path.cmp(&b.path));
-        let files: Vec<Value> = files
-            .into_iter()
-            .map(|f| match String::from_utf8(f.bytes) {
-                Ok(text) => json!({ "path": f.path, "content": text }),
-                Err(e) => json!({ "path": f.path, "content": base64::engine::general_purpose::STANDARD.encode(e.into_bytes()), "encoding": "base64" }),
-            })
-            .collect();
+        let files = match versions::manifest(st, &app_id, n).await? {
+            Some(m) => {
+                let blobs = versions::read_files(st, &app_id, n).await?;
+                blobs.into_iter().zip(m.entries.iter()).map(|(f, e)| file_json(f, e)).collect::<Vec<_>>()
+            }
+            None => {
+                let mut files = read_tree(st, &format!("{app_id}/{n}/")).await?;
+                files.sort_by(|a, b| a.path.cmp(&b.path));
+                files.into_iter().map(file_json_plain).collect()
+            }
+        };
         out.insert("files".into(), Value::Array(files));
         out.insert(
             "next_step".into(),
@@ -1182,6 +1197,89 @@ pub async fn get_files(st: &State, c: &Caller, slug: &str, version: Option<Value
     Ok(Value::Object(out))
 }
 
+fn with_content(mut m: Map<String, Value>, bytes: Vec<u8>) -> Value {
+    match String::from_utf8(bytes) {
+        Ok(text) => {
+            m.insert("content".into(), json!(text));
+        }
+        Err(e) => {
+            m.insert("content".into(), json!(base64::engine::general_purpose::STANDARD.encode(e.into_bytes())));
+            m.insert("encoding".into(), json!("base64"));
+        }
+    }
+    Value::Object(m)
+}
+
+/// A file as get_files lists it. `sha256` is what deploy_app's patch mode accepts in place of content.
+fn file_json(f: BundleFile, e: &versions::Entry) -> Value {
+    let mut m = Map::new();
+    m.insert("path".into(), json!(f.path));
+    m.insert("sha256".into(), json!(e.sha256));
+    m.insert("size".into(), json!(e.size));
+    with_content(m, f.bytes)
+}
+
+fn file_json_plain(f: BundleFile) -> Value {
+    let mut m = Map::new();
+    m.insert("path".into(), json!(f.path));
+    with_content(m, f.bytes)
+}
+
+/// get_files with `since`: what changed from that version to this one, instead of everything.
+async fn files_since(
+    st: &State,
+    mut out: Map<String, Value>,
+    app_id: &str,
+    n: i64,
+    since: &Value,
+    slug: &str,
+    then: &str,
+) -> Result<Value> {
+    let from = match since {
+        Value::Number(x) => x.as_f64(),
+        Value::String(x) => js_trim(x).parse::<f64>().ok(),
+        _ => None,
+    }
+    .filter(|f| f.fract() == 0.0 && f.abs() < 9e15)
+    .map(|f| f as i64);
+    let missing = || {
+        Problem::new(
+            404,
+            "no_version",
+            format!("{slug} has no version {} to compare with. Use get_status to see its versions.", js_string(since)),
+        )
+    };
+    let from = from.ok_or_else(missing)?;
+    let (Some(a), Some(b)) = (versions::manifest(st, app_id, from).await?, versions::manifest(st, app_id, n).await?) else {
+        return Err(missing());
+    };
+    let changes = versions::changes(&a, &b);
+    let size: i64 = changes.iter().filter_map(|c| c.to.map(|e| e.size)).sum();
+    let inline = size <= limits::INLINE_BYTES as i64 && changes.len() as i64 <= INLINE_FILES;
+    out.insert("since".into(), json!(from));
+    out.insert("unchanged".into(), json!(b.entries.len() - changes.iter().filter(|c| c.to.is_some()).count()));
+    out.insert("deleted".into(), Value::Array(changes.iter().filter(|c| c.status == "deleted").map(|c| json!(c.path)).collect()));
+    let mut files = Vec::new();
+    for c in changes.iter().filter(|c| c.to.is_some()) {
+        let e = c.to.expect("filtered to changes with a new side");
+        let mut m = Map::new();
+        m.insert("path".into(), json!(c.path));
+        m.insert("status".into(), json!(c.status));
+        m.insert("sha256".into(), json!(e.sha256));
+        m.insert("size".into(), json!(e.size));
+        files.push(if inline { with_content(m, versions::read_blob(st, &e.sha256, FILE_BYTES).await?) } else { Value::Object(m) });
+    }
+    out.insert("files".into(), Value::Array(files));
+    out.insert("content_included".into(), json!(inline));
+    let how = if inline {
+        "Apply these to your copy of the files: write the listed files, delete the \"deleted\" paths."
+    } else {
+        "The changes are too large to include inline: get_files without \"since\" for the full set, or fetch only what you need."
+    };
+    out.insert("next_step".into(), json!(format!("{how} {then}")));
+    Ok(Value::Object(out))
+}
+
 /// A download address: the version's files as a tar.gz, and a file name for it. The address is its own credential and
 /// works until it expires.
 pub async fn download(st: &State, id: &str) -> Result<(String, Vec<u8>)> {
@@ -1200,8 +1298,7 @@ pub async fn download(st: &State, id: &str) -> Result<(String, Vec<u8>)> {
     let Some((app_id, n, _, slug, created_at)) = found.filter(|d| d.2 >= now()) else {
         return Err(Problem::new(410, "download_gone", "This download address has expired. Call get_files again for a new one."));
     };
-    let mut files = read_tree(st, &format!("{app_id}/{n}/")).await?;
-    files.sort_by(|a, b| a.path.cmp(&b.path));
+    let files = versions::read_files(st, &app_id, n).await?;
     let body = tokio::task::spawn_blocking(move || crate::tar::pack(&files, created_at)).await.map_err(Problem::internal)?;
     Ok((format!("{slug}-v{n}.tar.gz"), body))
 }
@@ -1689,18 +1786,31 @@ pub async fn delete_version(st: &State, c: &Caller, slug: &str, n: i64) -> Resul
             Ok(app)
         })
         .await?;
+    // A version not converted to a manifest yet still has its own objects; the blobs of a converted one go with `gc`.
     st.store.delete_prefix(&format!("{}/{n}/", app.id)).await?;
     let (c3, app_id) = (c.clone(), app.id.clone());
-    st.db
+    let out = st
+        .db
         .call(move |conn| {
             tx(conn, |x| {
                 let bytes = x.count("SELECT bytes FROM versions WHERE app_id = ? AND n = ?", params![app_id, n])?;
                 x.run("DELETE FROM versions WHERE app_id = ? AND n = ?", params![app_id, n])?;
+                versions::delete_manifest(x, &app_id, n)?;
                 event(x, &c3.workspace.id, &c3.actor, Some(&app_id), "version_deleted", &format!("v{n} ({})", crate::usage::mb(bytes)))?;
                 Ok(json!({ "app": app.slug, "deleted": n, "freed_bytes": bytes }))
             })
         })
-        .await
+        .await?;
+    collect_blobs(st).await;
+    Ok(out)
+}
+
+/// Remove the blobs no version refers to any more (after a version or app is deleted). Never fails the caller: the
+/// hourly pass in main.rs tries again.
+async fn collect_blobs(st: &State) {
+    if let Err(e) = versions::gc(st, versions::GC_GRACE_MS).await {
+        tracing::warn!("blob collection failed: {}", e.message);
+    }
 }
 
 pub fn rollback(conn: &Connection, cfg: &Config, c: &Caller, slug: &str, version: Option<f64>) -> Result<Value> {
@@ -2046,8 +2156,9 @@ pub async fn delete_app(st: &State, c: &Caller, slug: &str) -> Result<Value> {
     crate::backups::retire(st, &app.id, &c.actor).await?;
     st.store.delete_prefix(&format!("{}/", app.id)).await?;
     runtime::wipe_app_data(st, &app.id).await?;
-    let c2 = c.clone();
-    st.db
+    let (c2, app_id) = (c.clone(), app.id.clone());
+    let out = st
+        .db
         .call(move |conn| {
             tx(conn, |x| {
                 // Releases already published from the app stay in the marketplace; the listing just has no app behind it.
@@ -2058,6 +2169,8 @@ pub async fn delete_app(st: &State, c: &Caller, slug: &str) -> Result<Value> {
                     "DELETE FROM app_settings WHERE app_id = ?",
                     "DELETE FROM network_reports WHERE app_id = ?",
                     "DELETE FROM app_logs WHERE app_id = ?",
+                    "DELETE FROM manifest_entries WHERE app_id = ?",
+                    "DELETE FROM version_manifests WHERE app_id = ?",
                     "DELETE FROM versions WHERE app_id = ?",
                     "DELETE FROM downloads WHERE app_id = ?",
                     "DELETE FROM editing WHERE app_id = ?",
@@ -2072,7 +2185,10 @@ pub async fn delete_app(st: &State, c: &Caller, slug: &str) -> Result<Value> {
             })?;
             Ok(json!({ "deleted": app.slug }))
         })
-        .await
+        .await?;
+    versions::forget_app(&app_id);
+    collect_blobs(st).await;
+    Ok(out)
 }
 
 /// The database half of an invitation, then its email.

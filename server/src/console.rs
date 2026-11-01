@@ -88,7 +88,10 @@ fn audit_event(conn: &Connection, op: &Operator, action: &str, detail: &str) -> 
 /// Counts for the console's first tab.
 pub fn overview(conn: &Connection, cfg: &Config) -> Result<Value> {
     let n = |sql: &str| conn.count(sql, ());
-    let storage = n("SELECT COALESCE(SUM(bytes), 0) FROM versions")?
+    let storage = n("SELECT COALESCE(SUM(size), 0) FROM (SELECT DISTINCT app_id, sha256, size FROM manifest_entries) t")?
+        + n(
+            "SELECT COALESCE(SUM(v.bytes), 0) FROM versions v WHERE NOT EXISTS (SELECT 1 FROM version_manifests m WHERE m.app_id = v.app_id AND m.version = v.n)",
+        )?
         + n("SELECT COALESCE(SUM(file_bytes), 0) FROM apps")?
         + n("SELECT COALESCE(SUM(data_bytes), 0) FROM apps")?;
     Ok(json!({

@@ -180,6 +180,22 @@ async fn run(cfg: Config) {
             }
         });
     }
+    // File contents no version refers to any more are deleted every hour (versions.rs).
+    {
+        let st = st.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(120)).await;
+            let mut tick = tokio::time::interval(Duration::from_secs(3600));
+            loop {
+                tick.tick().await;
+                match brod::versions::gc(&st, brod::versions::GC_GRACE_MS).await {
+                    Ok(0) => {}
+                    Ok(n) => tracing::info!("deleted {n} unused file contents"),
+                    Err(e) => tracing::warn!("could not collect unused file contents: {}", e.message),
+                }
+            }
+        });
+    }
     // Analytics older than each workspace's plan keeps are deleted every hour.
     {
         let st = st.clone();

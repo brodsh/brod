@@ -70,9 +70,10 @@ Use the Streamable HTTP transport at `/mcp` with the header `Authorization: Bear
 
 | Tool | What it does |
 | --- | --- |
-| `deploy_app` | Deploy a new app or a new version: files inline (up to 1 MB), or a one-time upload address for a bigger build. Returns the address. A source with a `Dockerfile` becomes a [container app](apps.md#container-apps) (`port`, `health`, `cpu`, `memory_mb`). |
+| `deploy_app` | Deploy a new app or a new version: files inline (up to 1 MB), a patch (`base_version` + `changes` + `deletes`, merged per file when the base is stale, see [patch deploys](apps.md#patch-deploys-and-merging)), or a one-time upload address for a bigger build. Returns the address. A source with a `Dockerfile` becomes a [container app](apps.md#container-apps) (`port`, `health`, `cpu`, `memory_mb`). |
 | `list_apps` | The workspace's apps: address, status, who can open each, live version. |
-| `get_files` | The files of an app's current version (or a named one), to change them. |
+| `get_files` | The files of an app's current version (or a named one), to change them, each with its `sha256` and `size`. `since` (a version number) lists only what changed since then. |
+| `diff_versions` | A unified diff between two versions of an app (`from`, `to`), capped, with the paths added, modified and deleted. |
 | `get_status` | One app: access, roles, who it is shared with, versions, what is on staging, custom domains, secret names, open paths (approved, open, waiting). |
 | `get_logs` | An app's activity (deploys, access changes, refusals) and, for server apps, recent requests with console output and errors. |
 | `get_deployment` | A [container app](apps.md#container-apps)'s deployment: its state (building, serving, failed) and the last 50 lines of its log. A failed one answers `build_failed`, `migration_failed` or `deployment_failed`. |
@@ -90,7 +91,7 @@ Use the Streamable HTTP transport at `/mcp` with the header `Authorization: Bear
 | `backup_database` | Back up a container app's database now. |
 | `get_workspace` | The workspace's groups, default roles and access modes, and how an app reads the signed-in person. |
 
-A read-only connection (OAuth scope `brod:read`, or a token made read-only) sees only `list_apps`, `get_files`,
+A read-only connection (OAuth scope `brod:read`, or a token made read-only) sees only `list_apps`, `get_files`, `diff_versions`,
 `get_status`, `get_logs`, `get_deployment`, `get_auth_integration` and `get_workspace`.
 
 The server also sends instructions with `initialize`. They tell the agent to ask before changing a live app, to deploy
