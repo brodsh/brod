@@ -52,6 +52,8 @@ pub const TABLES: &[&str] = &[
     "installs",
     "rate_limits",
     "listing_media",
+    "instance_settings",
+    "workspace_limits",
 ];
 
 /// Tables whose ids come from AUTOINCREMENT in SQLite and an identity column in Postgres.
