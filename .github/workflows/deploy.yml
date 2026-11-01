@@ -1,0 +1,102 @@
+# Deploys a released version to brod.sh once the Release workflow has pushed its
+# images, and sends a push notification through ntfy with the result.
+# Release candidates (tags with a "-") are never deployed automatically.
+# Run it by hand (Actions → Deploy → Run workflow) to redeploy or roll back.
+#
+# Repository secrets:
+#   DEPLOY_HOST         server hostname or IP
+#   DEPLOY_USER         SSH user (in the docker group)
+#   DEPLOY_SSH_KEY      private key for that user (a deploy-only key)
+#   DEPLOY_KNOWN_HOSTS  output of `ssh-keyscan <host>`
+#   DEPLOY_PATH         directory on the server holding docker-compose.yml and .env
+#   NTFY_TOPIC          ntfy.sh topic (keep it unguessable; the repo is public)
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to deploy, e.g. 0.2.0"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v') &&
+       !contains(github.event.workflow_run.head_branch, '-'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    steps:
+      - name: Version
+        id: v
+        env:
+          INPUT: ${{ github.event.inputs.version || github.event.workflow_run.head_branch }}
+        run: |
+          v="${INPUT#v}"
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "bad version: $INPUT"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ steps.v.outputs.version }}
+
+      - name: SSH setup
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/id_deploy && chmod 600 ~/.ssh/id_deploy
+          printf '%s\n' "$KNOWN" > ~/.ssh/known_hosts
+
+      - name: Upgrade
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          DIR: ${{ secrets.DEPLOY_PATH }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          ssh -i ~/.ssh/id_deploy -o BatchMode=yes "$USER@$HOST" \
+            "BROD_DIR='$DIR' bash -s -- '$VERSION'" < deploy/upgrade.sh 2>&1 | tee upgrade.log
+          exit "${PIPESTATUS[0]}"
+
+      - name: Public check
+        run: |
+          for i in $(seq 1 12); do
+            curl -fsS https://brod.sh/healthz | grep -q '"ok": *true' && exit 0
+            sleep 5
+          done
+          exit 1
+
+      - name: Notify
+        if: always()
+        env:
+          TOPIC: ${{ secrets.NTFY_TOPIC }}
+          STATUS: ${{ job.status }}
+          VERSION: ${{ steps.v.outputs.version }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          [ -n "$TOPIC" ] || exit 0
+          if [ "$STATUS" = success ]; then
+            title="brod.sh deployed v$VERSION"; tags=white_check_mark; prio=default
+          elif grep -q "rolled back to" upgrade.log 2>/dev/null; then
+            title="brod.sh v$VERSION failed, rolled back"; tags=warning; prio=high
+          else
+            title="brod.sh deploy v$VERSION failed"; tags=rotating_light; prio=urgent
+          fi
+          body=$(tail -n 8 upgrade.log 2>/dev/null || echo "$STATUS")
+          curl -fsS -H "Title: $title" -H "Tags: $tags" -H "Priority: $prio" -H "Click: $RUN" \
+            -d "$body" "https://ntfy.sh/$TOPIC" >/dev/null
