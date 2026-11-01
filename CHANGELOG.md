@@ -4,6 +4,34 @@ All notable changes to Brod. The format follows [Keep a Changelog](https://keepa
 [Semantic Versioning](https://semver.org/) (0.x: minor versions may change behaviour). Release notes on GitHub are
 generated from conventional commits.
 
+## 0.2.0 (2026-11-01)
+
+Container apps on nodes, managed Postgres for apps, and admin mode.
+
+### Added
+
+- Container apps: `brod deploy` builds an app from source on a node, pushes the image to Brod's registry and runs it as
+  a hardened container, with health-checked deploys and rollback.
+- Nodes (`brod-node`): a machine joins Brod, dials it over a reversed HTTP/2 tunnel and runs container apps. Compose
+  starts a local node by default.
+- Managed Postgres for container apps (`apps-postgres` service): a database per app, reached as
+  `brod-db.internal` through the tunnel, with migrations and backups.
+- Open paths: apps declare paths that skip sign-in; a person approves them. MCP `set_open_paths` and
+  `get_auth_integration`.
+- `@brod/auth`, the identity SDK for JavaScript.
+- Admin mode: operators, instance settings, workspace limits and overrides, an audit log and the operator console
+  (including node management).
+
+### Changed
+
+- `docker-compose.yml` adds the `apps-postgres`, `registry` and `node` services; the Caddyfile passes `/_node/connect`
+  through as HTTP/1.1 Upgrade. Existing installs must update both files before upgrading.
+
+### Fixed
+
+- Certificates for staging addresses, gzip archives padded with zeros or split in members, Postgres copies of
+  admin-mode tables, and restore/drill scratch databases created outside a transaction.
+
 ## 0.1.0 (2026-10-14)
 
 The first open-source release.
