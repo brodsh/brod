@@ -121,11 +121,39 @@ if (anaOp) {
   check('a removed operator loses the console', (await ana.go('/v1/admin/overview')).status === 403);
 }
 
+// ---------- nodes ----------
+
+const nodeList = await admin('/nodes');
+check('the node list is readable with the secret', nodeList.status === 200 && Array.isArray(nodeList.body.nodes), JSON.stringify(nodeList.body));
+check('every node shows its load', (nodeList.body?.nodes ?? []).every(n => typeof n.deployments?.serving === 'number'), JSON.stringify(nodeList.body?.nodes?.[0]));
+if (anaOp) check('an operator signed in on the dashboard can list nodes', (await cy.go('/v1/admin/nodes')).status === 200);
+check('someone who is not an operator cannot list nodes', (await ana.go('/v1/admin/nodes')).status === 403);
+const minted = await admin('/nodes/join-tokens', { method: 'POST' });
+check('a join token can be made', minted.status === 201 && String(minted.body?.command ?? '').startsWith('brod-node join '), JSON.stringify(minted.body));
+let tokens = await admin('/nodes/join-tokens');
+const tok = (tokens.body?.tokens ?? [])[0];
+check('unused join tokens are listed without the token itself', tokens.status === 200 && !!tok && tok.id.length === 16 && !JSON.stringify(tokens.body).includes(minted.body?.token), JSON.stringify(tokens.body));
+if (tok) {
+  check('a join token can be revoked', (await admin(`/nodes/join-tokens/${tok.id}`, { method: 'DELETE' })).status === 200);
+  tokens = await admin('/nodes/join-tokens');
+  check('a revoked join token is gone', !(tokens.body?.tokens ?? []).some(k => k.id === tok.id));
+  check('revoking it again is a 404', (await admin(`/nodes/join-tokens/${tok.id}`, { method: 'DELETE' })).status === 404);
+}
+check('renaming a missing node is a 404', (await admin('/nodes/node_nope', { method: 'PATCH', json: { name: 'x' } })).status === 404);
+check('an empty node name is refused', (await admin('/nodes/node_nope', { method: 'PATCH', json: { name: ' ' } })).status === 400);
+check('evacuating a missing node is a 404', (await admin('/nodes/node_nope/evacuate', { method: 'POST' })).status === 404);
+const first = (nodeList.body?.nodes ?? [])[0];
+if (first) {
+  const renamed = await admin(`/nodes/${encodeURIComponent(first.id)}`, { method: 'PATCH', json: { name: `renamed-${run}` } });
+  check('a node can be renamed', renamed.status === 200 && renamed.body?.node?.name === `renamed-${run}`, JSON.stringify(renamed.body));
+  await admin(`/nodes/${encodeURIComponent(first.id)}`, { method: 'PATCH', json: { name: first.name } });
+}
+
 // ---------- audit ----------
 
 const audit = await admin('/audit');
 const actions = (audit.body?.events ?? []).map(e => e.action);
-check('the audit log records limit and operator changes', audit.status === 200 && actions.includes('limits_changed') && actions.includes('operator_added'), JSON.stringify(actions.slice(0, 10)));
+check('the audit log records limit and operator changes', audit.status === 200 && actions.includes('limits_changed') && actions.includes('operator_added') && actions.includes('node_join_token') && actions.includes('node_join_token_revoked'), JSON.stringify(actions.slice(0, 10)));
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

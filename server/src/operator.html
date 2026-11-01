@@ -75,7 +75,7 @@ const lim = (v, unit = '') => v == null ? 'unlimited' : `${v}${unit}`;
 const of = (n, limit) => limit == null ? String(n) : `${n} of ${limit}`;
 
 // ---------- navigation ----------
-const TABS = [['overview', 'Overview'], ['settings', 'Settings'], ['workspaces', 'Workspaces'], ['reports', 'Reports'], ['operators', 'Operators'], ['audit', 'Audit log']];
+const TABS = [['overview', 'Overview'], ['settings', 'Settings'], ['workspaces', 'Workspaces'], ['reports', 'Reports'], ['nodes', 'Nodes'], ['operators', 'Operators'], ['audit', 'Audit log']];
 let tab = (location.hash.slice(1).split('/')[0]) || 'overview';
 let detail = decodeURIComponent(location.hash.slice(1).split('/')[1] || '');
 function go(t, d = '') { tab = t; detail = d; location.hash = d ? `${t}/${enc(d)}` : t; }
@@ -91,7 +91,7 @@ function nav() {
 let q = '', wsCursor = '', auditCursor = '', reportStatus = 'open';
 async function render() {
   nav();
-  const view = { overview, settings, workspaces: detail ? workspace : workspaces, reports, operators, audit }[tab] || overview;
+  const view = { overview, settings, workspaces: detail ? workspace : workspaces, reports, nodes, operators, audit }[tab] || overview;
   try {
     const body = await view();
     $main.replaceChildren(...[body].flat());
@@ -272,6 +272,70 @@ async function operators() {
       h('input', { name: 'email', type: 'email', required: true, placeholder: 'someone@example.com', 'aria-label': 'Email' }),
       h('button', { class: 'btn' }, 'Add')),
     h('p', { class: 'muted' }, 'They need an account here: ask them to sign in once first.'));
+}
+
+// ---------- nodes ----------
+let joinCommand = null;
+function nodeLoad(n) {
+  const d = n.deployments || {}, cap = n.capabilities || {}, res = n.resources || {};
+  const cpus = cap.cpus ?? res.cpus, mem = res.memory_total ?? cap.memory_bytes;
+  const parts = [`${d.serving || 0} serving`];
+  if (cpus) parts.push(`${(d.reserved_cpu || 0).toFixed(2)} of ${cpus} CPUs reserved`);
+  if (mem) parts.push(`${bytes((d.reserved_memory_mb || 0) * 1048576)} of ${bytes(mem)} memory reserved`);
+  return parts.join(' · ');
+}
+async function nodes() {
+  const [r, t] = await Promise.all([api('/nodes'), api('/nodes/join-tokens')]);
+  const actions = (n) => {
+    const b = (label, fn, done, cls = 'btn quiet') => h('button', { class: cls, type: 'button', onclick: act(fn, done) }, label);
+    const post = (a) => () => api(`/nodes/${enc(n.id)}/${a}`, { method: 'POST' });
+    const out = [];
+    if (n.status === 'online' || n.status === 'offline' || n.status === 'joining') out.push(b('Drain', post('drain'), 'Draining: no new deployments land here'));
+    if (n.status === 'draining') out.push(b('Enable', post('enable'), 'Enabled'));
+    if (n.status === 'disabled') out.push(b('Enable', post('enable'), 'Enabled'));
+    if ((n.deployments?.serving || 0) > 0) out.push(b('Evacuate', async () => {
+      if (!confirm(`Move the ${n.deployments.serving} deployments on ${n.name} to other nodes? The node is drained first.`)) return;
+      const x = await api(`/nodes/${enc(n.id)}/evacuate`, { method: 'POST' });
+      if (x.staying.length) alert(`${x.moving.length} moving. These stay, no other node can take them:\n` + x.staying.map(s => `${s.app} (${s.environment}): ${s.error}`).join('\n'));
+    }, 'Evacuating'));
+    if (n.status !== 'disabled') out.push(b('Disable', async () => {
+      if (!confirm(`Disable ${n.name}? Its tunnel closes and the apps it serves stop answering until they run elsewhere.`)) return;
+      await api(`/nodes/${enc(n.id)}/disable`, { method: 'POST' });
+    }, 'Disabled', 'btn quiet danger'));
+    if (n.status === 'disabled' || !n.connected) out.push(b('Remove', async () => {
+      if (!confirm(`Remove ${n.name}? It must join again with a new token to come back.`)) return;
+      await api(`/nodes/${enc(n.id)}`, { method: 'DELETE' });
+    }, 'Removed', 'btn quiet danger'));
+    out.push(b('Rename', async () => {
+      const name = prompt('A name for this node', n.name);
+      if (name == null || !name.trim()) return;
+      await api(`/nodes/${enc(n.id)}`, { method: 'PATCH', body: { name: name.trim() } });
+    }, 'Renamed'));
+    return out;
+  };
+  return h('section', null,
+    h('div', { class: 'head' }, h('div', null, h('h1', null, 'Nodes'),
+      h('p', { class: 'muted' }, 'Machines that run container apps. Draining keeps what runs but takes nothing new; evacuate moves what runs to other nodes; disabling closes the connection.'))),
+    r.nodes.length ? h('div', { class: 'scroll' }, h('table', null,
+      h('thead', null, h('tr', null, ...['Node', 'Status', 'Load', 'Last seen', ''].map(x => h('th', null, x)))),
+      h('tbody', null, r.nodes.map(n => h('tr', null,
+        h('td', null, h('b', null, n.name), h('div', { class: 'muted mono' }, n.id), n.address ? h('div', { class: 'muted' }, n.address) : null),
+        h('td', null, h('span', { class: 'pill' }, n.status), ' ', h('span', { class: 'muted' }, n.connected ? 'connected' : 'not connected')),
+        h('td', { class: 'muted' }, nodeLoad(n), n.version ? h('div', null, `brod-node ${n.version}`) : null),
+        h('td', { class: 'nowrap' }, n.last_seen_at ? when(n.last_seen_at) : 'never'),
+        h('td', { class: 'acts' }, ...actions(n))))))) : h('p', { class: 'empty' }, 'No nodes yet.'),
+    h('h2', null, 'Add a node'),
+    h('p', { class: 'muted' }, 'Make a join token, then run the command on the new machine within 15 minutes. It works once.'),
+    joinCommand ? h('pre', { class: 'snippet' }, joinCommand) : null,
+    h('button', { class: 'btn', type: 'button', onclick: act(async () => {
+      const x = await api('/nodes/join-tokens', { method: 'POST' });
+      joinCommand = x.command;
+      try { await navigator.clipboard.writeText(x.command); } catch {}
+    }, 'Join command made (copied)') }, 'Make a join command'),
+    t.tokens.length ? h('div', null, h('h2', null, 'Unused join tokens'),
+      h('ul', { class: 'list' }, t.tokens.map(k => h('li', null,
+        h('div', null, h('span', { class: 'mono' }, k.id + '…'), h('div', { class: 'muted' }, `by ${k.created_by || 'admin'}, expires ${when(k.expires_at)}`)),
+        h('button', { class: 'link danger', type: 'button', onclick: act(() => api(`/nodes/join-tokens/${enc(k.id)}`, { method: 'DELETE' }), 'Revoked') }, 'Revoke'))))) : null);
 }
 
 // ---------- audit ----------
