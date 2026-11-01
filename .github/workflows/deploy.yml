@@ -1,14 +1,15 @@
 # Deploys a released version to brod.sh once the Release workflow has pushed its
-# images, and sends a push notification through ntfy with the result.
+# images, then sends a push notification through ntfy with the result.
 # Release candidates (tags with a "-") are never deployed automatically.
 # Run it by hand (Actions → Deploy → Run workflow) to redeploy or roll back.
 #
+# The SSH key is pinned on the server to deploy/upgrade-ssh.sh (installed as
+# /opt/brod/upgrade-ssh.sh with /opt/brod/upgrade.sh): it can only upgrade to a version.
+#
 # Repository secrets:
-#   DEPLOY_HOST         server hostname or IP
-#   DEPLOY_USER         SSH user (in the docker group)
-#   DEPLOY_SSH_KEY      private key for that user (a deploy-only key)
+#   DEPLOY_HOST         server hostname
+#   DEPLOY_SSH_KEY      private deploy key (forced command on the server)
 #   DEPLOY_KNOWN_HOSTS  output of `ssh-keyscan <host>`
-#   DEPLOY_PATH         directory on the server holding docker-compose.yml and .env
 #   NTFY_TOPIC          ntfy.sh topic (keep it unguessable; the repo is public)
 name: Deploy
 
@@ -21,6 +22,10 @@ on:
       version:
         description: "Version to deploy, e.g. 0.2.0"
         required: true
+      force:
+        description: "Allow a downgrade / skip the compose-file hold"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -37,7 +42,7 @@ jobs:
        startsWith(github.event.workflow_run.head_branch, 'v') &&
        !contains(github.event.workflow_run.head_branch, '-'))
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     environment: production
     steps:
       - name: Version
@@ -49,37 +54,20 @@ jobs:
           [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "bad version: $INPUT"; exit 1; }
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v4
-        with:
-          ref: v${{ steps.v.outputs.version }}
-
-      - name: SSH setup
+      - name: Upgrade
         env:
           KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           KNOWN: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          VERSION: ${{ steps.v.outputs.version }}
+          FORCE: ${{ github.event.inputs.force == 'true' && 'force ' || '' }}
         run: |
           install -m 700 -d ~/.ssh
           printf '%s\n' "$KEY" > ~/.ssh/id_deploy && chmod 600 ~/.ssh/id_deploy
           printf '%s\n' "$KNOWN" > ~/.ssh/known_hosts
-
-      - name: Upgrade
-        env:
-          HOST: ${{ secrets.DEPLOY_HOST }}
-          USER: ${{ secrets.DEPLOY_USER }}
-          DIR: ${{ secrets.DEPLOY_PATH }}
-          VERSION: ${{ steps.v.outputs.version }}
-        run: |
-          ssh -i ~/.ssh/id_deploy -o BatchMode=yes "$USER@$HOST" \
-            "BROD_DIR='$DIR' bash -s -- '$VERSION'" < deploy/upgrade.sh 2>&1 | tee upgrade.log
-          exit "${PIPESTATUS[0]}"
-
-      - name: Public check
-        run: |
-          for _ in $(seq 1 12); do
-            curl -fsS https://brod.sh/healthz | grep -q '"ok": *true' && exit 0
-            sleep 5
-          done
-          exit 1
+          set -o pipefail
+          ssh -i ~/.ssh/id_deploy -o BatchMode=yes -o ServerAliveInterval=30 \
+            "root@$HOST" "$FORCE$VERSION" 2>&1 | tee upgrade.log
 
       - name: Notify
         if: always()
@@ -90,13 +78,18 @@ jobs:
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           [ -n "$TOPIC" ] || exit 0
+          log=$(cat upgrade.log 2>/dev/null || true)
           if [ "$STATUS" = success ]; then
-            title="brod.sh deployed v$VERSION"; tags=white_check_mark; prio=default
-          elif grep -q "rolled back to" upgrade.log 2>/dev/null; then
+            title="brod.sh is on v$VERSION"; tags=white_check_mark; prio=default
+          elif grep -q "HOLD" <<<"$log"; then
+            title="brod.sh v$VERSION held, needs you"; tags=pause_button; prio=high
+          elif grep -q "ROLLED BACK" <<<"$log"; then
             title="brod.sh v$VERSION failed, rolled back"; tags=warning; prio=high
           else
             title="brod.sh deploy v$VERSION failed"; tags=rotating_light; prio=urgent
           fi
-          body=$(tail -n 8 upgrade.log 2>/dev/null || echo "$STATUS")
+          body=$(grep -E "DEPLOYED|HOLD|FAILED|ROLLED BACK|ROLLBACK|backup:" <<<"$log" | tail -n 6)
+          [ -n "$body" ] || body=$(tail -n 6 <<<"$log")
+          [ -n "$body" ] || body="job $STATUS"
           curl -fsS -H "Title: $title" -H "Tags: $tags" -H "Priority: $prio" -H "Click: $RUN" \
             -d "$body" "https://ntfy.sh/$TOPIC" >/dev/null
