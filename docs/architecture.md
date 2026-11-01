@@ -67,6 +67,10 @@ fails. `deploy/Caddyfile` also answers 404 for `/_caddy/*` and `/_runtime/*` as 
 | `POST /_runtime/stopped` | the supervisor, before it restarts workerd | Same. Feeds `watchdog.rs`. |
 | `http://<token>.brod-preview.internal` (any path) | the preview sidecar's Chromium | Only on `Via::Internal`. The token is 32 hex characters, names one listing release and expires after two minutes (`preview.rs`). |
 | `/v1/admin/*` | the operator | Public, but needs `Authorization: Bearer <ADMIN_SECRET>` (`abuse.rs::serve`). |
+| `POST /_node/join` | `brod-node join`, or the node in Compose | Public. Needs an unused, unexpired one-time join token (only its SHA-256 is stored) and the node key's signature of it (`nodes.rs`). |
+| `POST /_node/challenge`, `GET /_node/connect` | `brod-node run` | Public on every listener (not internal-only, and Caddy forwards it with its Upgrade). Connect needs the node key's signature of a single-use challenge, and refuses unknown or disabled nodes. After `101` Brod is the HTTP/2 client over the connection (`nodes::request`). |
+| `POST /_node/heartbeat` | `brod-node run`, every 10 s | Public. Signed by the node key over method, path, node id, timestamp and body hash; refused beyond 60 s of skew or when replayed. |
+| `/v1/admin/nodes/*` | the operator | `Authorization: Bearer <ADMIN_SECRET>` (`nodes.rs::admin`): join tokens, list, drain, disable, enable, delete, and requests through a node's tunnel. |
 
 The runtime exposes its own endpoints on port 8081: `/_runtime/check`, `/_runtime/wipe`, `/_runtime/sizes`,
 `/_runtime/health`, and app requests. host.js refuses every request without the shared `BROD_RUNTIME_SECRET`
@@ -175,7 +179,7 @@ flowchart LR
 
 | Path | What it does |
 |---|---|
-| `/_brod/me` | The signed-in person, their app role and groups, and a signed identity token. 401 when nobody allowed is signed in. |
+| `/_brod/me` | The signed-in person, their app role and groups, and an identity JWT. 401 when nobody allowed is signed in. |
 | `/_brod/client.js` | A small `window.Brod` helper (`me`, `settings`, `signIn`, `signOut`). |
 | `/_brod/signin`, `/_brod/callback`, `/_brod/signout` | The hand-off above. |
 | `/_brod/password` | The password form for `password` mode. PBKDF2 runs on the blocking pool. 30 wrong tries per 15 minutes per app. |
@@ -184,6 +188,26 @@ flowchart LR
 | `/_brod/csp` | CSP violation reports. Accepted from anyone and stored per app, at most 200 hosts (`network.rs`). |
 | `/_brod/report` | Abuse report form. Only when `BROD_ABUSE_CHECKS` is on. |
 
+### Identity tokens (`server/src/identity.rs`)
+
+The identity token is a compact JWT signed with Ed25519 (`ring`), header `{alg: "EdDSA", typ: "JWT", kid}`. The key
+id is the RFC 7638 thumbprint of the public key. Claims: `iss` (`BROD_PUBLIC_URL`), `aud` (`brod:app:<app id>`),
+`sub`, `email`, `name`, `workspace {id, slug}`, `role`, `groups`, `iat`, `exp` (`iat + 300`) and a random `jti`
+(`gateway.rs::identity_for`). The API host serves the public key at `GET /.well-known/jwks.json` (cacheable for five
+minutes, any origin). `/_runtime/code` hands server code `BROD_ISSUER`, `BROD_APP_ID` and `BROD_IDENTITY_JWKS` as
+env values, after the app's secrets so an app cannot shadow them (secret names starting `BROD_` are refused anyway).
+
+### Open paths (`server/src/open_paths.rs`)
+
+An app may declare up to 10 `open_paths` in `brod.json`: exact paths or trailing `/*` prefixes, optionally limited to
+methods. They are kept per version (`versions.open_paths`); the paths a person approved are kept per app
+(`apps.open_paths`, migration `0020`). The gateway computes the open set as the served version's entries that an
+approved entry covers, and checks it after takedown, suspension and the version lookup, before the access decision.
+A request matches only if its path, decoded once, has no encoded slash or backslash, no dot segments and no second
+encoding; `//` collapses, and the app receives the matched path. A match is served without identity
+(`serve_version` with no visitor, so the `x-brod-*` headers and the session cookie are stripped) and with the network
+policy as usual. A paused app still shows its paused page.
+
 ### Forwarding to server code (`server/src/runtime.rs::dispatch`)
 
 Request headers going to the runtime:
@@ -191,8 +215,8 @@ Request headers going to the runtime:
 - Dropped: every `x-brod-*` header the visitor sent, `content-length`, hop-by-hop headers, and the app session cookie
   (`brod_session` and `__Host-brod_session`). Other cookies pass through.
 - Added for a signed-in visitor: `x-brod-user-id`, `x-brod-user-email`, `x-brod-user-name` (URI-encoded),
-  `x-brod-role`, `x-brod-groups` (comma-separated), and `x-brod-identity`, a token signed with HMAC-SHA256 under a
-  per-app key derived from `IDENTITY_SECRET` (`gateway.rs::identity_for`, 300-second lifetime).
+  `x-brod-role`, `x-brod-groups` (comma-separated), and `x-brod-identity`, an Ed25519 JWT for this app
+  (`gateway.rs::identity_for`, 300-second lifetime; see [Identity tokens](#identity-tokens-serversrcidentityrs)).
 - Added for the runtime only, stripped by host.js: `x-brod-runtime-secret`, `-app`, `-version`, `-rev` (secrets
   revision), and `-url` (the URL the app sees).
 
@@ -323,12 +347,12 @@ runtime gets them decrypted from `/_runtime/code` and passes them to the app as 
 
 ### Generated server secrets (`server/src/config.rs`)
 
-In self-hosted mode, any of `ADMIN_SECRET`, `IDENTITY_SECRET`, `SECRETS_KEY` and `BROD_RUNTIME_SECRET` that is not set
-is generated (32 random bytes, hex) and kept in `<data>/secrets.env`, mode 0600. The runtime secret is also written to
+In self-hosted mode, any of `ADMIN_SECRET`, `IDENTITY_SECRET`, `SECRETS_KEY`, `BROD_RUNTIME_SECRET` and
+`IDENTITY_SIGNING_KEY` (an Ed25519 seed) that is not set is generated (32 random bytes, hex) and kept in `<data>/secrets.env`, mode 0600. The runtime secret is also written to
 `BROD_RUNTIME_SECRET_FILE` (in Compose, the `runtime-secret` volume) for the runtime container. Back up `secrets.env` with the database: without `SECRETS_KEY`, app
-secrets cannot be decrypted, and without `IDENTITY_SECRET` all password cookies and identity tokens change. In hosted
-mode every secret must come from the environment, and weak values (under 32 characters or known examples) stop the
-server from starting.
+secrets cannot be decrypted, without `IDENTITY_SECRET` all password cookies change, and without `IDENTITY_SIGNING_KEY`
+the JWKS and every identity token change. In hosted mode every secret must come from the environment, and weak values
+(under 32 characters or known examples, including the test signing key) stop the server from starting.
 
 ## 6. Auth
 
@@ -405,11 +429,14 @@ app must.
 ### Confirmations for agent actions
 
 When an agent (token caller) asks for something that widens access, nothing changes. Brod stores a `confirmations` row
-and returns a `confirm_url` (`control::needs_confirmation`, 24-hour expiry). This applies to:
+and returns a `confirm_url` (`control::needs_confirmation`, 24-hour expiry). The kinds are one list,
+`control::NEEDS_A_PERSON`, and `needs_confirmation` refuses any kind not on it:
 
-- `set_access` that moves to a wider mode, adds grants, or sets a new password (`control::set_access`);
-- `invite` (`control::invite_from`);
-- deleting an app (`control::delete_app`).
+- `access`: `set_access` that moves to a wider mode, adds grants, or sets a new password (`control::set_access`);
+- `invite`: `invite` (`control::invite_from`);
+- `delete`: deleting an app (`control::delete_app`);
+- `open_paths`: approving open paths, from `set_open_paths` or from a deploy that declares paths nobody approved
+  (`control::set_open_paths`, `control::deploy`). The deploy itself goes ahead with those paths closed.
 
 A person opens `/confirm/<id>`, signs in, and confirms with a same-origin POST. The change then runs as that person, so
 it needs their role (`control::confirm`). Narrowing access, deploying (including straight to production), setting
@@ -536,6 +563,8 @@ log mode are plain text on purpose: people copy from them.
 | `network.rs` | Outbound host declarations, CSP, and undeclared-host reports. |
 | `secrets.rs` | AES-256-GCM encryption of app secrets. |
 | `settings.rs` | Per-app settings declared in `brod.json`. |
+| `identity.rs` | The Ed25519 identity key, JWT signing and verification, the JWKS, and `get_auth_integration`. |
+| `open_paths.rs` | Open paths declared in `brod.json`: validation, approval coverage and request matching. |
 | `db.rs` | SQLite and Postgres behind one SQLite-dialect interface; migrations; backup. |
 | `copy.rs` | `brod migrate-to-postgres`. |
 | `storage/mod.rs`, `fs.rs`, `s3.rs` | App file storage in a folder or an S3-compatible bucket. |
@@ -557,7 +586,7 @@ log mode are plain text on purpose: people copy from them.
 | `model.rs` | Shared types, plans and limits. |
 | `problem.rs` | The error type and its JSON shape. |
 | `state.rs` | Shared state built at start. |
-| `util.rs` | Ids, hashing, signing, cookies, URI encoding, slugs. |
+| `util.rs` | Ids, hashing, HMAC signing, cookies, URI encoding, slugs. |
 
 Outside `server/`:
 

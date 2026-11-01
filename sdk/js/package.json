@@ -1,0 +1,84 @@
+{
+  "name": "@brod/auth",
+  "version": "0.1.0",
+  "description": "Read the person Brod signed in: verify the x-brod-identity JWT in Next.js, Node and Workers.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/brodsh/brod.git",
+    "directory": "sdk/js"
+  },
+  "homepage": "https://github.com/brodsh/brod/tree/main/sdk/js#readme",
+  "keywords": [
+    "brod",
+    "auth",
+    "jwt",
+    "identity",
+    "nextjs",
+    "workers"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./next": {
+      "import": {
+        "types": "./dist/next.d.ts",
+        "default": "./dist/next.js"
+      },
+      "require": {
+        "types": "./dist/next.d.cts",
+        "default": "./dist/next.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:interop": "node test/interop/brod-interop.mjs",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "jose": "6.2.12"
+  },
+  "peerDependencies": {
+    "next": ">=14"
+  },
+  "peerDependenciesMeta": {
+    "next": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "esbuild": "0.27.2",
+    "next": "16.4.3",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "tsup": "8.5.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12"
+  }
+}

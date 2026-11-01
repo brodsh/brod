@@ -3,6 +3,7 @@
 
 SERVER := --manifest-path server/Cargo.toml
 SUPERVISOR := --manifest-path deploy/runtime/supervisor/Cargo.toml
+NODE := --manifest-path node/Cargo.toml
 # The admin page is read from here on every request in `make dev`, so editing it needs only a browser reload.
 BROD_DEV_ASSETS ?= server/src
 DEV_ENV := BROD_DATABASE_URL=postgres://brod@127.0.0.1:5432/brod BROD_ADMIN_EMAIL=dev@example.com \
@@ -33,16 +34,20 @@ dev-runtime: ## Run the server-app runtime next to `make dev` (in a second termi
 fmt: ## Format the Rust code
 	cargo fmt $(SERVER)
 	cargo fmt $(SUPERVISOR)
+	cargo fmt $(NODE)
 
 lint: ## Check formatting and run clippy with warnings as errors
 	cargo fmt $(SERVER) --check
 	cargo fmt $(SUPERVISOR) --check
+	cargo fmt $(NODE) --check
 	cargo clippy $(SERVER) --all-targets --locked -- -D warnings
 	cargo clippy $(SUPERVISOR) --all-targets --locked -- -D warnings
+	cargo clippy $(NODE) --all-targets --locked -- -D warnings
 
 test: ## Rust unit tests (set BROD_TEST_DATABASE_URL to run them on Postgres too)
 	cargo test $(SERVER) --locked
 	cargo test $(SUPERVISOR) --locked
+	cargo test $(NODE) --locked
 
 test-node: ## Node unit tests
 	npm ci --silent
@@ -52,6 +57,7 @@ e2e: ## The end-to-end suites against a release build
 	npm ci --silent
 	npm run e2e:rust
 	npm run e2e:self-hosted
+	npm run e2e:nodes
 
 check: lint test test-node ## What CI checks first: lint, unit tests, Node tests, docs in sync
 	node scripts/config-docs.mjs --check

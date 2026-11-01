@@ -133,6 +133,27 @@ async fn run(cfg: Config) {
         }
         Err(e) => tracing::warn!("first-start setup failed: {}", e.message),
     }
+    // Operators (operator.rs): BROD_ADMIN_EMAIL, or self-hosted the first workspace's admin. Runs after setup, which may
+    // just have made that person.
+    let c3 = st.cfg.clone();
+    match st.db.call(move |c| brod::operator::bootstrap(c, &c3)).await {
+        Ok(0) => tracing::info!("no operator yet: set BROD_ADMIN_EMAIL, or the admin API takes ADMIN_SECRET"),
+        Ok(n) => tracing::info!("{n} operator(s)"),
+        Err(e) => tracing::warn!("operator bootstrap failed: {}", e.message),
+    }
+    // Instance settings (instance.rs): read before the first request, then kept fresh, so code that cannot wait for
+    // the database (st.settings.last()) sees an operator's change from another replica within CACHE_TTL.
+    brod::instance::current(&st).await;
+    {
+        let st = st.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(brod::instance::CACHE_TTL);
+            loop {
+                tick.tick().await;
+                brod::instance::current(&st).await;
+            }
+        });
+    }
     if let Some(tls) = st.cfg.tls.clone()
         && let Err(e) = brod::tls::start(st.clone(), tls).await
     {
@@ -167,8 +188,75 @@ async fn run(cfg: Config) {
             let mut tick = tokio::time::interval(Duration::from_secs(3600));
             loop {
                 tick.tick().await;
-                if let Err(e) = st.db.call(|c| brod::analytics::purge(c)).await {
+                if let Err(e) = st
+                    .db
+                    .call({
+                        let cfg = st.cfg.clone();
+                        move |c| brod::analytics::purge(c, &cfg)
+                    })
+                    .await
+                {
                     tracing::warn!("could not delete old analytics: {}", e.message);
+                }
+            }
+        });
+    }
+    // Nodes (nodes.rs): a join token for the node next to Brod, and nodes that went quiet marked offline.
+    brod::nodes::write_local_join_token(&st).await;
+    {
+        let st = st.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(2));
+            loop {
+                tick.tick().await;
+                if let Err(e) = brod::nodes::sweep(&st).await {
+                    tracing::warn!("could not check nodes: {}", e.message);
+                }
+            }
+        });
+    }
+    // Container apps (deployments.rs): what was in progress when Brod stopped has failed; deployments follow the apps'
+    // pointers every few seconds; the registry keeps only recent images (pruned nightly).
+    if let Err(e) = brod::deployments::recover(&st).await {
+        tracing::warn!("could not mark interrupted deployments: {}", e.message);
+    }
+    {
+        let st = st.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(3));
+            loop {
+                tick.tick().await;
+                if let Err(e) = brod::deployments::reconcile(&st).await {
+                    tracing::warn!("could not check deployments: {}", e.message);
+                }
+            }
+        });
+    }
+    if st.registry.is_some() {
+        let st = st.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(300)).await;
+            let mut tick = tokio::time::interval(Duration::from_secs(24 * 3600));
+            loop {
+                tick.tick().await;
+                match brod::deployments::prune_images(&st).await {
+                    Ok(0) => {}
+                    Ok(n) => tracing::info!("deleted {n} old images from the registry; run `registry garbage-collect` to free their space"),
+                    Err(e) => tracing::warn!("could not prune old images: {}", e.message),
+                }
+            }
+        });
+    }
+    // Apps' managed databases (databases.rs, backups.rs): sizes, nightly backups, weekly restore drills, retention.
+    if st.cfg.apps_db.is_some() {
+        let st = st.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(120)).await;
+            let mut tick = tokio::time::interval(Duration::from_secs(600));
+            loop {
+                tick.tick().await;
+                if let Err(e) = brod::backups::tick(&st).await {
+                    tracing::warn!("could not look after app databases: {}", e.message);
                 }
             }
         });

@@ -2,6 +2,7 @@
 // Server apps on the self-hosted runtime (Rust server + workerd sidecar): the cases of test/server.test.ts, over HTTP.
 // Run by scripts/e2e-rust.mjs after scripts/e2e.mjs when the runtime is on. Usage: node scripts/e2e-server-apps.mjs [api origin]
 import http from 'node:http';
+import { createLocalJWKSet, createRemoteJWKSet, decodeProtectedHeader, jwtVerify } from 'jose';
 
 const API = process.argv[2] ?? 'http://localhost:8787';
 const api = new URL(API);
@@ -58,7 +59,9 @@ export default {
       const res = await env.FILES.get('notes/a.txt');
       return new Response(await res.text() + ' ' + (await env.FILES.list('notes/')).length);
     }
-    if (url.pathname === '/api/me') return Response.json({ email: request.headers.get('x-brod-user-email'), role: request.headers.get('x-brod-role'), cookie: request.headers.get('cookie') });
+    if (url.pathname === '/api/me') return Response.json({ email: request.headers.get('x-brod-user-email'), role: request.headers.get('x-brod-role'), cookie: request.headers.get('cookie'),
+      identity: request.headers.get('x-brod-identity'), path: url.pathname });
+    if (url.pathname === '/api/env') return Response.json({ issuer: env.BROD_ISSUER, app: env.BROD_APP_ID, jwks: env.BROD_IDENTITY_JWKS });
     if (url.pathname === '/api/secret') return new Response(env.API_TOKEN ?? 'none');
     if (url.pathname === '/api/boom') throw new Error('kaboom');
     if (request.method === 'POST') return new Response('posted ' + await request.text());
@@ -69,7 +72,7 @@ export default {
 const admin = new Browser(`server-${run}@acme.test`);
 const start = await admin.go('/auth/start', { json: { email: admin.email } });
 await admin.go('/auth/verify', { form: { token: new URL(JSON.parse(start.body).dev_link).searchParams.get('token') } });
-await admin.api('/v1/workspaces', { json: { name: `Servers ${run}`, accept_terms: true } });
+const W = (await admin.api('/v1/workspaces', { json: { name: `Servers ${run}`, accept_terms: true } })).body.workspace;
 const deploy = async (o) => (await admin.api('/v1/deploys', { json: o }));
 
 const d = await deploy({ name: 'Counter', files: [{ path: '_worker.js', content: WORKER }, { path: 'logo.txt', content: 'static file' }] });
@@ -89,6 +92,57 @@ check('the person arrives as headers; forged ones and the session cookie are str
 const other = await deploy({ name: 'Other', files: [{ path: '_worker.js', content: WORKER }] });
 await admin.open(other.body.url + '/');
 check('each app has its own database', JSON.parse((await admin.go(other.body.url + '/api/count')).body).count === 1);
+
+// ---------- the identity JWT, verified the way an outside service would ----------
+
+const jwks = createRemoteJWKSet(new URL(`${API}/.well-known/jwks.json`));
+const keys = await (await fetch(`${API}/.well-known/jwks.json`)).json();
+check('the API host publishes one Ed25519 key as a JWKS', keys.keys?.length === 1 && keys.keys[0].kty === 'OKP' && keys.keys[0].crv === 'Ed25519' && !!keys.keys[0].kid && !keys.keys[0].d, JSON.stringify(keys));
+const appEnv = JSON.parse((await admin.go(url + '/api/env')).body), otherEnv = JSON.parse((await admin.go(other.body.url + '/api/env')).body);
+check('server code learns the issuer, its app id and the JWKS from env', appEnv.issuer === API && /^app_/.test(appEnv.app) && JSON.parse(appEnv.jwks).keys[0].kid === keys.keys[0].kid, JSON.stringify(appEnv));
+const meToken = JSON.parse((await admin.go(url + '/_brod/me')).body).token;
+const verified = await jwtVerify(meToken, jwks, { issuer: API, audience: `brod:app:${appEnv.app}`, algorithms: ['EdDSA'] }).catch(e => ({ error: e.message }));
+check('the token from /_brod/me verifies with jose against /.well-known/jwks.json', verified.payload?.email === admin.email && verified.payload.workspace?.slug === W
+  && verified.payload.exp - verified.payload.iat === 300 && decodeProtectedHeader(meToken).alg === 'EdDSA', JSON.stringify(verified));
+const wrongAud = await jwtVerify(meToken, jwks, { issuer: API, audience: `brod:app:${otherEnv.app}` }).then(() => 'accepted', e => e.code);
+check('another app\'s audience refuses it', wrongAud === 'ERR_JWT_CLAIM_VALIDATION_FAILED', wrongAud);
+const headerToken = JSON.parse((await admin.go(url + '/api/me')).body).identity;
+const fromHeader = await jwtVerify(headerToken, createLocalJWKSet(JSON.parse(appEnv.jwks)), { issuer: appEnv.issuer, audience: `brod:app:${appEnv.app}` }).catch(e => ({ error: e.message }));
+check('the x-brod-identity header verifies offline with the JWKS from env', fromHeader.payload?.sub === verified.payload?.sub, JSON.stringify(fromHeader));
+
+// ---------- open paths: an agent asks, a person confirms ----------
+
+const agentToken = (await admin.api('/v1/tokens', { json: { name: 'hooks-agent' } })).body.token;
+const asAgent = async (path, o = {}) => {
+  const r = await send(`${API}${path}`, { method: o.method ?? 'POST', headers: { authorization: `Bearer ${agentToken}`, 'content-type': 'application/json' }, body: o.json ? JSON.stringify(o.json) : undefined });
+  return { status: r.status, body: r.body ? JSON.parse(r.body) : null };
+};
+const OPEN = JSON.stringify({ open_paths: [{ path: '/api/me', methods: ['GET'] }, '/hooks/*'] });
+const hooks = await asAgent('/v1/deploys', { json: { name: 'Hooks', files: [{ path: '_worker.js', content: WORKER }, { path: 'brod.json', content: OPEN }] } });
+check('an agent deploy declaring open paths goes live, with a confirm_url for the paths', hooks.status === 201 && hooks.body.open_paths?.pending?.length === 2
+  && hooks.body.open_paths.open.length === 0 && hooks.body.confirm_url?.includes('/confirm/cf_'), JSON.stringify(hooks.body));
+const hurl = hooks.body.url, stranger = new Browser('');
+const closed = await stranger.go(hurl + '/api/me');
+check('until a person confirms, the paths ask visitors to sign in', closed.status === 302 && closed.headers.location.startsWith(`${API}/auth/app`), `${closed.status} ${closed.headers.location}`);
+// A free workspace less than a day old cannot open apps to outsiders until the operator trusts it (as in e2e.mjs).
+await send(`${API}/v1/admin/workspaces/${W}/trust`, { method: 'POST', headers: { authorization: `Bearer ${process.env.ADMIN_SECRET ?? 'dev-admin-secret'}`, 'content-type': 'application/json' }, body: '{}' });
+const confirmed = await admin.go(new URL(hooks.body.confirm_url).pathname, { form: { decision: 'confirm' } });
+check('a person confirms the open paths', confirmed.status === 200 && confirmed.body.includes('done'), `${confirmed.status} ${confirmed.body.slice(0, 300)}`);
+const openMe = await stranger.go(hurl + '/api/me', { headers: { 'x-brod-identity': 'forged', 'x-brod-user-email': 'evil@x.test', cookie: 'brod_session=forged' } });
+const openBody = openMe.status === 200 ? JSON.parse(openMe.body) : {};
+check('then the path answers anonymously, with no identity and forged headers stripped', openMe.status === 200 && openBody.identity === null && openBody.email === null
+  && !(openBody.cookie ?? '').includes('brod_session'), `${openMe.status} ${openMe.body.slice(0, 200)}`);
+check('a prefix path is open for every method it allows', (await stranger.go(hurl + '/hooks/stripe', { method: 'POST', body: 'evt' })).body === 'posted evt');
+const stillClosed = [['POST', '/api/me'], ['GET', '/api/mex'], ['GET', '/hooksx'], ['GET', '/hooks/../api/count'], ['GET', '/hooks%2f..%2fapi/count'], ['GET', '/api%2fme'], ['GET', '/']];
+const leaks = [];
+for (const [method, path] of stillClosed) { const r = await stranger.go(hurl + path, { method }); if (r.status < 300) leaks.push(`${method} ${path} ${r.status}`); }
+check('everything else stays closed: other methods, look-alikes, dot segments and encoded slashes', leaks.length === 0, leaks.join(', '));
+const st = (await admin.api(`/v1/apps/${hooks.body.app}`)).body.open_paths;
+check('get_status shows what is approved and open', st?.approved?.length === 2 && st.live?.open?.length === 2 && st.awaiting_confirmation?.length === 0, JSON.stringify(st));
+const narrowed = await asAgent(`/v1/apps/${hooks.body.app}/open-paths`, { method: 'PUT', json: { open_paths: ['/hooks/*'] } });
+check('an agent narrows open paths at once', narrowed.status === 200 && !narrowed.body.needs_confirmation && (await stranger.go(hurl + '/api/me')).status === 302, JSON.stringify(narrowed.body));
+const widen = await asAgent(`/v1/apps/${hooks.body.app}/open-paths`, { method: 'PUT', json: { open_paths: ['/hooks/*', '/api/me'] } });
+check('but widening them again waits for a person', widen.body?.needs_confirmation === true && (await stranger.go(hurl + '/api/me')).status === 302, JSON.stringify(widen.body));
 
 const boom = await admin.go(url + '/api/boom');
 check('a request that throws gets a plain error page, not the exception', boom.status === 502 && !boom.body.includes('kaboom'));

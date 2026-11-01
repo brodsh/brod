@@ -29,6 +29,8 @@ pub struct Config {
     pub api_host: String,
     pub admin_secret: String,
     pub identity_secret: String,
+    /// IDENTITY_SIGNING_KEY: the Ed25519 key that signs the identity tokens apps receive (identity.rs).
+    pub identity_key: crate::identity::IdentityKey,
     pub secrets_key: String,
     pub dev_mode: bool,
     pub resend_api_key: Option<String>,
@@ -43,6 +45,9 @@ pub struct Config {
     /// BROD_ABUSE_CHECKS: the deploy-time phishing scan, the public report link in apps and the hold on new
     /// workspaces (abuse.rs, scan.rs). Default on when hosted, off when self-hosted.
     pub abuse_checks: bool,
+    /// Instance settings (instance.rs) whose environment variable is set, parsed: key to value. These win over the
+    /// database, and the console shows them as locked.
+    pub settings_env: std::collections::BTreeMap<&'static str, serde_json::Value>,
     /// SMTP_URL: send email through an SMTP server (email.rs), for example smtps://user:pass@smtp.example.com.
     pub smtp_url: Option<String>,
     /// Secrets that were not in the environment and came from (or were written to) `<data>`/secrets.env instead.
@@ -77,6 +82,53 @@ pub struct Config {
     pub network: NetworkPolicy,
     /// DEV_MODE only: a smaller free plan storage (DEV_FREE_STORAGE_MB), so tests can run out of it.
     pub dev_free_storage_mb: Option<i64>,
+    /// BROD_CONTAINERS: who may deploy container apps (deployments.rs). Default trusted self-hosted, off hosted.
+    pub containers: Containers,
+    /// BROD_REGISTRY_URL and the key Brod signs registry tokens with (registry.rs). None: no registry, so no containers.
+    pub registry: Option<RegistryConfig>,
+    /// BROD_APPS_DATABASE_URL: apps-postgres, where apps' managed databases live (databases.rs). None: none.
+    pub apps_db: Option<AppsDbConfig>,
+}
+
+/// The admin connection to apps-postgres: a server of its own, never Brod's database, reached only by Brod.
+#[derive(Clone, Debug)]
+pub struct AppsDbConfig {
+    /// A postgres:// URL; a Unix socket folder goes in the host, percent-encoded (postgres://brod_admin@%2Frun%2Fpg/postgres).
+    pub url: String,
+    /// APPS_DATABASE_PASSWORD, when the URL carries none (self-hosted, generated into secrets.env).
+    pub password: Option<String>,
+    /// BROD_PG_BIN_DIR: where pg_dump and pg_restore are, matching the server's major version. Default: the PATH.
+    pub bin_dir: Option<PathBuf>,
+}
+
+/// BROD_CONTAINERS. `Off`: container apps are refused. `Trusted`: every workspace is trusted, so an image may even run
+/// as root. `On`: containers for everyone, never as root.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Containers {
+    Off,
+    Trusted,
+    On,
+}
+
+impl Containers {
+    pub fn name(self) -> &'static str {
+        match self {
+            Containers::Off => "off",
+            Containers::Trusted => "trusted",
+            Containers::On => "on",
+        }
+    }
+}
+
+/// Brod's image registry (CNCF Distribution with token auth). Only Brod talks to it.
+#[derive(Clone, Debug)]
+pub struct RegistryConfig {
+    /// Where the registry listens, for example http://registry:5000. Never published.
+    pub url: String,
+    /// REGISTRY_SIGNING_KEY: an ECDSA P-256 key, PKCS#8 in base64, that signs registry tokens.
+    pub key_pkcs8: Vec<u8>,
+    /// BROD_REGISTRY_CERT_FILE: where Brod writes the certificate of that key for the registry's rootcertbundle.
+    pub cert_file: PathBuf,
 }
 
 /// BROD_NETWORK. `Log` (the default) lets every request through and records the undeclared ones, so makers can fix
@@ -149,6 +201,32 @@ impl Config {
                 }
             }
         }
+        // The registry key is not one of GENERATED (it is a PKCS#8 key, not 32 hex bytes): self-hosted, it is added to
+        // secrets.env the first time a registry is configured.
+        if !hosted && set(&vars, "BROD_REGISTRY_URL") && !set(&vars, "REGISTRY_SIGNING_KEY") {
+            let key = registry_key_from_secrets(&data_dir)?;
+            vars.insert("REGISTRY_SIGNING_KEY".into(), key);
+            generated.push("REGISTRY_SIGNING_KEY".into());
+        }
+        // The apps-postgres admin password, like the registry key, is made the first time apps-postgres is configured,
+        // and written to BROD_APPS_DATABASE_PASSWORD_FILE for the database container's POSTGRES_PASSWORD_FILE.
+        if !hosted && set(&vars, "BROD_APPS_DATABASE_URL") && !set(&vars, "APPS_DATABASE_PASSWORD") {
+            let pw = kept_secret(&data_dir, "APPS_DATABASE_PASSWORD", || crate::util::random_id("", 32))?;
+            vars.insert("APPS_DATABASE_PASSWORD".into(), pw);
+            generated.push("APPS_DATABASE_PASSWORD".into());
+        }
+        if let (Some(path), Some(pw)) = (
+            vars.get("BROD_APPS_DATABASE_PASSWORD_FILE").map(|p| p.trim()).filter(|p| !p.is_empty()),
+            vars.get("APPS_DATABASE_PASSWORD").map(|p| p.trim()).filter(|p| !p.is_empty()),
+        ) {
+            let path = PathBuf::from(path);
+            if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+                std::fs::create_dir_all(dir).map_err(|e| ConfigError(format!("Could not create {}: {e}", dir.display())))?;
+            }
+            // Readable by others: the Postgres image reads it as its own user, not Brod's. The volume it is in holds
+            // nothing else and is mounted only by Brod and apps-postgres.
+            write_shared(&path, pw).map_err(|e| ConfigError(format!("Could not write {}: {e}", path.display())))?;
+        }
         let mut cfg = Config::from_vars(&vars)?;
         cfg.generated_secrets = generated;
         // The runtime sidecar reads the secret Brod uses from a file, so Compose needs no copy of it: BROD_RUNTIME_SECRET_FILE
@@ -193,7 +271,7 @@ impl Config {
         if hosted && get("APPS_DOMAIN").is_none() {
             need.push("APPS_DOMAIN");
         }
-        need.extend(["ADMIN_SECRET", "IDENTITY_SECRET"].into_iter().filter(|k| get(k).is_none()));
+        need.extend(["ADMIN_SECRET", "IDENTITY_SECRET", "IDENTITY_SIGNING_KEY"].into_iter().filter(|k| get(k).is_none()));
         // Hosted, app secrets must be readable after every restart, so their key cannot be left to chance.
         if hosted && get("SECRETS_KEY").is_none() {
             need.push("SECRETS_KEY");
@@ -209,6 +287,7 @@ impl Config {
                 need.join(", ")
             )));
         }
+        let identity_key = crate::identity::IdentityKey::parse(&get("IDENTITY_SIGNING_KEY").unwrap_or_default()).map_err(ConfigError)?;
         let api_origin = public_url.unwrap_or_default().trim_end_matches('/').to_string();
         if !(api_origin.starts_with("http://") || api_origin.starts_with("https://")) {
             return Err(ConfigError(format!("BROD_PUBLIC_URL must start with http:// or https://, not {api_origin:?}.")));
@@ -339,6 +418,9 @@ impl Config {
             }
             warnings.push(msg);
         }
+        if hosted && get("DEV_MODE").as_deref() != Some("1") && get("IDENTITY_SIGNING_KEY").as_deref() == Some(TEST_SIGNING_KEY) {
+            return Err(ConfigError("IDENTITY_SIGNING_KEY is the published test key. Generate one: openssl rand -hex 32".into()));
+        }
         let admin_email = get("BROD_ADMIN_EMAIL").map(|e| crate::util::norm_email(&e));
         if let Some(e) = &admin_email
             && !crate::util::is_email(e)
@@ -356,7 +438,61 @@ impl Config {
                 ));
             }
         }
+        let containers = match get("BROD_CONTAINERS").as_deref() {
+            None => {
+                if hosted {
+                    Containers::Off
+                } else {
+                    Containers::Trusted
+                }
+            }
+            Some("off") | Some("0") => Containers::Off,
+            Some("trusted") => Containers::Trusted,
+            Some("on") | Some("1") => Containers::On,
+            Some(other) => {
+                return Err(ConfigError(format!(
+                    "BROD_CONTAINERS must be \"off\", \"trusted\" (every workspace is trusted, the self-hosted default) or \"on\", not {other:?}."
+                )));
+            }
+        };
+        let registry = match get("BROD_REGISTRY_URL") {
+            None => None,
+            Some(url) => {
+                if !(url.starts_with("http://") || url.starts_with("https://")) {
+                    return Err(ConfigError(
+                        "BROD_REGISTRY_URL must be an http:// or https:// address, such as http://registry:5000.".into(),
+                    ));
+                }
+                let key = get("REGISTRY_SIGNING_KEY")
+                    .ok_or_else(|| ConfigError("BROD_REGISTRY_URL needs REGISTRY_SIGNING_KEY (generated self-hosted).".into()))?;
+                use base64::Engine;
+                let key_pkcs8 = base64::engine::general_purpose::STANDARD
+                    .decode(key.as_bytes())
+                    .ok()
+                    .filter(|k| crate::registry::check_key(k))
+                    .ok_or_else(|| ConfigError("REGISTRY_SIGNING_KEY must be an ECDSA P-256 PKCS#8 key in base64.".into()))?;
+                let cert_file = get("BROD_REGISTRY_CERT_FILE").map(PathBuf::from).unwrap_or_else(|| data_dir.join("registry-token.crt"));
+                Some(RegistryConfig { url: url.trim_end_matches('/').to_string(), key_pkcs8, cert_file })
+            }
+        };
+        let apps_db = match get("BROD_APPS_DATABASE_URL") {
+            None => None,
+            Some(url) => {
+                if !(url.starts_with("postgres://") || url.starts_with("postgresql://")) || url.parse::<postgres::Config>().is_err() {
+                    return Err(ConfigError(
+                        "BROD_APPS_DATABASE_URL must be a postgres:// address, such as postgres://brod_admin@apps-postgres/postgres."
+                            .into(),
+                    ));
+                }
+                Some(AppsDbConfig { url, password: get("APPS_DATABASE_PASSWORD"), bin_dir: get("BROD_PG_BIN_DIR").map(PathBuf::from) })
+            }
+        };
+        let settings_env = crate::instance::from_env(&get).map_err(ConfigError)?;
         Ok(Config {
+            apps_db,
+            settings_env,
+            containers,
+            registry,
             mode,
             generated_secrets: Vec::new(),
             warnings,
@@ -371,6 +507,7 @@ impl Config {
             api_host,
             admin_secret: get("ADMIN_SECRET").unwrap_or_default(),
             identity_secret: get("IDENTITY_SECRET").unwrap_or_default(),
+            identity_key,
             secrets_key: get("SECRETS_KEY").unwrap_or_default(),
             dev_mode: get("DEV_MODE").as_deref() == Some("1"),
             resend_api_key: get("RESEND_API_KEY"),
@@ -406,6 +543,7 @@ impl Config {
             ("API_ORIGIN", "http://localhost:8787"),
             ("ADMIN_SECRET", "test-admin-secret"),
             ("IDENTITY_SECRET", "test-identity-secret"),
+            ("IDENTITY_SIGNING_KEY", TEST_SIGNING_KEY),
             ("SECRETS_KEY", "test-secrets-key-0123456789"),
             ("DEV_MODE", "1"),
         ]
@@ -416,8 +554,12 @@ impl Config {
     }
 }
 
-/// The secrets a self-hosted Brod makes for itself when the environment does not set them.
-pub const GENERATED: [&str; 4] = ["ADMIN_SECRET", "IDENTITY_SECRET", "SECRETS_KEY", "BROD_RUNTIME_SECRET"];
+/// The secrets a self-hosted Brod makes for itself when the environment does not set them. Each is 32 random bytes in
+/// hex, which is also the form IDENTITY_SIGNING_KEY takes (an Ed25519 seed).
+pub const GENERATED: [&str; 5] = ["ADMIN_SECRET", "IDENTITY_SECRET", "SECRETS_KEY", "BROD_RUNTIME_SECRET", "IDENTITY_SIGNING_KEY"];
+
+/// An identity signing key for tests (the RFC 8032 test key). Never use it anywhere else.
+pub const TEST_SIGNING_KEY: &str = "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60";
 
 /// Values that must never protect a real server: the examples in Brod's own docs and tests, and the usual guesses.
 fn is_weak_secret(v: &str) -> bool {
@@ -448,6 +590,38 @@ fn load_or_create_secrets(data_dir: &std::path::Path) -> Result<HashMap<String, 
     Ok(out)
 }
 
+/// REGISTRY_SIGNING_KEY from `<data>`/secrets.env, appended there with a fresh key when it is missing.
+fn registry_key_from_secrets(data_dir: &std::path::Path) -> Result<String, ConfigError> {
+    kept_secret(data_dir, "REGISTRY_SIGNING_KEY", crate::registry::new_key)
+}
+
+/// `name` from `<data>`/secrets.env, appended there with a fresh value from `fresh` when it is missing.
+fn kept_secret(data_dir: &std::path::Path, name: &str, fresh: impl FnOnce() -> String) -> Result<String, ConfigError> {
+    let path = data_dir.join("secrets.env");
+    let fail = |e: std::io::Error| ConfigError(format!("Could not keep {name} in {}: {e}", path.display()));
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(fail(e)),
+    };
+    if let Some(v) = text.lines().filter_map(|l| l.split_once('=')).find(|(k, _)| k.trim() == name).map(|(_, v)| v.trim()) {
+        return Ok(v.to_string());
+    }
+    let key = fresh();
+    let mut text = if text.is_empty() {
+        String::from("# Generated by Brod on first start. Keep this file private; back it up with the database.\n")
+    } else {
+        text
+    };
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&format!("{name}={key}\n"));
+    std::fs::create_dir_all(data_dir).map_err(fail)?;
+    write_private(&path, &text).map_err(fail)?;
+    Ok(key)
+}
+
 /// Write a file only its owner can read.
 fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
     let mut opts = std::fs::OpenOptions::new();
@@ -455,6 +629,14 @@ fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
     std::io::Write::write_all(&mut opts.open(path)?, text.as_bytes())
+}
+
+/// Write `text` to `path` readable by everyone (0644), for a file another container reads as a different user.
+fn write_shared(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    std::fs::write(path, text)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o644))?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -465,12 +647,17 @@ mod tests {
     fn names_missing_variables_without_values() {
         let vars = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<HashMap<_, _>>();
         let err = Config::from_vars(&vars(&[("BROD_MODE", "hosted"), ("API_ORIGIN", "https://brod.example.test/")])).unwrap_err();
-        assert!(err.0.contains("APPS_DOMAIN, ADMIN_SECRET, IDENTITY_SECRET, SECRETS_KEY"), "{}", err.0);
-        // Self-hosted needs only the two secrets (from_env generates them), and defaults to this machine.
+        assert!(err.0.contains("APPS_DOMAIN, ADMIN_SECRET, IDENTITY_SECRET, IDENTITY_SIGNING_KEY, SECRETS_KEY"), "{}", err.0);
+        // Self-hosted needs only the three secrets (from_env generates them), and defaults to this machine.
         let err = Config::from_vars(&vars(&[])).unwrap_err();
-        assert!(err.0.contains("Set these environment variables: ADMIN_SECRET, IDENTITY_SECRET."), "{}", err.0);
-        let local =
-            Config::from_vars(&vars(&[("ADMIN_SECRET", "a"), ("IDENTITY_SECRET", "b"), ("BROD_LISTEN", "127.0.0.1:9000")])).unwrap();
+        assert!(err.0.contains("Set these environment variables: ADMIN_SECRET, IDENTITY_SECRET, IDENTITY_SIGNING_KEY."), "{}", err.0);
+        let local = Config::from_vars(&vars(&[
+            ("ADMIN_SECRET", "a"),
+            ("IDENTITY_SECRET", "b"),
+            ("IDENTITY_SIGNING_KEY", TEST_SIGNING_KEY),
+            ("BROD_LISTEN", "127.0.0.1:9000"),
+        ]))
+        .unwrap();
         assert_eq!((local.api_origin.as_str(), local.apps_domain.as_str()), ("http://localhost:9000", "localhost:9000"));
         assert_eq!(local.mode, Mode::SelfHosted);
         assert!(!local.marketplace && !local.abuse_checks && local.auto_migrate);
@@ -479,6 +666,7 @@ mod tests {
         let named = Config::from_vars(&vars(&[
             ("ADMIN_SECRET", "a"),
             ("IDENTITY_SECRET", "b"),
+            ("IDENTITY_SIGNING_KEY", TEST_SIGNING_KEY),
             ("BROD_PUBLIC_URL", "https://brod.acme.test"),
             ("API_ORIGIN", "https://old.test"),
         ]))
@@ -491,6 +679,7 @@ mod tests {
             ("APPS_DOMAIN", "b.test"),
             ("ADMIN_SECRET", "dev-admin-secret"),
             ("IDENTITY_SECRET", &"x".repeat(40)),
+            ("IDENTITY_SIGNING_KEY", TEST_SIGNING_KEY),
             ("SECRETS_KEY", &"y".repeat(40)),
         ]));
         assert!(weak.unwrap_err().0.starts_with("ADMIN_SECRET is short"));
@@ -505,6 +694,7 @@ mod tests {
             ("API_ORIGIN", "http://localhost:8787"),
             ("ADMIN_SECRET", "test-admin-secret"),
             ("IDENTITY_SECRET", "test-identity-secret"),
+            ("IDENTITY_SIGNING_KEY", TEST_SIGNING_KEY),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -520,6 +710,7 @@ mod tests {
         let again = load_or_create_secrets(&dir).unwrap();
         assert_eq!(first, again);
         assert!(GENERATED.iter().all(|k| first[*k].len() == 64));
+        assert!(crate::identity::IdentityKey::parse(&first["IDENTITY_SIGNING_KEY"]).is_ok());
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

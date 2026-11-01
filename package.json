@@ -17,10 +17,14 @@
     "e2e:rust:pg": "node scripts/e2e-rust.mjs pg",
     "e2e:self-hosted": "node scripts/e2e-self-hosted.mjs",
     "e2e:tls": "node scripts/e2e-tls.mjs",
+    "e2e:nodes": "node scripts/e2e-nodes.mjs",
+    "e2e:containers": "node scripts/e2e-containers.mjs",
+    "e2e:postgres": "node scripts/e2e-postgres.mjs",
     "gen:og": "node scripts/gen-og.mjs"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
+    "jose": "^6.2.12",
     "playwright": "1.56.1",
     "vitest": "^4.1.11",
     "workerd": "1.20261006.1"

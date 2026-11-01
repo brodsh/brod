@@ -138,10 +138,14 @@ check('create a named agent connection', agent.status === 201 && agent.body.name
 const client = new Client({ name: 'e2e', version: '1.0.0' });
 await client.connect(new StreamableHTTPClientTransport(new URL(API + '/mcp'), { requestInit: { headers: { authorization: `Bearer ${agent.body.token}` } } }));
 const tools = await client.listTools();
-check('MCP lists 13 tools', tools.tools.length === 13, tools.tools.map(t => t.name).join(','));
+check('MCP lists 19 tools', tools.tools.length === 19, tools.tools.map(t => t.name).join(','));
 const tool = async (name, args = {}) => { const r = await client.callTool({ name, arguments: args }); return { isError: r.isError, data: r.structuredContent ?? JSON.parse(r.content[0].text) }; };
 const gw = await tool('get_workspace');
 check('get_workspace explains groups, roles and the identity contract', gw.data.workspace === W && gw.data.identity?.how.includes('/_brod/me') && gw.data.default_app_roles.length === 3);
+const ai = await tool('get_auth_integration', { framework: 'python' });
+check('get_auth_integration gives the JWT contract and a snippet for one framework', !ai.isError && ai.data.identity?.jwks_url === `${API}/.well-known/jwks.json`
+  && ai.data.identity.issuer === API && Object.keys(ai.data.snippets).join() === 'python' && ai.data.snippets.python.code.includes(API), JSON.stringify(ai.data).slice(0, 300));
+check('get_auth_integration refuses an unknown framework', (await tool('get_auth_integration', { framework: 'cobol' })).isError);
 
 // ---------- 2. deploy, private by default, one sign-in handed to the app's host ----------
 
@@ -156,7 +160,7 @@ check('owner signs in once and lands on version 1', aliceApp.status === 200 && a
 check('the app host gets its own session cookie, never the platform one', !!alice.jars[appHost(url)]?.brod_session && !alice.jars[appHost(url)]?.brod_platform);
 const me = await alice.go(url + '/_brod/me');
 const meBody = JSON.parse(me.body);
-check('/_brod/me gives the person, their app role and a signed token', me.status === 200 && meBody.user.email === alice.email && meBody.role === 'owner' && /^[\w-]+\.[\w-]+$/.test(meBody.token));
+check('/_brod/me gives the person, their app role and a signed JWT', me.status === 200 && meBody.user.email === alice.email && meBody.role === 'owner' && /^[\w-]+\.[\w-]+\.[\w-]+$/.test(meBody.token));
 check('the client library is served on the app host', (await alice.go(url + '/_brod/client.js')).body.includes('Brod'));
 const js = await alice.go(url + '/assets/app.js');
 check('asset served with the right type', js.status === 200 && js.headers['content-type'].startsWith('text/javascript'));
@@ -355,6 +359,12 @@ const stagingUrl = url.replace(`//${APP}.`, `//${APP}--staging.`);
 check('an agent\'s update to a live app lands on staging, not live', out.environment === 'staging' && out.live_version === 1 && out.staging?.version === 2
   && out.staging_url === stagingUrl && out.staging.url === stagingUrl, JSON.stringify(out));
 check('visitors still get version 1 while version 2 is on staging', (await anon.go(url + '/')).body.includes('v1'));
+// The TLS front (Caddy's on-demand ask, or Brod's own TLS) must agree to a certificate for the staging address.
+// Asked on the internal listener: 127.0.0.1 is neither the API host nor under APPS_DOMAIN.
+const askCert = async host => (await fetch(`${API.replace('//localhost', '//127.0.0.1')}/_caddy/ask?domain=${host}`)).status;
+const appsHost = new URL(API).hostname;
+check('a staging address may get a TLS certificate', await askCert(`${APP}--staging.${W}.${appsHost}`) === 200);
+check('a staging address of an app that does not exist may not', await askCert(`no-such-app--staging.${W}.${appsHost}`) === 404);
 const anonStaging = await anon.go(stagingUrl + '/');
 check('a visitor is sent to sign in on staging, even for a public app', anonStaging.status === 302 && anonStaging.headers.location.includes(`app=${APP}--staging.${W}`), JSON.stringify(anonStaging.headers.location));
 const ownStaging = await alice.open(stagingUrl + '/');

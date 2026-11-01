@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   images:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -28,6 +28,8 @@ jobs:
             dockerfile: Dockerfile
           - image: brod-runtime
             dockerfile: deploy/runtime/Dockerfile
+          - image: brod-node
+            dockerfile: deploy/node/Dockerfile
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -74,7 +76,7 @@ jobs:
 
   release:
     needs: images
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: write
@@ -107,3 +109,4 @@ jobs:
             THIRD_PARTY_LICENSES.md
             brod.sbom.spdx.json
             brod-runtime.sbom.spdx.json
+            brod-node.sbom.spdx.json
