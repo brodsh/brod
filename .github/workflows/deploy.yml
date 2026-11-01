@@ -75,7 +75,7 @@ jobs:
 
       - name: Public check
         run: |
-          for i in $(seq 1 12); do
+          for _ in $(seq 1 12); do
             curl -fsS https://brod.sh/healthz | grep -q '"ok": *true' && exit 0
             sleep 5
           done
