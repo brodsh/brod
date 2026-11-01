@@ -48,7 +48,7 @@ services:
         condition: service_healthy
 
   postgres:
-    image: postgres:17-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826
+    image: postgres:18-bookworm@sha256:5c4783a8cc3f0074912164f94dfa1be4e043438f0f707cf968d7af9a0d31a2c8
     restart: unless-stopped
     # No TCP listener: Brod connects through the socket in the shared postgres-socket volume, so there is no password
     # to set and nothing on the network to reach.
@@ -71,7 +71,7 @@ services:
   # through Brod's tunnel to their node. Password authentication on the socket too, so each app's role needs its own
   # password. Brod's image carries pg_dump and pg_restore of the same major version for backups.
   apps-postgres:
-    image: postgres:17-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826
+    image: postgres:18-bookworm@sha256:5c4783a8cc3f0074912164f94dfa1be4e043438f0f707cf968d7af9a0d31a2c8
     restart: unless-stopped
     network_mode: none
     command: ["postgres", "-c", "listen_addresses="]
