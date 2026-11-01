@@ -39,6 +39,8 @@ An error answers with an HTTP status and a body like this:
 | 403 | `read_only` | A read-only connection tried to change something |
 | 404 | `not_found` | No such route, or nothing with that name |
 | 409 | `stale_base` | A deploy's `base_version` is no longer the app's current version |
+| 409 | `merge_conflict` | A patch deploy on a stale base changed the same lines or file as a newer version; `conflicts` lists them |
+| 422 | `unknown_blobs` | A patch names a `sha256` the app does not have; `missing` lists them |
 | 429 | `rate_limited` | Too many requests in the window; see `retry_after_seconds` |
 
 ## Routes
@@ -65,10 +67,16 @@ is on (`BROD_MARKETPLACE=true`, the default when hosted, off when self-hosted). 
 
 | Route | |
 | --- | --- |
-| `POST /v1/deploys` `{name?, app?, note?, environment?, base_version?, files?}` | Same as `deploy_app`. `name` makes a new app, `app` deploys a new version of one. With `files` (up to 1 MB in all) it deploys at once. Without `files` it answers with a one-time `upload_url` and a `tar \| curl` command. |
+| `POST /v1/deploys` `{name?, app?, note?, environment?, base_version?, files?, changes?, deletes?}` | Same as `deploy_app`; `changes`/`deletes` with a required `base_version` make a [patch deploy](apps.md#patch-deploys-and-merging). `name` makes a new app, `app` deploys a new version of one. With `files` (up to 1 MB in all) it deploys at once. Without `files` it answers with a one-time `upload_url` and a `tar \| curl` command. |
 | `PUT /v1/uploads/:id` (a tar.gz as the body) | Upload a bundle to an upload address and deploy it. Up to 25 MB. The address is its own credential and lasts 15 minutes. |
-| `GET /v1/apps/:slug/files?version=` | Same as `get_files`: a version's files inline, or a `download_url` |
-| `GET /v1/downloads/:id` | A version's files as a tar.gz. The address is its own credential and lasts 15 minutes. |
+| `GET /v1/apps/:slug/files?version=&since=` | Same as `get_files`: a version's files inline, or a `download_url`; `since` lists only what changed |
+| `GET /v1/apps/:slug/diff?from=&to=` | Same as `diff_versions` |
+| `GET /v1/apps/:slug/export.bundle` | The app as a git bundle (v2): `main` live, `staging`, tags `v<N>`. Same as `export_app` |
+| `GET /v1/apps/:slug.git/info/refs?service=git-upload-pack`, `POST /v1/apps/:slug.git/git-upload-pack` | Read-only git over HTTP (`git clone`). HTTP Basic (any user name, a Brod token as password) or Bearer; read-only tokens work. `git-receive-pack` answers 403 |
+| `POST /v1/apps/:slug/import` | Same as `import_app`: JSON `{url, ref?, base_version?, history?, target?, note?}`, or a git bundle as the body (`Content-Type: application/x-git-bundle`) with `ref`, `base_version`, `history`, `target` in the query. Builders and owners. A bundle PUT to an upload address also imports |
+| `GET /v1/apps/:slug/git-mirror`, `PUT /v1/apps/:slug/git-mirror`, `DELETE /v1/apps/:slug/git-mirror` | Same as `get_git_mirror` and `set_git_mirror` (JSON body with `url`, `token`, `token_secret`, `enabled`, `branches`, `push_tags`, `sync_inbound`, `inbound_branch`, `rotate_webhook_secret`); DELETE removes the mirror. GET is open to builders; PUT and DELETE to the app's owner or an admin. The token and webhook secret are never returned (the webhook secret once, on PUT) |
+| `POST /v1/apps/:slug/git-webhook?workspace=:ws` | A push event from GitHub (`X-Hub-Signature-256`) or GitLab (`X-Gitlab-Token`). No session or token: the signature with the app's webhook secret is the credential. 202 when accepted or ignored (other branch, other events), 401 for a missing or wrong signature, 413 over 5 MB, 429 when rate limited. The import runs in the background |
+| `GET /v1/downloads/:id` | A version's files as a tar.gz (or the git bundle from `export_app`). The address is its own credential and lasts 15 minutes. |
 
 `environment` is `staging` or `production`. `base_version` is the version the files started from. See
 [Staging](apps.md#staging) and [Several people on one app](apps.md#several-people-on-one-app).
