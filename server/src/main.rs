@@ -154,6 +154,9 @@ async fn run(cfg: Config) {
             }
         });
     }
+    // Git mirror: the push worker and the inbound poller (git_mirror.rs).
+    tokio::spawn(brod::git_mirror::worker(st.clone()));
+    tokio::spawn(brod::git_mirror::poller(st.clone()));
     if let Some(tls) = st.cfg.tls.clone()
         && let Err(e) = brod::tls::start(st.clone(), tls).await
     {

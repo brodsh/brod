@@ -138,7 +138,7 @@ check('create a named agent connection', agent.status === 201 && agent.body.name
 const client = new Client({ name: 'e2e', version: '1.0.0' });
 await client.connect(new StreamableHTTPClientTransport(new URL(API + '/mcp'), { requestInit: { headers: { authorization: `Bearer ${agent.body.token}` } } }));
 const tools = await client.listTools();
-check('MCP lists 22 tools', tools.tools.length === 22, tools.tools.map(t => t.name).join(','));
+check('MCP lists 24 tools', tools.tools.length === 24, tools.tools.map(t => t.name).join(','));
 const tool = async (name, args = {}) => { const r = await client.callTool({ name, arguments: args }); return { isError: r.isError, data: r.structuredContent ?? JSON.parse(r.content[0].text) }; };
 const gw = await tool('get_workspace');
 check('get_workspace explains groups, roles and the identity contract', gw.data.workspace === W && gw.data.identity?.how.includes('/_brod/me') && gw.data.default_app_roles.length === 3);
@@ -533,11 +533,136 @@ check('and version 1 still reads back from the manifest', rbFiles.data.files?.le
   }
 
   // A repository on this machine is not reachable by address.
-  const local = await fetch(`${API}/v1/apps/${GA}/import`, { method: 'POST', headers: { authorization: `Bearer ${agent.body.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ url: 'http://127.0.0.1:9/repo.git' }) });
+  const local = await fetch(`${API}/v1/apps/${GA}/import`, { method: 'POST', headers: { authorization: `Bearer ${agent.body.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ url: 'http://10.0.0.1/repo.git' }) });
   const localBody = await local.json();
-  check('importing from http://127.0.0.1 is refused by the outbound guard', local.status === 400 && localBody.error?.code === 'blocked_url', JSON.stringify(localBody));
+  check('importing from a private address is refused by the outbound guard', local.status === 400 && localBody.error?.code === 'blocked_url', JSON.stringify(localBody));
   const meta = await tool('import_app', { app: GA, url: 'http://169.254.169.254/latest' });
   check('import_app refuses a metadata address', meta.isError === true, JSON.stringify(meta.data));
+}
+
+// ---------- git mirror and inbound sync: a local bare repository behind git http-backend ----------
+{
+  const { createHmac } = await import('node:crypto');
+  const { spawn } = await import('node:child_process');
+  const mdir = mkdtempSync(join(tmpdir(), 'mirror-'));
+  const genv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_AUTHOR_NAME: 'Remote Dev', GIT_AUTHOR_EMAIL: 'remote@example.test', GIT_COMMITTER_NAME: 'Remote Dev', GIT_COMMITTER_EMAIL: 'remote@example.test' };
+  const git = (cwd, args) => execSync(`git ${args}`, { cwd, env: genv, stdio: ['ignore', 'pipe', 'pipe'] }).toString();
+  const bare = name => { const p = join(mdir, name); mkdirSync(p); git(p, 'init -q --bare'); git(p, 'config http.receivepack true'); return p; };
+  const seen = [];
+  const srv = http.createServer((req, res) => {
+    seen.push(`${req.method} ${req.url} ${req.headers.authorization ? 'auth' : 'anon'}`);
+    const u = new URL(req.url, 'http://x');
+    const cgi = spawn('git', ['http-backend'], { env: { ...genv, GIT_PROJECT_ROOT: mdir, GIT_HTTP_EXPORT_ALL: '1', REQUEST_METHOD: req.method, PATH_INFO: u.pathname, QUERY_STRING: u.search.slice(1), CONTENT_TYPE: req.headers['content-type'] ?? '', CONTENT_LENGTH: req.headers['content-length'] ?? '', REMOTE_USER: 'brod', REMOTE_ADDR: '127.0.0.1', HTTP_CONTENT_ENCODING: req.headers['content-encoding'] ?? '' } });
+    req.pipe(cgi.stdin);
+    const chunks = [];
+    cgi.stdout.on('data', c => chunks.push(c));
+    cgi.stdout.on('end', () => {
+      const out = Buffer.concat(chunks);
+      const cut = out.indexOf('\r\n\r\n');
+      const head = out.subarray(0, cut).toString().split('\r\n');
+      let status = 200; const headers = {};
+      for (const l of head) { const i = l.indexOf(':'); const k = l.slice(0, i).toLowerCase(), v = l.slice(i + 1).trim(); if (k === 'status') status = parseInt(v, 10); else headers[k] = v; }
+      res.writeHead(status, headers); res.end(out.subarray(cut + 4));
+    });
+  });
+  await new Promise(r => srv.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  const until = async (fn, ms = 40000) => { const t0 = Date.now(); for (;;) { try { const v = await fn(); if (v) return v; } catch {} if (Date.now() - t0 > ms) return null; await new Promise(r => setTimeout(r, 300)); } };
+  const tryGit = (cwd, args) => { try { return git(cwd, args).trim(); } catch { return ''; } };
+
+  const remote = bare('one.git');
+  const md = await tool('deploy_app', { name: 'Mirrored', files: [{ path: 'index.html', content: '<h1>m1</h1>\n' }, { path: 'notes.txt', content: LINES }] });
+  const MA = md.data.app;
+  const bad = await tool('set_git_mirror', { app: MA, url: 'ftp://example.com/x.git', token: 'tok' });
+  check('set_git_mirror refuses a non-https address', bad.isError === true, JSON.stringify(bad.data));
+  const cfg = await tool('set_git_mirror', { app: MA, url: `${base}/one.git`, token: 'mirror-token-xyz', sync_inbound: true });
+  check('set_git_mirror enables the mirror and shows the webhook secret once', !cfg.isError && /^whsec_/.test(cfg.data.webhook_secret ?? '') && !!cfg.data.webhook_url, JSON.stringify(cfg.data));
+  const SECRET_WH = cfg.data.webhook_secret;
+  const whUrl = cfg.data.webhook_url.replace(/^https?:\/\/[^/]+/, API);
+  const shown = await tool('get_git_mirror', { app: MA });
+  const shownText = JSON.stringify(shown.data);
+  check('get_git_mirror never shows the token or the webhook secret', !shown.isError && !shownText.includes('mirror-token-xyz') && !shownText.includes(SECRET_WH) && shown.data.token === 'set', shownText.slice(0, 400));
+
+  const tagged = await until(() => tryGit(remote, 'tag').split('\n').includes('v1') && tryGit(remote, 'rev-parse --verify main'));
+  check('the mirror pushes main and the tag v1 to the remote after setup', !!tagged, seen.slice(-5).join(' | '));
+  check('the push carries the token as Basic auth', seen.some(s => s.startsWith('POST') && s.includes('git-receive-pack') && s.endsWith('auth')), seen.join(' | '));
+  const d2m = await tool('deploy_app', { app: MA, environment: 'production', base_version: 1, changes: { 'index.html': { content: '<h1>m2</h1>\n' } }, note: 'Second' });
+  const gotV2 = await until(() => tryGit(remote, 'tag').split('\n').includes('v2') && tryGit(remote, 'show main:index.html') === '<h1>m2</h1>');
+  check('a new live version is pushed: main moves, tag v2 appears', d2m.data.version === 2 && !!gotV2, tryGit(remote, 'tag'));
+  const st1 = await until(async () => { const s = await tool('get_status', { app: MA }); return s.data.git_mirror?.status === 'ok' && s.data; });
+  check('get_status shows git_mirror status ok with a push time', !!st1 && !!st1.git_mirror.last_push_at, JSON.stringify(st1?.git_mirror));
+  const v1tag = tryGit(remote, 'rev-parse v1');
+
+  // Inbound: a commit pushed to the remote's main and a signed webhook land on staging.
+  const work = join(mdir, 'work'); git(mdir, `clone -q ${remote} work`);
+  writeFileSync(join(work, 'css.css'), 'body{margin:0}\n'); git(work, 'add .'); git(work, 'commit -q -m "Add css"'); git(work, 'push -q origin HEAD:main');
+  const push1 = JSON.stringify({ ref: 'refs/heads/main', after: git(work, 'rev-parse HEAD').trim(), commits: [] });
+  const sign = (body, key = SECRET_WH) => 'sha256=' + createHmac('sha256', key).update(body).digest('hex');
+  const post = (body, headers) => fetch(whUrl, { method: 'POST', headers: { 'content-type': 'application/json', 'x-github-event': 'push', ...headers }, body });
+  const noSig = await post(push1, {});
+  const wrongSig = await post(push1, { 'x-hub-signature-256': sign(push1, 'whsec_wrong') });
+  check('a webhook with no or a wrong signature is refused with 401', noSig.status === 401 && wrongSig.status === 401, `${noSig.status} ${wrongSig.status}`);
+  const before = (await tool('get_status', { app: MA })).data.versions.length;
+  const okSig = await post(push1, { 'x-hub-signature-256': sign(push1) });
+  check('a signed push webhook is accepted with 202', okSig.status === 202, String(okSig.status));
+  const imported = await until(async () => { const s = await tool('get_status', { app: MA }); return s.data.versions.length === before + 1 && s.data; });
+  check('the pushed commit becomes a new staging version', !!imported, JSON.stringify((await tool('get_status', { app: MA })).data.versions));
+  const stagedV = imported ? imported.versions.find(v => v.staging) : null;
+  const sf = stagedV ? await tool('get_files', { app: MA, version: stagedV.version }) : null;
+  check('the staging version has the remote change and the live files', !!sf && (sf.data.files ?? []).some(f => f.path === 'css.css') && (sf.data.files ?? []).some(f => f.content === '<h1>m2</h1>\n'), JSON.stringify(sf?.data).slice(0, 300));
+  const other = JSON.stringify({ ref: 'refs/heads/feature', after: 'a'.repeat(40) });
+  const ign = await post(other, { 'x-hub-signature-256': sign(other) });
+  const ping = await post('{}', { 'x-hub-signature-256': sign('{}'), 'x-github-event': 'ping' });
+  check('a push to another branch, and a ping, are accepted and ignored', ign.status === 202 && ping.status === 202, `${ign.status} ${ping.status}`);
+  const gl = await fetch(whUrl, { method: 'POST', headers: { 'content-type': 'application/json', 'x-gitlab-event': 'Push Hook', 'x-gitlab-token': 'nope' }, body: push1 });
+  check('a wrong GitLab token is refused with 401', gl.status === 401, String(gl.status));
+
+  // Loop prevention: Brod's own pushes (staging branch, tags) bring no new version. Repeat the webhook for the same commit too.
+  await new Promise(r => setTimeout(r, 4000));
+  await post(push1, { 'x-hub-signature-256': sign(push1) });
+  await new Promise(r => setTimeout(r, 3000));
+  const afterAll = (await tool('get_status', { app: MA })).data.versions.length;
+  check('Brod\'s own pushes and a repeated webhook are not re-imported', afterAll === before + 1, `${before} -> ${afterAll}`);
+  check('the staging version was mirrored to the remote staging branch', !!(await until(() => tryGit(remote, 'rev-parse --verify staging'))));
+  check('an existing tag is never moved', tryGit(remote, 'rev-parse v1') === v1tag);
+
+  // Conflict: staging and the remote change the same line from the same base.
+  const base2 = git(remote, 'rev-parse main').trim();
+  const work2 = join(mdir, 'work2'); git(mdir, `clone -q ${remote} work2`);
+  const cur = (await tool('get_status', { app: MA })).data.versions.find(v => v.staging)?.version;
+  const sc = await tool('deploy_app', { app: MA, base_version: cur, changes: { 'notes.txt': { content: LINES.replace('line 5\n', 'line 5 from brod\n') } } });
+  check('staging takes an edit of line 5', !sc.isError, JSON.stringify(sc.data));
+  await until(async () => (await tool('get_git_mirror', { app: MA })).data.status === 'ok');
+  writeFileSync(join(work2, 'notes.txt'), LINES.replace('line 5\n', 'line 5 from remote\n')); git(work2, 'commit -q -am "Remote edit"');
+  git(work2, 'push -q origin HEAD:main');
+  const push2 = JSON.stringify({ ref: 'refs/heads/main', after: git(work2, 'rev-parse HEAD').trim() });
+  const vCount = (await tool('get_status', { app: MA })).data.versions.length;
+  await post(push2, { 'x-hub-signature-256': sign(push2) });
+  const conflict = await until(async () => { const g = await tool('get_git_mirror', { app: MA }); return g.data.inbound?.status === 'conflict' && g.data; });
+  check('a conflicting edit sets the inbound status to conflict and names the path', !!conflict && JSON.stringify(conflict.inbound.conflicts).includes('notes.txt'), JSON.stringify(conflict?.inbound));
+  check('a conflict creates no version', (await tool('get_status', { app: MA })).data.versions.length === vCount);
+  check('a conflict is in the sync history', !!conflict && (conflict.recent_sync ?? []).some(e => e.result === 'conflict'), JSON.stringify(conflict?.recent_sync));
+  void base2;
+
+  // Diverged remote: Brod will not force. The remote's own commit stays.
+  const rem2 = bare('two.git');
+  const w3 = join(mdir, 'w3'); mkdirSync(w3); git(w3, 'init -q -b main'); writeFileSync(join(w3, 'theirs.txt'), 'theirs\n'); git(w3, 'add .'); git(w3, 'commit -q -m "Theirs"'); git(w3, `push -q ${rem2} main`);
+  const theirs = git(rem2, 'rev-parse main').trim();
+  const mb = await tool('deploy_app', { name: 'Diverging', files: [{ path: 'index.html', content: 'd1' }] });
+  const MB = mb.data.app;
+  const cfg2 = await tool('set_git_mirror', { app: MB, url: `${base}/two.git`, token: 'other-token' });
+  check('a second mirror is configured', !cfg2.isError, JSON.stringify(cfg2.data));
+  const div = await until(async () => { const g = await tool('get_git_mirror', { app: MB }); return g.data.status === 'diverged' && g.data; });
+  check('a remote branch with unknown history gives status diverged with a message', !!div && /diverg|force|history/i.test(div.error ?? ''), JSON.stringify(div));
+  check('the diverged remote branch is untouched', git(rem2, 'rev-parse main').trim() === theirs);
+  check('get_status shows the diverged mirror', (await tool('get_status', { app: MB })).data.git_mirror?.status === 'diverged');
+
+  // Who may configure it, and removal.
+  const gm = await alice.api(`/v1/apps/${MA}/git-mirror`, { method: 'GET' });
+  check('GET /git-mirror returns the settings without secrets', gm.status === 200 && !JSON.stringify(gm.body).includes('mirror-token-xyz'), JSON.stringify(gm.body).slice(0, 300));
+  const del = await tool('set_git_mirror', { app: MB, enabled: false });
+  check('a mirror can be switched off', !del.isError && (await tool('get_git_mirror', { app: MB })).data.status === 'disabled', JSON.stringify(del.data));
+  srv.close();
 }
 
 await tool('publish_staging', { app: APP, discard: true });

@@ -422,6 +422,12 @@ pub fn described(conn: &Connection, cfg: &Config, c: &Caller, app: &AppRow) -> R
     }
     // Whether the Brod team took it down, or the phishing check flagged its live version.
     abuse::add_state(conn, app, &mut m)?;
+    // How its git mirror is doing (git_mirror.rs), for the people who can set it up.
+    if require_role(c, "builder", "see the git mirror").is_ok()
+        && let Some(s) = crate::git_mirror::summary(conn, &app.id)?
+    {
+        m.insert("git_mirror".into(), s);
+    }
     Ok(m)
 }
 
@@ -1053,6 +1059,7 @@ pub(crate) async fn deploy_files(st: &State, c: &Caller, o: DeployTarget, files:
                 }
             }
             mark_editing(conn, &c2, &app.id, Some(n))?;
+            crate::git_mirror::poke(&app.id);
             let open = deployed_open_paths(conn, &cfg, &c2, &app, n)?;
             let mut m = described(conn, &cfg, &c2, &app)?;
             m.insert("version".into(), json!(n));
@@ -1861,6 +1868,7 @@ pub fn rollback(conn: &Connection, cfg: &Config, c: &Caller, slug: &str, version
         abuse::narrow_if_flagged(x, &mut app, n, flag.as_deref())
     })?;
     app.live_version = Some(n);
+    crate::git_mirror::poke(&app.id);
     let mut m = described(conn, cfg, c, &app)?;
     m.insert("changed".into(), json!(true));
     Ok(Value::Object(m))
@@ -1893,6 +1901,7 @@ pub fn publish_staging(conn: &Connection, cfg: &Config, c: &Caller, slug: &str) 
     })?;
     app.live_version = Some(n);
     app.staging_version = None;
+    crate::git_mirror::poke(&app.id);
     let mut m = described(conn, cfg, c, &app)?;
     m.insert("published".into(), json!(n));
     Ok(Value::Object(m))
@@ -1912,6 +1921,7 @@ pub fn discard_staging(conn: &Connection, cfg: &Config, c: &Caller, slug: &str) 
         event(x, &c.workspace.id, &c.actor, Some(&app.id), "staging_discarded", &format!("v{n}"))
     })?;
     app.staging_version = None;
+    crate::git_mirror::poke(&app.id);
     let mut m = described(conn, cfg, c, &app)?;
     m.insert("changed".into(), json!(true));
     Ok(Value::Object(m))

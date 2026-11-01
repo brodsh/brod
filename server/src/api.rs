@@ -122,6 +122,11 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
         ));
     }
 
+    // A push on a mirrored remote (git_mirror.rs): the signature is the credential.
+    if s(0) == Some("apps") && s(1).is_some() && s(2) == Some("git-webhook") && s(3).is_none() && m == Method::POST {
+        return crate::git_mirror::webhook(st, &mut req, &seg[1]).await;
+    }
+
     // Read-only git over HTTP (git_export.rs): git clients sign in with HTTP Basic, so it is answered before sign-in.
     if s(0) == Some("apps") && s(1).and_then(crate::git_export::git_slug).is_some() {
         let slug = crate::git_export::git_slug(&seg[1]).unwrap_or_default().to_string();
@@ -454,6 +459,18 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
                                 ("cache-control", "no-store".into()),
                             ],
                         ));
+                    }
+                    if action == "git-mirror" {
+                        if m == Method::GET {
+                            return Ok(json(db(Box::new(move |conn, cfg, c| crate::git_mirror::get(conn, cfg, c, &slug))).await?));
+                        }
+                        if m == Method::PUT {
+                            let b = req.json_object().await?;
+                            return Ok(json(crate::git_mirror::set(st, &c, &slug, &b).await?));
+                        }
+                        if m == Method::DELETE {
+                            return Ok(json(db(Box::new(move |conn, _, c| crate::git_mirror::remove(conn, c, &slug))).await?));
+                        }
                     }
                     if action == "import" && m == Method::POST {
                         return Ok(created(import_request(st, &c, &slug, &mut req).await?));

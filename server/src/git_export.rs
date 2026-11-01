@@ -201,9 +201,82 @@ impl Plan {
         Ok(w.finish())
     }
 
+    /// The commits reachable from `from` (itself included) that this export holds, following parents.
+    pub fn ancestors_of(&self, from: Oid) -> HashSet<Oid> {
+        let parents: HashMap<Oid, Vec<Oid>> = self
+            .history
+            .objects
+            .iter()
+            .filter(|(_, k, _)| *k == Kind::Commit)
+            .filter_map(|(o, _, d)| git::parse_commit(d).ok().map(|c| (*o, c.parents)))
+            .collect();
+        let mut seen = HashSet::new();
+        let mut todo = vec![from];
+        while let Some(o) = todo.pop() {
+            if seen.insert(o) {
+                todo.extend(parents.get(&o).into_iter().flatten().copied());
+            }
+        }
+        seen
+    }
+
+    /// A pack of the objects reachable from the `want` commits that are not reachable from the `have` commits (what the
+    /// other side already holds). `extra` are objects that are not part of the history, such as a commit that continues a
+    /// remote branch.
+    pub async fn pack_for(&self, st: &State, want: &[Oid], have: &[Oid], extra: &[Object]) -> Result<Vec<u8>> {
+        let mut by_oid: HashMap<Oid, (Kind, &[u8])> = self.history.objects.iter().map(|(o, k, d)| (*o, (*k, d.as_slice()))).collect();
+        for (o, k, d) in extra {
+            by_oid.insert(*o, (*k, d.as_slice()));
+        }
+        let held = reachable(&by_oid, have);
+        let mut need = reachable(&by_oid, want);
+        need.retain(|o| !held.contains(o));
+        let mut w = PackWriter::new();
+        for (o, k, d) in self.history.objects.iter().chain(extra.iter()) {
+            if need.contains(o) {
+                w.add(*k, d);
+            }
+        }
+        let blobs: Vec<&(Oid, String, i64)> = self.blobs.iter().filter(|(o, _, _)| need.contains(o)).collect();
+        for chunk in blobs.chunks(16) {
+            let got = try_join_all(chunk.iter().map(|(_, sha, _)| versions::read_blob(st, sha, FILE_BYTES))).await?;
+            for data in got {
+                w.add(Kind::Blob, &data);
+            }
+        }
+        Ok(w.finish())
+    }
+
     pub async fn bundle(&self, st: &State) -> Result<Vec<u8>> {
         Ok(git::bundle(&self.refs, &self.pack(st).await?))
     }
+}
+
+/// Every object reachable from the roots: commits to their parents and tree, trees to their entries. Objects not in
+/// `objs` (a blob, or something the other side holds) are counted but not followed.
+fn reachable(objs: &HashMap<Oid, (Kind, &[u8])>, roots: &[Oid]) -> HashSet<Oid> {
+    let mut seen = HashSet::new();
+    let mut todo: Vec<Oid> = roots.to_vec();
+    while let Some(o) = todo.pop() {
+        if !seen.insert(o) {
+            continue;
+        }
+        match objs.get(&o) {
+            Some((Kind::Commit, d)) => {
+                if let Ok(c) = git::parse_commit(d) {
+                    todo.push(c.tree);
+                    todo.extend(c.parents);
+                }
+            }
+            Some((Kind::Tree, d)) => {
+                if let Ok(entries) = git::parse_tree(d) {
+                    todo.extend(entries.into_iter().filter(|e| e.mode != git::MODE_GITLINK).map(|e| e.oid));
+                }
+            }
+            _ => {}
+        }
+    }
+    seen
 }
 
 /// The part of an apps domain that names a host: "brod.example:9000" becomes "brod.example".

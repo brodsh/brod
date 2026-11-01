@@ -140,6 +140,34 @@ pub fn tools() -> Value {
                 "note": s("The version's note (default: the commit's subject).")
             }, "required": ["app"] },
         },
+        {
+            "name": "set_git_mirror", "title": "Mirror an app to a git remote",
+            "description": concat!(
+                "Keep a git repository (GitHub, GitLab, Gitea, ...) in step with an app. After every deploy, publish, rollback or staging change Brod pushes in the background: the live version to the \"main\" branch, the version on staging to \"staging\", and every version as a tag vN. ",
+                "Pushes only ever fast-forward: if the remote branch holds work Brod does not know, it is left alone and get_git_mirror / get_status show \"diverged\"; tags are created, never moved. ",
+                "Give \"url\" (https) and an access token that can push: \"token\" (stored sealed, never shown again) or \"token_secret\", the name of one of the app's secrets. Fields left out keep their value. ",
+                "With \"sync_inbound\": true a push to the remote branch (a webhook, or polling) lands on staging as a new version, merged with what is there; the answer then holds a one-time \"webhook_secret\" and the \"webhook_url\" to put in the repository's webhook settings. ",
+                "Only the app's owner or a workspace admin can set this up."
+            ),
+            "inputSchema": { "type": "object", "properties": {
+                "app": app_arg(),
+                "url": s("The remote repository, https://github.com/owner/repo.git."),
+                "token": s("An access token with permission to push (GitHub: a fine-grained token with Contents write). Stored sealed and never returned."),
+                "token_secret": s("The name of an existing app secret that holds the token, instead of \"token\"."),
+                "enabled": { "type": "boolean", "description": "Push on changes. Default true." },
+                "branches": { "type": "object", "description": "Remote branch names: {\"main\": \"main\", \"staging\": \"staging\"}. An empty staging name stops pushing staging.", "properties": { "main": { "type": "string" }, "staging": { "type": "string" } } },
+                "push_tags": { "type": "boolean", "description": "Push a tag vN for every version. Default true." },
+                "sync_inbound": { "type": "boolean", "description": "Import pushes to the remote branch into staging. Default false." },
+                "inbound_branch": s("The remote branch to import (default: the one mapped to main)."),
+                "rotate_webhook_secret": { "type": "boolean", "description": "Make a new webhook secret (shown once)." }
+            }, "required": ["app"] },
+        },
+        {
+            "name": "get_git_mirror", "title": "Git mirror settings",
+            "description": "Show how an app is mirrored to a git remote: address, branch mapping, the last push (time, status ok / retrying / diverged / error, and the error), each ref's state, and the recent inbound sync events with conflicts. The token and webhook secret are never shown.",
+            "inputSchema": { "type": "object", "properties": { "app": app_arg() }, "required": ["app"] },
+            "annotations": { "readOnlyHint": true },
+        },
         { "name": "get_status", "title": "App status", "description": "Show one app: address, status, access, roles, who it is shared with, its versions with which one is live, and what is on staging (version and address).", "inputSchema": { "type": "object", "properties": { "app": app_arg() }, "required": ["app"] }, "annotations": { "readOnlyHint": true } },
         {
             "name": "get_logs", "title": "App activity and logs",
@@ -343,11 +371,12 @@ fn atob(s: &str) -> Option<Vec<u8>> {
 }
 
 /// The tools a read-only connection may call: they look and change nothing.
-pub const READ_TOOLS: [&str; 9] = [
+pub const READ_TOOLS: [&str; 10] = [
     "list_apps",
     "get_files",
     "diff_versions",
     "export_app",
+    "get_git_mirror",
     "get_status",
     "get_logs",
     "get_deployment",
@@ -437,6 +466,11 @@ async fn call(st: &State, c: &Caller, name: &str, a: &Map<String, Value>) -> Res
             }
             let r = ImportRequest::from_json(&app, a, Source::Url(url))?;
             crate::git_import::run(st, c, r).await
+        }
+        "set_git_mirror" => crate::git_mirror::set(st, c, &str_arg("app"), a).await,
+        "get_git_mirror" => {
+            let slug = str_arg("app");
+            st.db.call(move |conn| crate::git_mirror::get(conn, &cfg, &c2, &slug)).await
         }
         "get_status" => {
             let slug = str_arg("app");
@@ -673,6 +707,8 @@ mod tests {
                 "diff_versions",
                 "export_app",
                 "import_app",
+                "set_git_mirror",
+                "get_git_mirror",
                 "get_status",
                 "get_logs",
                 "get_deployment",

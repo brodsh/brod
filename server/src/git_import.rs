@@ -208,7 +208,7 @@ pub fn demux(body: &[u8]) -> Result<Vec<u8>> {
     Ok(pack)
 }
 
-fn git_url(url: &str, tail: &str) -> Result<String> {
+pub fn git_url(url: &str, tail: &str) -> Result<String> {
     let trimmed = url.trim().trim_end_matches('/');
     if trimmed.contains('?') || trimmed.contains('#') {
         return Err(Problem::new(
@@ -220,46 +220,66 @@ fn git_url(url: &str, tail: &str) -> Result<String> {
     Ok(format!("{trimmed}{tail}"))
 }
 
-/// Fetch one commit's objects from a repository over smart HTTP, as the commit chosen and a pack.
-pub async fn fetch(policy: Policy, url: &str, git_ref: Option<&str>, shallow: bool, max_pack: usize) -> Result<(Oid, Vec<u8>)> {
-    let adv_reply = outbound::send(
+/// The HTTP Basic header git hosting services accept for a token: GitHub, GitLab and Gitea take any user name.
+pub fn basic_auth(token: &str) -> String {
+    use base64::Engine;
+    format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(format!("x-access-token:{token}")))
+}
+
+fn headers_with(auth: Option<&str>, mut h: Vec<(&'static str, String)>) -> Vec<(&'static str, String)> {
+    if let Some(a) = auth {
+        h.push(("authorization", a.to_string()));
+    }
+    h
+}
+
+/// The refs a repository advertises for a git service ("git-upload-pack" or "git-receive-pack"), with the optional
+/// Authorization header value for a private one.
+pub async fn advertise(policy: Policy, url: &str, service: &str, auth: Option<&str>) -> Result<Advert> {
+    let reply = outbound::send(
         policy,
         &outbound::Request {
             post: false,
-            url: git_url(url, "/info/refs?service=git-upload-pack")?,
-            headers: vec![("accept", "*/*".into()), ("pragma", "no-cache".into())],
+            url: git_url(url, &format!("/info/refs?service={service}"))?,
+            headers: headers_with(auth, vec![("accept", "*/*".into()), ("pragma", "no-cache".into())]),
             body: Vec::new(),
         },
         2 * 1024 * 1024,
     )
     .await?;
-    if adv_reply.status == 401 || adv_reply.status == 403 {
+    if reply.status == 401 || reply.status == 403 {
         return Err(Problem::new(
             502,
-            "fetch_failed",
-            "The repository needs a login. Brod can only import public repositories by address; export a bundle (git bundle create) and import that instead.",
+            if auth.is_some() { "auth_refused" } else { "fetch_failed" },
+            if auth.is_some() {
+                "The repository refused the access token.".to_string()
+            } else {
+                "The repository needs a login. Brod can only import public repositories by address; export a bundle (git bundle create) and import that instead.".to_string()
+            },
         ));
     }
-    if adv_reply.status != 200 {
-        return Err(Problem::new(
-            502,
-            "fetch_failed",
-            format!("The repository answered {} to the request for its refs.", adv_reply.status),
-        ));
+    if reply.status != 200 {
+        let code = if reply.status >= 500 || reply.status == 429 { "fetch_failed" } else { "remote_refused" };
+        return Err(Problem::new(502, code, format!("The repository answered {} to the request for its refs.", reply.status)));
     }
-    let advert = parse_advert(&adv_reply.body)?;
-    let (_, want) = pick_ref(&advert.refs, git_ref)?;
-    let can_shallow = shallow && advert.caps.iter().any(|c| c == "shallow");
+    parse_advert(&reply.body)
+}
+
+/// Ask a repository for one commit's objects (with its history unless `shallow`).
+async fn upload_pack(policy: Policy, url: &str, want: &Oid, shallow: bool, max_pack: usize, auth: Option<&str>) -> Result<Vec<u8>> {
     let reply = outbound::send(
         policy,
         &outbound::Request {
             post: true,
             url: git_url(url, "/git-upload-pack")?,
-            headers: vec![
-                ("content-type", "application/x-git-upload-pack-request".into()),
-                ("accept", "application/x-git-upload-pack-result".into()),
-            ],
-            body: upload_request(&want, can_shallow),
+            headers: headers_with(
+                auth,
+                vec![
+                    ("content-type", "application/x-git-upload-pack-request".into()),
+                    ("accept", "application/x-git-upload-pack-result".into()),
+                ],
+            ),
+            body: upload_request(want, shallow),
         },
         max_pack + 64 * 1024,
     )
@@ -267,7 +287,20 @@ pub async fn fetch(policy: Policy, url: &str, git_ref: Option<&str>, shallow: bo
     if reply.status != 200 {
         return Err(Problem::new(502, "fetch_failed", format!("The repository answered {} to the request for its files.", reply.status)));
     }
-    Ok((want, demux(&reply.body)?))
+    demux(&reply.body)
+}
+
+/// Fetch one commit's objects from a repository over smart HTTP, as the commit chosen and a pack.
+pub async fn fetch(policy: Policy, url: &str, git_ref: Option<&str>, shallow: bool, max_pack: usize) -> Result<(Oid, Vec<u8>)> {
+    let advert = advertise(policy, url, "git-upload-pack", None).await?;
+    let (_, want) = pick_ref(&advert.refs, git_ref)?;
+    let can_shallow = shallow && advert.caps.iter().any(|c| c == "shallow");
+    Ok((want, upload_pack(policy, url, &want, can_shallow, max_pack, None).await?))
+}
+
+/// Fetch a commit and all its history, to a private repository too (`auth` is an Authorization header value).
+pub async fn fetch_commit(policy: Policy, url: &str, want: &Oid, max_pack: usize, auth: Option<&str>) -> Result<Vec<u8>> {
+    upload_pack(policy, url, want, false, max_pack, auth).await
 }
 
 // ---------- reading the objects ----------
@@ -447,7 +480,12 @@ async fn known_versions(st: &State, app_id: &str, chain: &[Oid]) -> Result<Vec<O
     let rows: Vec<(i64, String, Option<String>)> = st
         .db
         .call(move |conn| {
-            conn.all("SELECT version, commit_oid, source_commit_oid FROM version_git_commits WHERE app_id = ?", params![a], |r| {
+            // Commits a git mirror pushed to continue a remote branch count too (git_mirror.rs).
+            conn.all(
+                "SELECT version, commit_oid, source_commit_oid FROM version_git_commits WHERE app_id = ? \
+                 UNION ALL SELECT version, remote_oid, NULL FROM git_sync_events WHERE app_id = ? AND result = 'pushed' AND version IS NOT NULL",
+                params![a, a],
+                |r| {
                 Ok((r.get::<_, i64>("version")?, r.get::<_, String>("commit_oid")?, r.get::<_, Option<String>>("source_commit_oid")?))
             })
         })
@@ -479,7 +517,7 @@ struct Step {
 
 /// Import a bundle or repository as new versions of an app. See the module comment for how it lands.
 pub async fn run(st: &State, c: &Caller, req: ImportRequest) -> Result<Value> {
-    run_with(st, c, req, Policy::strict()).await
+    run_with(st, c, req, Policy::from_config(&st.cfg)).await
 }
 
 pub async fn run_with(st: &State, c: &Caller, req: ImportRequest, policy: Policy) -> Result<Value> {
@@ -523,8 +561,31 @@ pub async fn run_with(st: &State, c: &Caller, req: ImportRequest, policy: Policy
         }
     };
 
+    let landing = Landing { base_version: req.base_version, history_all: req.history_all, environment: req.environment, note: req.note };
+    apply(st, c, &app, &objs, tip, &ref_name, landing).await
+}
+
+/// How the commit lands: the options of an import that do not say where the objects come from.
+pub struct Landing {
+    pub base_version: Option<Value>,
+    pub history_all: bool,
+    pub environment: Option<String>,
+    pub note: Option<String>,
+}
+
+/// Turn the commit `tip` of a set of objects into versions of the app, merging with what is there. The chain of commits the
+/// objects hold is searched for one Brod knows, which becomes the merge base.
+pub async fn apply(
+    st: &State,
+    c: &Caller,
+    app: &crate::model::AppRow,
+    objs: &Objects,
+    tip: Oid,
+    ref_name: &str,
+    req: Landing,
+) -> Result<Value> {
     // 2. Which commits Brod knows.
-    let chain = first_parent_chain(&objs, tip, CHAIN_SCAN)?;
+    let chain = first_parent_chain(objs, tip, CHAIN_SCAN)?;
     let oids: Vec<Oid> = chain.iter().map(|(o, _)| *o).collect();
     let known = known_versions(st, &app.id, &oids).await?;
     let explicit_base = match &req.base_version {
@@ -564,7 +625,7 @@ pub async fn run_with(st: &State, c: &Caller, req: ImportRequest, policy: Policy
     let mut steps = Vec::new();
     for i in picks {
         let (oid, commit) = &chain[i];
-        let files = walk_files(&objs, &commit.tree, &lim)?;
+        let files = walk_files(objs, &commit.tree, &lim)?;
         steps.push(Step {
             oid: *oid,
             commit: ParsedCommit { tree: commit.tree, parents: commit.parents.clone(), message: commit.message.clone() },

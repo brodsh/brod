@@ -147,6 +147,13 @@ pub static SETTINGS: &[Setting] = &[
         default: |_| json!(50),
     },
     Setting {
+        key: "git.sync_poll_minutes",
+        env: "BROD_GIT_SYNC_POLL_MINUTES",
+        kind: Kind::Int(0, 1440),
+        help: "How often, in minutes, Brod asks the remote of a git mirror with inbound sync for its branch when no webhook has arrived recently. 0 turns polling off.",
+        default: |_| json!(10),
+    },
+    Setting {
         key: "rate.workspaces_per_user_day",
         env: "BROD_RATE_WORKSPACES_PER_USER_DAY",
         kind: Kind::Int(1, 10_000),

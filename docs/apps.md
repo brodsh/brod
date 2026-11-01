@@ -439,6 +439,37 @@ merged like a [patch](#patch-deploys-and-merging). Otherwise every file is repla
 (at most 50). Refused, with the path named: symbolic links, submodules, Git LFS pointers, `.git` folders, paths with `..`
 or absolute paths, and files over the deploy limits. The pack may be up to `BROD_GIT_MAX_IMPORT_MB` (default 50).
 
+### Git mirror and sync
+
+An app can be mirrored to a repository on GitHub, GitLab or any git host, and can take pushes back.
+
+**Push mirror.** `set_git_mirror` (or `PUT /v1/apps/:slug/git-mirror`) takes the repository `url` (https), a `token` that may push
+(GitHub: a fine-grained token with Contents write, user name `x-access-token`) or `token_secret`, the name of one of the app's
+secrets that holds it, and `enabled`. After every deploy, publish, rollback or staging change Brod pushes in the background:
+the live version to `main`, the version on staging to `staging`, and every version as a tag `v<N>`. The `branches` setting
+renames them. Pushes are batched: several changes in quick succession become one push, and a failing push is retried five
+times with growing waits (10 s, 40 s, 160 s, up to 10 minutes) before the status becomes `error`. A deploy never waits for it.
+
+Pushes only ever fast-forward. If a remote branch holds commits Brod does not know and that are not its ancestors, the branch is
+left alone and the status is `diverged` with a message; nothing is forced. When the remote tip is a commit Brod imported or
+knows from before (for example after a rollback), Brod adds a commit on top of it so the push still fast-forwards. A tag that
+exists with another commit is never moved (its ref shows `skipped`).
+
+`get_git_mirror` (read-only) and `get_status` show `git_mirror: {status, last_push_at, error}` with the status `idle`, `ok`,
+`retrying`, `diverged`, `error` or `disabled`. The token is stored sealed and is never returned or exported. Only the app's owner
+or a workspace admin can configure the mirror; builders can see it.
+
+**Inbound sync.** With `sync_inbound: true`, a push to the remote branch (default: the one mapped to `main`) is imported into
+staging with the same merge-base logic as `import_app`: it is merged with what is on staging, never onto live. Enabling it shows a
+`webhook_secret` once (`rotate_webhook_secret` makes a new one) and the `webhook_url`. In the repository's webhook settings use
+that address, content type `application/json`, the secret, and the push event. GitHub is verified by `X-Hub-Signature-256`,
+GitLab by `X-Gitlab-Token`. Without a webhook Brod looks at the remote every `BROD_GIT_SYNC_POLL_MINUTES` (default 10, 0 = never)
+and fetches only when the branch moved.
+
+If the pushed changes clash with staging, no version is made; `get_git_mirror` shows `inbound.status: conflict` with the paths
+and the owner gets an email. Commits Brod pushed itself are recognised and never imported again. Every inbound event is in
+`recent_sync` with its result (`imported`, `conflict`, `ignored`, `unchanged`, `error`).
+
 ## Access
 
 Each app has one of six access modes. You can change it at any time without a redeploy.

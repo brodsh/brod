@@ -39,7 +39,7 @@ const dns = await serveFakeDns();
 const env = {
   ...process.env, APPS_DOMAIN: `localhost:${PORT}`, API_ORIGIN: API, ADMIN_SECRET: 'dev-admin-secret', IDENTITY_SECRET: 'dev-identity-secret',
   IDENTITY_SIGNING_KEY: '9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60',
-  SECRETS_KEY: 'dev-secrets-key-0123456789', DEV_MODE: '1', BROD_LISTEN: `127.0.0.1:${PORT}`, BROD_DATA_DIR: state,
+  SECRETS_KEY: 'dev-secrets-key-0123456789', DEV_MODE: '1', DEV_ALLOW_LOOPBACK_GIT: '1', BROD_LISTEN: `127.0.0.1:${PORT}`, BROD_DATA_DIR: state,
   // The full suite covers the hosted service's plans, billing, marketplace and abuse checks; e2e-self-hosted.mjs covers the default.
   BROD_MODE: 'hosted',
   STRIPE_SECRET_KEY: STRIPE_KEY, STRIPE_WEBHOOK_SECRET: WEBHOOK_SECRET, STRIPE_PRICE_SOLO: 'price_solo', STRIPE_PRICE_TEAM: 'price_team',

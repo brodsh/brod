@@ -84,6 +84,18 @@ requests carry no identity, no session cookie and no `x-brod-*` header.
 size (10 MB) and total size (60 MB unpacked). Files are served with a `Content-Type` from their extension and
 `X-Content-Type-Options: nosniff`.
 
+**Git mirror and inbound sync.** The push token is sealed with `SECRETS_KEY` (bound to the app), is only decrypted for a push, and
+is never returned by any API, tool, log or export. It goes out as HTTP Basic auth (`x-access-token`) and is dropped on a redirect to
+another host. Only the app's owner or an admin can set it. The remote must be https and every request, including the poller's, goes
+through the same outbound guard as `import_app` (no loopback, private or metadata addresses, DNS pinned, redirects checked);
+loopback is allowed only with `DEV_MODE=1` and `DEV_ALLOW_LOOPBACK_GIT=1`. Pushes are fast-forward only: Brod never sends a
+forced update, never moves a tag, and marks a branch it cannot fast-forward as `diverged`. The webhook endpoint has no session:
+it accepts a request only when the GitHub HMAC-SHA256 signature (`X-Hub-Signature-256`) or the GitLab token matches the app's
+webhook secret, compared in constant time over the raw body; the secret is random, sealed and shown once. The endpoint has a body
+cap (5 MB) and a rate limit per address and per app, and bad signatures get the same 401 whether or not the app exists. Inbound
+changes only ever land on staging (never live) and conflicts create no version. Commits Brod pushed itself are recorded and
+ignored when they come back, so a mirror and a webhook cannot loop.
+
 **Weak configuration.** In hosted mode Brod refuses to start without `SECRETS_KEY` or `IDENTITY_SIGNING_KEY`, or with a
 secret shorter than 32 characters or one of the example values from its own docs. In self-hosted mode it generates any secret that is not set
 and warns about weak ones.

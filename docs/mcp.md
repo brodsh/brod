@@ -76,6 +76,8 @@ Use the Streamable HTTP transport at `/mcp` with the header `Authorization: Bear
 | `diff_versions` | A unified diff between two versions of an app (`from`, `to`), capped, with the paths added, modified and deleted. |
 | `export_app` | An app as a git repository: a short-lived download address for a git bundle and a clone address (`format`: `git-bundle`). See [Git](apps.md#git). |
 | `import_app` | Turn a git commit into a new version on staging: from a public https `url`, or (without it) an upload address for a bundle. `ref`, `base_version`, `history` (`tip` or `all`), `target`, `note`. Merges when the commit descends from a known version. |
+| `set_git_mirror` | Mirror an app to a git remote (owner or admin only): `url` (https), `token` or `token_secret`, `enabled`, `branches`, `push_tags`, `sync_inbound`, `inbound_branch`, `rotate_webhook_secret`. Pushes fast-forward only; the answer holds a one-time `webhook_secret` when inbound sync is on. See [Git mirror and sync](apps.md#git-mirror-and-sync). |
+| `get_git_mirror` | The mirror's settings, last push status and error, each ref, inbound sync status, conflicts and recent sync events. Never shows the token or the webhook secret. |
 | `get_status` | One app: access, roles, who it is shared with, versions, what is on staging, custom domains, secret names, open paths (approved, open, waiting). |
 | `get_logs` | An app's activity (deploys, access changes, refusals) and, for server apps, recent requests with console output and errors. |
 | `get_deployment` | A [container app](apps.md#container-apps)'s deployment: its state (building, serving, failed) and the last 50 lines of its log. A failed one answers `build_failed`, `migration_failed` or `deployment_failed`. |
@@ -94,7 +96,7 @@ Use the Streamable HTTP transport at `/mcp` with the header `Authorization: Bear
 | `get_workspace` | The workspace's groups, default roles and access modes, and how an app reads the signed-in person. |
 
 A read-only connection (OAuth scope `brod:read`, or a token made read-only) sees only `list_apps`, `get_files`, `diff_versions`,
-`export_app`, `get_status`, `get_logs`, `get_deployment`, `get_auth_integration` and `get_workspace`.
+`export_app`, `get_git_mirror`, `get_status`, `get_logs`, `get_deployment`, `get_auth_integration` and `get_workspace`.
 
 The server also sends instructions with `initialize`. They tell the agent to ask before changing a live app, to deploy
 updates to staging first, and to pass `base_version` so it never overwrites someone else's work.

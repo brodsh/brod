@@ -82,6 +82,8 @@ pub struct Config {
     pub network: NetworkPolicy,
     /// DEV_MODE only: a smaller free plan storage (DEV_FREE_STORAGE_MB), so tests can run out of it.
     pub dev_free_storage_mb: Option<i64>,
+    /// DEV_MODE only: git mirror and sync may reach 127.0.0.1 over plain http (DEV_ALLOW_LOOPBACK_GIT), so tests can serve a repository.
+    pub dev_allow_loopback_git: bool,
     /// BROD_CONTAINERS: who may deploy container apps (deployments.rs). Default trusted self-hosted, off hosted.
     pub containers: Containers,
     /// BROD_REGISTRY_URL and the key Brod signs registry tokens with (registry.rs). None: no registry, so no containers.
@@ -528,6 +530,7 @@ impl Config {
             custom_domain_target: get("CUSTOM_DOMAIN_TARGET")
                 .map(|t| t.trim().trim_end_matches('.').to_lowercase())
                 .filter(|t| !t.is_empty()),
+            dev_allow_loopback_git: get("DEV_MODE").as_deref() == Some("1") && get("DEV_ALLOW_LOOPBACK_GIT").as_deref() == Some("1"),
             dev_free_storage_mb: if get("DEV_MODE").as_deref() == Some("1") {
                 get("DEV_FREE_STORAGE_MB").and_then(|v| v.parse().ok())
             } else {

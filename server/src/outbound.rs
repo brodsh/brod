@@ -20,8 +20,9 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub const TOTAL_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_REDIRECTS: usize = 5;
 
-/// What a request may reach. There is no setting for `allow_loopback`: only tests build a policy that has it, to talk to a
-/// listener on 127.0.0.1. Every other non-public range stays refused under it.
+/// What a request may reach. `allow_loopback` exists for tests and for DEV_MODE with DEV_ALLOW_LOOPBACK_GIT=1 (the e2e
+/// suite serves a git repository from 127.0.0.1); a production server never has it. Every other non-public range stays
+/// refused under it.
 #[derive(Clone, Copy, Debug)]
 pub struct Policy {
     allow_loopback: bool,
@@ -30,6 +31,10 @@ pub struct Policy {
 impl Policy {
     pub const fn strict() -> Policy {
         Policy { allow_loopback: false }
+    }
+    /// Strict, except that DEV_MODE with DEV_ALLOW_LOOPBACK_GIT=1 also reaches 127.0.0.1.
+    pub fn from_config(cfg: &crate::config::Config) -> Policy {
+        Policy { allow_loopback: cfg.dev_allow_loopback_git }
     }
     #[cfg(test)]
     pub const fn permissive_for_tests() -> Policy {
@@ -157,6 +162,7 @@ async fn vet(policy: Policy, url: &Url) -> Result<Option<(String, SocketAddr)>> 
 pub async fn send(policy: Policy, req: &Request, max_body: usize) -> Result<Reply> {
     let mut url = Url::parse(&req.url).map_err(|_| refused("That is not a valid address."))?;
     let (mut post, mut body) = (req.post, req.body.clone());
+    let first_host = url.host_str().map(str::to_string);
     for _ in 0..=MAX_REDIRECTS {
         let pin = vet(policy, &url).await?;
         let mut b = reqwest::Client::builder()
@@ -169,7 +175,12 @@ pub async fn send(policy: Policy, req: &Request, max_body: usize) -> Result<Repl
         }
         let client = b.build().map_err(Problem::internal)?;
         let mut r = if post { client.post(url.clone()).body(body.clone()) } else { client.get(url.clone()) };
+        // A credential is for the host it was given for: it never follows a redirect to another host.
+        let same_host = url.host_str().map(str::to_string) == first_host;
         for (k, v) in &req.headers {
+            if *k == "authorization" && !same_host {
+                continue;
+            }
             r = r.header(*k, v);
         }
         let resp = r.send().await.map_err(|e| {
