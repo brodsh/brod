@@ -547,7 +547,7 @@ check('and version 1 still reads back from the manifest', rbFiles.data.files?.le
   const mdir = mkdtempSync(join(tmpdir(), 'mirror-'));
   const genv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_AUTHOR_NAME: 'Remote Dev', GIT_AUTHOR_EMAIL: 'remote@example.test', GIT_COMMITTER_NAME: 'Remote Dev', GIT_COMMITTER_EMAIL: 'remote@example.test' };
   const git = (cwd, args) => execSync(`git ${args}`, { cwd, env: genv, stdio: ['ignore', 'pipe', 'pipe'] }).toString();
-  const bare = name => { const p = join(mdir, name); mkdirSync(p); git(p, 'init -q --bare'); git(p, 'config http.receivepack true'); return p; };
+  const bare = name => { const p = join(mdir, name); mkdirSync(p); git(p, 'init -q --bare -b main'); git(p, 'config http.receivepack true'); return p; };
   const seen = [];
   const srv = http.createServer((req, res) => {
     seen.push(`${req.method} ${req.url} ${req.headers.authorization ? 'auth' : 'anon'}`);
@@ -594,7 +594,7 @@ check('and version 1 still reads back from the manifest', rbFiles.data.files?.le
   const v1tag = tryGit(remote, 'rev-parse v1');
 
   // Inbound: a commit pushed to the remote's main and a signed webhook land on staging.
-  const work = join(mdir, 'work'); git(mdir, `clone -q ${remote} work`);
+  const work = join(mdir, 'work'); git(mdir, `clone -q -b main ${remote} work`);
   writeFileSync(join(work, 'css.css'), 'body{margin:0}\n'); git(work, 'add .'); git(work, 'commit -q -m "Add css"'); git(work, 'push -q origin HEAD:main');
   const push1 = JSON.stringify({ ref: 'refs/heads/main', after: git(work, 'rev-parse HEAD').trim(), commits: [] });
   const sign = (body, key = SECRET_WH) => 'sha256=' + createHmac('sha256', key).update(body).digest('hex');
@@ -628,7 +628,7 @@ check('and version 1 still reads back from the manifest', rbFiles.data.files?.le
 
   // Conflict: staging and the remote change the same line from the same base.
   const base2 = git(remote, 'rev-parse main').trim();
-  const work2 = join(mdir, 'work2'); git(mdir, `clone -q ${remote} work2`);
+  const work2 = join(mdir, 'work2'); git(mdir, `clone -q -b main ${remote} work2`);
   const cur = (await tool('get_status', { app: MA })).data.versions.find(v => v.staging)?.version;
   const sc = await tool('deploy_app', { app: MA, base_version: cur, changes: { 'notes.txt': { content: LINES.replace('line 5\n', 'line 5 from brod\n') } } });
   check('staging takes an edit of line 5', !sc.isError, JSON.stringify(sc.data));
