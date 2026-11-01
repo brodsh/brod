@@ -638,7 +638,7 @@ pub async fn smart_http(st: &State, req: &mut Req, slug: &str, rest: &[&str]) ->
     }
 }
 
-/// The app slug of a "<slug>.git" path segment.
+/// The app slug of a `"<slug>.git"` path segment.
 pub fn git_slug(segment: &str) -> Option<&str> {
     segment.strip_suffix(".git").filter(|s| !s.is_empty())
 }

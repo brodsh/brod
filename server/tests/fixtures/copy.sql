@@ -19,7 +19,7 @@ INSERT INTO secrets VALUES ('app_1', 'STRIPE_KEY', 'iv.ct', 1, 'ana@acme.test');
 INSERT INTO app_settings VALUES ('app_1', 'name', '"Our reading"', NULL, 0, 1, 'ana@acme.test'), ('app_1', 'logo', '"k3y"', 'image/png', 2048, 2, 'ana@acme.test');
 INSERT INTO network_reports VALUES ('app_1', 'evil.test', 'browser', 2, 3, 0, 1, 2), ('app_1', 'api.other.test', 'server', NULL, 1, 1, 1, 1);
 INSERT INTO uploads VALUES ('up_1', 'ws_1', 'usr_a', 'ana@acme.test', NULL, 'reading', 'n', 9, NULL, 'staging', 2, NULL);
-INSERT INTO downloads VALUES ('dl_1', 'ws_1', 'app_1', 2, 'usr_a', 9);
+INSERT INTO downloads VALUES ('dl_1', 'ws_1', 'app_1', 2, 'usr_a', 9, 'tar');
 INSERT INTO editing VALUES ('app_1', 'usr_a', 'ana@acme.test', 'Claude', 2, 1, 2), ('app_1', 'usr_B', 'Bo@acme.test', 'Bo@acme.test', NULL, 3, 4);
 INSERT INTO login_links VALUES ('h3', 'ana@acme.test', '/', 1, 2, 3);
 INSERT INTO sessions VALUES ('h4', 'usr_a', NULL, NULL, 1, 2, NULL), ('h5', 'usr_a', 'app_1', 'h4', 1, 2, NULL);

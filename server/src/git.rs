@@ -52,7 +52,7 @@ impl Kind {
     }
 }
 
-/// The id of an object: sha1 of "<kind> <length>\0" and its content.
+/// The id of an object: sha1 of `"<kind> <length>\0"` and its content.
 pub fn object_oid(kind: Kind, data: &[u8]) -> Oid {
     let mut h = Sha1::new();
     h.update(format!("{} {}\0", kind.name(), data.len()).as_bytes());

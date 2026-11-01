@@ -91,7 +91,7 @@ pub struct Report {
     pub refs: Vec<(String, std::result::Result<(), String>)>,
 }
 
-/// Read the report-status of a receive-pack answer: "unpack ok", then "ok <ref>" or "ng <ref> <reason>" per command.
+/// Read the report-status of a receive-pack answer: "unpack ok", then `"ok <ref>"` or `"ng <ref> <reason>"` per command.
 pub fn parse_report(body: &[u8]) -> std::result::Result<Report, String> {
     let mut pos = 0;
     let mut pkts: Vec<Vec<u8>> = Vec::new();
