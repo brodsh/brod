@@ -24,6 +24,7 @@ pub const TABLES: &[&str] = &[
     "blobs",
     "version_manifests",
     "manifest_entries",
+    "version_git_commits",
     "secrets",
     "app_settings",
     "network_reports",

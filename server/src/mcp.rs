@@ -112,6 +112,34 @@ pub fn tools() -> Value {
             "inputSchema": { "type": "object", "properties": { "app": app_arg(), "from": { "type": "integer", "minimum": 1, "description": "The older version." }, "to": { "type": "integer", "minimum": 1, "description": "The newer version. Default: the current version." } }, "required": ["app", "from"] },
             "annotations": { "readOnlyHint": true },
         },
+        {
+            "name": "export_app", "title": "Export an app as git",
+            "description": concat!(
+                "Get an app's files and history as a git repository: a short-lived download address for a git bundle (one command clones it), plus a clone address for git over HTTP (user name anything, password a Brod token). ",
+                "\"main\" is the live version, \"staging\" the version waiting on staging, and every version is a tag (v1, v2, ...); each version is a commit with its note as the message. ",
+                "Secrets and the app's data are never included. Change the files with git, then bring the work back with import_app."
+            ),
+            "inputSchema": { "type": "object", "properties": { "app": app_arg(), "format": { "type": "string", "enum": ["git-bundle"], "description": "Only git-bundle for now." } }, "required": ["app"] },
+            "annotations": { "readOnlyHint": true },
+        },
+        {
+            "name": "import_app", "title": "Import git work into an app",
+            "description": concat!(
+                "Turn a git commit into a new version of an existing app. Give \"url\" of a public repository (https; Brod fetches it), or leave it out to get a one-time upload address for a git bundle (git bundle create ../app.bundle --all, then upload it with the one-line command). ",
+                "\"ref\" picks the branch or tag (default HEAD, then main). The version lands on staging unless \"target\" is \"production\". ",
+                "If the commit (or an ancestor) came from export_app or an earlier import, Brod merges your changes with whatever others deployed since, like a patch on base_version; otherwise all files are replaced and the result says so in \"warning\". ",
+                "\"history\": \"all\" creates one version per new commit (up to 50) instead of one for the tip. ",
+                "Symbolic links, submodules, Git LFS files, .git folders and files over the size limits are refused with the path named."
+            ),
+            "inputSchema": { "type": "object", "properties": {
+                "app": app_arg(), "url": s("A public repository address, https://github.com/owner/repo.git. Omit to upload a bundle."),
+                "ref": s("Branch or tag to import (default HEAD, then main)."),
+                "base_version": { "type": "integer", "minimum": 1, "description": "Merge onto this version instead of the one the commit is known as." },
+                "history": { "type": "string", "enum": ["tip", "all"], "description": "tip (default): one version for the commit; all: one per new commit." },
+                "target": { "type": "string", "enum": ["staging", "production"], "description": "Default staging." },
+                "note": s("The version's note (default: the commit's subject).")
+            }, "required": ["app"] },
+        },
         { "name": "get_status", "title": "App status", "description": "Show one app: address, status, access, roles, who it is shared with, its versions with which one is live, and what is on staging (version and address).", "inputSchema": { "type": "object", "properties": { "app": app_arg() }, "required": ["app"] }, "annotations": { "readOnlyHint": true } },
         {
             "name": "get_logs", "title": "App activity and logs",
@@ -315,8 +343,17 @@ fn atob(s: &str) -> Option<Vec<u8>> {
 }
 
 /// The tools a read-only connection may call: they look and change nothing.
-pub const READ_TOOLS: [&str; 8] =
-    ["list_apps", "get_files", "diff_versions", "get_status", "get_logs", "get_deployment", "get_auth_integration", "get_workspace"];
+pub const READ_TOOLS: [&str; 9] = [
+    "list_apps",
+    "get_files",
+    "diff_versions",
+    "export_app",
+    "get_status",
+    "get_logs",
+    "get_deployment",
+    "get_auth_integration",
+    "get_workspace",
+];
 
 /// The tools this caller may use: all of them, or only the reading ones for a read-only connection.
 fn tools_for(c: &Caller) -> Value {
@@ -360,6 +397,47 @@ async fn call(st: &State, c: &Caller, name: &str, a: &Map<String, Value>) -> Res
         "list_apps" => st.db.call(move |conn| control::list_apps(conn, &cfg, &c2)).await,
         "get_files" => control::get_files(st, c, &str_arg("app"), a.get("version").cloned(), a.get("since").cloned()).await,
         "diff_versions" => crate::patch::diff_versions(st, c, &str_arg("app"), a.get("from"), a.get("to")).await,
+        "export_app" => {
+            let format = str_arg("format");
+            if !format.is_empty() && format != "git-bundle" {
+                return Err(Problem::new(400, "bad_format", "\"format\" is \"git-bundle\"."));
+            }
+            crate::git_export::export_app(st, c, &str_arg("app")).await
+        }
+        "import_app" => {
+            use crate::git_import::{ImportRequest, Source};
+            let app = str_arg("app");
+            let url = str_arg("url");
+            if url.trim().is_empty() {
+                // No address: a one-time upload address for a bundle; the upload runs the import (api.rs deploy_upload).
+                let mut options = Map::new();
+                for k in ["ref", "history"] {
+                    if a.get(k).is_some_and(|v| !v.is_null()) {
+                        options.insert(k.into(), a[k].clone());
+                    }
+                }
+                let target = DeployTarget {
+                    app: Some(app),
+                    note: Some(str_arg("note")).filter(|n| !n.is_empty()),
+                    environment: Some(str_arg("target")).filter(|n| !n.is_empty()),
+                    base_version: a.get("base_version").filter(|v| !v.is_null()).cloned(),
+                    options: Some(options),
+                    ..Default::default()
+                };
+                target.check_environment()?;
+                let mut out = st.db.call(move |conn| control::create_upload(conn, &cfg, &c2, &target)).await?;
+                if let Value::Object(m) = &mut out {
+                    m.insert("kind".into(), json!("git-bundle"));
+                    m.insert(
+                        "next_step".into(),
+                        json!("Create a bundle with `git bundle create app.bundle --all`, then upload it to upload_url: curl -sS --fail -X PUT --data-binary @app.bundle \"<upload_url>\". The upload imports it into staging."),
+                    );
+                }
+                return Ok(out);
+            }
+            let r = ImportRequest::from_json(&app, a, Source::Url(url))?;
+            crate::git_import::run(st, c, r).await
+        }
         "get_status" => {
             let slug = str_arg("app");
             st.db.call(move |conn| control::get_status(conn, &cfg, &c2, &slug).map(Value::Object)).await
@@ -593,6 +671,8 @@ mod tests {
                 "list_apps",
                 "get_files",
                 "diff_versions",
+                "export_app",
+                "import_app",
                 "get_status",
                 "get_logs",
                 "get_deployment",

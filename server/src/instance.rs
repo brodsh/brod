@@ -133,6 +133,20 @@ pub static SETTINGS: &[Setting] = &[
         default: |_| json!(crate::abuse::CALLS_PER_MINUTE),
     },
     Setting {
+        key: "git.real_emails",
+        env: "BROD_GIT_REAL_EMAILS",
+        kind: Kind::Bool,
+        help: "Put people's real email addresses in the git commits Brod exports. Off by default: commits carry a noreply address, because an export may be shared outside the workspace.",
+        default: |_| json!(false),
+    },
+    Setting {
+        key: "git.max_import_mb",
+        env: "BROD_GIT_MAX_IMPORT_MB",
+        kind: Kind::Int(1, 2048),
+        help: "The largest git pack, in MB, Brod accepts when importing an app from a git repository (a bundle or a url).",
+        default: |_| json!(50),
+    },
+    Setting {
         key: "rate.workspaces_per_user_day",
         env: "BROD_RATE_WORKSPACES_PER_USER_DAY",
         kind: Kind::Int(1, 10_000),

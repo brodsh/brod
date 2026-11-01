@@ -138,7 +138,7 @@ check('create a named agent connection', agent.status === 201 && agent.body.name
 const client = new Client({ name: 'e2e', version: '1.0.0' });
 await client.connect(new StreamableHTTPClientTransport(new URL(API + '/mcp'), { requestInit: { headers: { authorization: `Bearer ${agent.body.token}` } } }));
 const tools = await client.listTools();
-check('MCP lists 20 tools', tools.tools.length === 20, tools.tools.map(t => t.name).join(','));
+check('MCP lists 22 tools', tools.tools.length === 22, tools.tools.map(t => t.name).join(','));
 const tool = async (name, args = {}) => { const r = await client.callTool({ name, arguments: args }); return { isError: r.isError, data: r.structuredContent ?? JSON.parse(r.content[0].text) }; };
 const gw = await tool('get_workspace');
 check('get_workspace explains groups, roles and the identity contract', gw.data.workspace === W && gw.data.identity?.how.includes('/_brod/me') && gw.data.default_app_roles.length === 3);
@@ -440,6 +440,105 @@ const rbp = await tool('rollback', { app: PA, version: 1 });
 check('rollback still works on a patched app', !rbp.isError && rbp.data.live_version === 1, JSON.stringify(rbp.data));
 const rbFiles = await tool('get_files', { app: PA, version: 1 });
 check('and version 1 still reads back from the manifest', rbFiles.data.files?.length === 3 && rbFiles.data.files.some(f => f.path === 'index.html' && f.content.includes('patchy v1')), JSON.stringify(rbFiles.data).slice(0, 300));
+
+
+// ---------- git: export as a repository, clone over smart HTTP, import work back ----------
+{
+  const SECRET = `s3cret-${run}`;
+  const gd = await tool('deploy_app', { name: 'Gitty', files: [{ path: 'index.html', content: '<h1>gitty v1</h1>\n' }, { path: 'css/app.css', content: 'body{color:red}\n' }, { path: 'notes.txt', content: LINES }] });
+  const GA = gd.data.app;
+  await tool('set_secret', { app: GA, name: 'API_KEY', value: SECRET });
+  const g2 = await tool('deploy_app', { app: GA, environment: 'production', base_version: 1, changes: { 'index.html': { content: '<h1>gitty v2</h1>\n' } }, note: 'Second look' });
+  const g3 = await tool('deploy_app', { app: GA, base_version: 2, changes: { 'notes.txt': { content: LINES.replace('line 11\n', 'line 11 staged\n') } } });
+  check('git section: two live versions and one on staging', gd.data.version === 1 && g2.data.version === 2 && g3.data.version === 3 && g3.data.environment === 'staging', JSON.stringify([g2.data, g3.data]).slice(0, 400));
+  const gdir = mkdtempSync(join(tmpdir(), 'gitty-'));
+  const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_AUTHOR_NAME: 'Local Dev', GIT_AUTHOR_EMAIL: 'dev@example.test', GIT_COMMITTER_NAME: 'Local Dev', GIT_COMMITTER_EMAIL: 'dev@example.test' };
+  const git = (cwd, args) => execSync(`git ${args}`, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] }).toString();
+  const gitTry = (cwd, args) => { try { return { ok: true, out: git(cwd, args) }; } catch (e) { return { ok: false, out: String(e.stderr ?? e) }; } };
+  const cloneUrl = `${api.protocol}//agent:${agent.body.token}@${api.host}/v1/apps/${GA}.git`;
+
+  const unauth = await fetch(`${API}/v1/apps/${GA}.git/info/refs?service=git-upload-pack`);
+  check('git: a clone without a token is challenged for Basic credentials', unauth.status === 401 && /basic/i.test(unauth.headers.get('www-authenticate') ?? ''), String(unauth.status));
+  const push = await fetch(`${API}/v1/apps/${GA}.git/info/refs?service=git-receive-pack`, { headers: { authorization: `Bearer ${agent.body.token}` } });
+  check('git: pushing is refused with 403', push.status === 403, String(push.status));
+  const adv = await fetch(`${API}/v1/apps/${GA}.git/info/refs?service=git-upload-pack`, { headers: { authorization: `Bearer ${agent.body.token}` } });
+  check('git: a Bearer token reads the advertisement', adv.status === 200 && /git-upload-pack-advertisement/.test(adv.headers.get('content-type') ?? ''), String(adv.status));
+
+  const cloned = join(gdir, 'smart');
+  const cl = gitTry(gdir, `clone ${cloneUrl} smart`);
+  check('git: git clone over smart HTTP with a token works', cl.ok, cl.out);
+  if (cl.ok) {
+    check('git: the clone checks out main, the live version', readFileSync(join(cloned, 'index.html'), 'utf8') === '<h1>gitty v2</h1>\n' && git(cloned, 'rev-parse --abbrev-ref HEAD').trim() === 'main');
+    check('git: every version is a tag and staging is a branch', git(cloned, 'tag').trim().split('\n').join() === 'v1,v2,v3' && git(cloned, 'rev-parse --verify origin/staging').trim().length === 40);
+    check('git: staging holds the staged file', git(cloned, 'show origin/staging:notes.txt').includes('line 11 staged'));
+    check('git: a version is a commit with its note, a trailer and a noreply author', git(cloned, 'log -1 --format=%B%n%ae v2').includes('Second look') && git(cloned, 'log -1 --format=%B v2').includes('Brod-Version: 2') && /@users\.noreply\./.test(git(cloned, 'log -1 --format=%ae v2')), git(cloned, 'log -1 --format=%B%n%ae v2'));
+    check('git: v1 is the root and v2 its child', git(cloned, 'rev-list --count v2').trim() === '2' && git(cloned, 'rev-list --count v1').trim() === '1');
+    const everything = git(cloned, 'log --all -p') + git(cloned, 'ls-files');
+    check('git: no secret appears anywhere in the exported history', !everything.includes(SECRET) && !everything.includes('API_KEY'));
+  }
+
+  // The bundle, from an address and from the API.
+  const ex = await tool('export_app', { app: GA, format: 'git-bundle' });
+  check('export_app returns a download address and a clone address', !ex.isError && /\/v1\/downloads\//.test(ex.data.download_url) && ex.data.clone_url?.endsWith(`${GA}.git`), JSON.stringify(ex.data));
+  const dl = await fetch(ex.data.download_url.replace(/^https?:\/\/[^/]+/, API));
+  const bundleBytes = Buffer.from(await dl.arrayBuffer());
+  const direct = await fetch(`${API}/v1/apps/${GA}/export.bundle`, { headers: { authorization: `Bearer ${agent.body.token}` } });
+  const directBytes = Buffer.from(await direct.arrayBuffer());
+  check('the export is a git bundle v2, the same twice', dl.status === 200 && bundleBytes.subarray(0, 16).toString() === '# v2 git bundle\n' && direct.status === 200 && directBytes.equals(bundleBytes), `${dl.status} ${direct.status}`);
+  const bfile = join(gdir, 'gitty.bundle'); writeFileSync(bfile, bundleBytes);
+    const fromBundle = join(gdir, 'work');
+  const bc = gitTry(gdir, `clone ${bfile} work`);
+  check('git clone of the bundle works and has the same history as the smart HTTP clone', bc.ok && (!cl.ok || git(fromBundle, 'rev-parse v2').trim() === git(cloned, 'rev-parse v2').trim()), bc.out);
+
+  if (bc.ok) {
+    const bv = gitTry(fromBundle, `bundle verify ${bfile}`);
+    check('git bundle verify accepts it', bv.ok, bv.out);
+    // Work locally and import it back: it lands on staging, merged with what is there.
+    git(fromBundle, 'checkout -q -b mine');
+    writeFileSync(join(fromBundle, 'css', 'app.css'), 'body{color:blue}\n');
+    git(fromBundle, 'commit -q -am "Blue please"');
+    const mine = join(gdir, 'mine.bundle');
+    git(fromBundle, `bundle create ${mine} mine main v1 v2 v3`);
+    const imp = await fetch(`${API}/v1/apps/${GA}/import?ref=mine`, { method: 'POST', headers: { authorization: `Bearer ${agent.body.token}`, 'content-type': 'application/x-git-bundle' }, body: readFileSync(mine) });
+    const impBody = await imp.json();
+    check('importing a bundle makes a new staging version based on the commit it came from', imp.status === 201 && impBody.version === 4 && impBody.environment === 'staging' && impBody.merge_base?.version === 2 && !impBody.warning, JSON.stringify(impBody).slice(0, 500));
+    const after = await tool('get_files', { app: GA, version: 4 });
+    const af = Object.fromEntries((after.data.files ?? []).map(f => [f.path, f.content]));
+    check('the import is merged with what was on staging', af['css/app.css'] === 'body{color:blue}\n' && af['notes.txt']?.includes('line 11 staged') && af['index.html'] === '<h1>gitty v2</h1>\n', JSON.stringify(af).slice(0, 300));
+    const again = await fetch(`${API}/v1/apps/${GA}/import?ref=mine`, { method: 'POST', headers: { authorization: `Bearer ${agent.body.token}`, 'content-type': 'application/x-git-bundle' }, body: readFileSync(mine) });
+    const againBody = await again.json();
+    check('importing the same commit again changes nothing', again.status === 201 && againBody.unchanged === true && againBody.version === 4, JSON.stringify(againBody).slice(0, 300));
+
+    // The same through import_app's upload address.
+    git(fromBundle, 'checkout -q -b more');
+    writeFileSync(join(fromBundle, 'index.html'), '<h1>gitty from upload</h1>\n');
+    git(fromBundle, 'commit -q -am "Upload route"');
+    const more = join(gdir, 'more.bundle');
+    git(fromBundle, `bundle create ${more} more main v1 v2 v3`);
+    const ticket = await tool('import_app', { app: GA, ref: 'more' });
+    check('import_app without a url gives an upload address', !ticket.isError && /\/v1\/uploads\//.test(ticket.data.upload_url ?? ''), JSON.stringify(ticket.data));
+    const up = await fetch(ticket.data.upload_url.replace(/^https?:\/\/[^/]+/, API), { method: 'PUT', body: readFileSync(more) });
+    const upBody = await up.json();
+    check('uploading the bundle imports it into staging', up.status === 201 && upBody.environment === 'staging' && upBody.version === 5 && upBody.imported_commit?.length === 40, JSON.stringify(upBody).slice(0, 400));
+
+    // A bundle with a symlink is refused, naming the path.
+    git(fromBundle, 'checkout -q -b linky main');
+    execSync('ln -s index.html link', { cwd: fromBundle });
+    git(fromBundle, 'add link'); git(fromBundle, 'commit -q -m "A link"');
+    const linky = join(gdir, 'linky.bundle');
+    git(fromBundle, `bundle create ${linky} linky main v1 v2 v3`);
+    const sl = await fetch(`${API}/v1/apps/${GA}/import?ref=linky`, { method: 'POST', headers: { authorization: `Bearer ${agent.body.token}`, 'content-type': 'application/x-git-bundle' }, body: readFileSync(linky) });
+    const slBody = await sl.json();
+    check('importing a bundle with a symlink is refused and names the path', sl.status === 422 && slBody.error?.code === 'git_symlink' && slBody.error.message.includes('"link"'), JSON.stringify(slBody));
+  }
+
+  // A repository on this machine is not reachable by address.
+  const local = await fetch(`${API}/v1/apps/${GA}/import`, { method: 'POST', headers: { authorization: `Bearer ${agent.body.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ url: 'http://127.0.0.1:9/repo.git' }) });
+  const localBody = await local.json();
+  check('importing from http://127.0.0.1 is refused by the outbound guard', local.status === 400 && localBody.error?.code === 'blocked_url', JSON.stringify(localBody));
+  const meta = await tool('import_app', { app: GA, url: 'http://169.254.169.254/latest' });
+  check('import_app refuses a metadata address', meta.isError === true, JSON.stringify(meta.data));
+}
 
 await tool('publish_staging', { app: APP, discard: true });
 const etag = (await anon.go(url + '/assets/app.js')).headers.etag;

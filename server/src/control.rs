@@ -1282,14 +1282,31 @@ async fn files_since(
 
 /// A download address: the version's files as a tar.gz, and a file name for it. The address is its own credential and
 /// works until it expires.
-pub async fn download(st: &State, id: &str) -> Result<(String, Vec<u8>)> {
+pub async fn download(st: &State, id: &str) -> Result<(String, Vec<u8>, &'static str)> {
+    // A git bundle of the app (export_app): the whole history, built when it is fetched.
+    let id1 = id.to_string();
+    let bundle = st
+        .db
+        .call(move |conn| {
+            conn.first(
+                "SELECT a.* FROM downloads d JOIN apps a ON a.id = d.app_id WHERE d.id = ? AND d.kind = 'bundle' AND d.expires_at >= ?",
+                params![id1, now()],
+                AppRow::from_row,
+            )
+        })
+        .await?;
+    if let Some(app) = bundle {
+        let plan = crate::git_export::plan_app(st, app).await?;
+        let body = plan.bundle(st).await?;
+        return Ok((format!("{}.bundle", plan.slug), body, "application/x-git-bundle"));
+    }
     let id2 = id.to_string();
     let found = st
         .db
         .call(move |conn| {
             conn.first(
                 "SELECT d.app_id, d.version, d.expires_at, a.slug, v.created_at FROM downloads d JOIN apps a ON a.id = d.app_id \
-                 JOIN versions v ON v.app_id = d.app_id AND v.n = d.version WHERE d.id = ?",
+                 JOIN versions v ON v.app_id = d.app_id AND v.n = d.version WHERE d.id = ? AND d.kind = 'tar'",
                 [&id2],
                 |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, i64>(4)?)),
             )
@@ -1300,7 +1317,7 @@ pub async fn download(st: &State, id: &str) -> Result<(String, Vec<u8>)> {
     };
     let files = versions::read_files(st, &app_id, n).await?;
     let body = tokio::task::spawn_blocking(move || crate::tar::pack(&files, created_at)).await.map_err(Problem::internal)?;
-    Ok((format!("{slug}-v{n}.tar.gz"), body))
+    Ok((format!("{slug}-v{n}.tar.gz"), body, "application/gzip"))
 }
 
 /// Note that this person is working on the app (getting its files or deploying it). Others are told, never blocked.
