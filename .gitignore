@@ -1,7 +1,7 @@
 # Build output
 target/
 node_modules/
-
+.evor/*
 # Local configuration and data
 .env
 .env.local
