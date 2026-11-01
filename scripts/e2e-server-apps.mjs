@@ -227,8 +227,10 @@ check('deleting data is allowed while full', (await owner.go(furl + '/clear')).b
 await pause(500);
 const after = await owner.go(furl + '/fill');
 check('and frees the space, so writes work again', after.status === 200 && after.body === 'ok', `${after.status} ${after.body}`);
-await pause(500);
-check('the reported size shrinks with it', (await owner.api(`/v1/apps/${filler.body.app}/usage`)).body.storage.data < 1024 * 1024);
+// A shrinking size is reported at most every 5 seconds, so wait for it rather than for a fixed time.
+let shrunk = null;
+for (let i = 0; i < 16; i++) { await pause(500); shrunk = (await owner.api(`/v1/apps/${filler.body.app}/usage`)).body.storage.data; if (shrunk < 1024 * 1024) break; }
+check('the reported size shrinks with it', shrunk < 1024 * 1024, String(shrunk));
 
 // ---------- limits: an app that holds the runtime is cut off, and the others keep serving ----------
 // workerd runs every app on one thread and does not enforce the CPU limit; its supervisor (deploy/runtime/supervisor/)
