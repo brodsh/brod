@@ -1,0 +1,29 @@
+[package]
+name = "brod-node"
+version = "0.1.0"
+edition = "2024"
+description = "A Brod node: joins Brod with an Ed25519 key, dials it, reports heartbeats and answers Brod's requests over the connection"
+license = "AGPL-3.0-only"
+publish = false
+
+[[bin]]
+name = "brod-node"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "0.22"
+bytes = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["client", "server", "http1", "http2"] }
+http-body = "1"
+hyper-util = { version = "0.1", features = ["tokio", "client-legacy", "http1"] }
+libc = "0.2"
+ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "io-util", "signal", "sync", "process", "fs"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+webpki-roots = "1"
+
+[profile.release]
+strip = true

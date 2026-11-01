@@ -37,14 +37,36 @@ header equal to `BROD_PUBLIC_URL`. Platform pages send `X-Frame-Options: DENY`.
 | Agent tokens (`brod_…`), OAuth access and refresh tokens, sessions, sign-in and invitation links | SHA-256 of a 24-byte random value; the value itself is never stored |
 | App passwords (`password` access) | Argon2id (19 MiB, 2 passes), per-password salt. Older PBKDF2-SHA256 hashes still verify. |
 | App secrets (`set_secret`) | AES-256-GCM under a key derived from `SECRETS_KEY` with HKDF, bound to the app. Write-only through the API. |
+| Container apps' database passwords | Stored as the app's `DATABASE_URL` secret, as above. Never shown by `get_status`. |
+| Database backups | AES-256-GCM in 1 MiB chunks under a key derived from `SECRETS_KEY` with HKDF (`brod db backups v1`), each chunk bound to its database, position and whether it is the last. No plaintext dump is written to disk. |
 | User passwords | None exist. Sign-in is an emailed link (or Google). |
 
 Agent tokens can expire and can be read-only. OAuth access tokens last an hour; refresh tokens rotate on each use,
 and reusing the previous one disconnects the client.
 
-**Agents acting beyond what a person intended.** An agent can deploy and narrow access on its own. Widening access,
-inviting someone and deleting an app wait until a person opens a confirmation link ([docs/mcp.md](mcp.md#what-needs-a-person)).
+**Agents acting beyond what a person intended.** An agent can deploy and narrow access on its own. Five things wait
+until a person opens a confirmation link: widening access, inviting someone, deleting an app, opening paths that
+skip sign-in, and restoring an app's database from a backup ([docs/mcp.md](mcp.md#what-needs-a-person)). They are one list in the code (`control::NEEDS_A_PERSON`).
+An agent deploy that declares new open paths still goes live, with those paths closed until a person confirms.
 Updates to a live app go to a staging address first unless the agent is told otherwise.
+
+**One app reaching another's database.** Apps' databases live in `apps-postgres`, which has no network: neither apps
+nor nodes can reach it. An app reaches `brod-db.internal`, a listener its node opens on that app's own bridge only;
+the node passes each connection to Brod over its own connection, saying which app it came from, and Brod accepts it
+only if that app has a database and a deployment on that node, and only if the client asks for that app's database
+as that app's role. Postgres then checks the role's password. Each role owns only its database, cannot create roles or
+databases, and `CONNECT` on every app database is revoked from everyone else, so even a leaked password works only
+for its own database and only through its own app's node.
+
+**Forged identities.** Apps learn who a visitor is from the `x-brod-*` headers, which the gateway sets after stripping
+any a visitor sent, and from an Ed25519-signed JWT (`x-brod-identity`, `/_brod/me`) that names one app as its
+audience and lasts five minutes. Anything can verify it against `/.well-known/jwks.json`; only the holder of
+`IDENTITY_SIGNING_KEY` can make one.
+
+**Open paths used as a way around sign-in.** Paths an app opens ([docs/apps.md](apps.md#open-paths)) are exact or a
+`/*` prefix, never `/` or everything. Requests with encoded slashes, dot segments or double encoding never match, and
+the app receives the same normalised path that matched, so `/api/mcp/../admin` cannot reach `/admin`. Open-path
+requests carry no identity, no session cookie and no `x-brod-*` header.
 
 **Guessing and flooding.** Rate limits, kept in the database:
 
@@ -62,8 +84,8 @@ Updates to a live app go to a staging address first unless the agent is told oth
 size (10 MB) and total size (60 MB unpacked). Files are served with a `Content-Type` from their extension and
 `X-Content-Type-Options: nosniff`.
 
-**Weak configuration.** In hosted mode Brod refuses to start without `SECRETS_KEY`, or with a secret shorter than 32
-characters or one of the example values from its own docs. In self-hosted mode it generates any secret that is not set
+**Weak configuration.** In hosted mode Brod refuses to start without `SECRETS_KEY` or `IDENTITY_SIGNING_KEY`, or with a
+secret shorter than 32 characters or one of the example values from its own docs. In self-hosted mode it generates any secret that is not set
 and warns about weak ones.
 
 **The sidecars.** The runtime sees only its own secret, from a volume that holds nothing else, and compares it in
@@ -102,7 +124,7 @@ Be clear about these before you put Brod in front of people:
 
 1. Run Brod behind HTTPS before anyone else uses it.
 2. Back up `secrets.env` with the database ([backups](deploy-production.md#backups)). Losing `SECRETS_KEY` loses every
-   app secret.
+   app secret. Losing `IDENTITY_SIGNING_KEY` changes the JWKS, so services that cached it must fetch it again.
 3. Keep the `brod-data` volume and `.env` readable only by you.
 4. Upgrade when a release has a security fix. Watch the repository's releases.
 5. Give the builder role only to people you would let run code on your network.

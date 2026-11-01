@@ -173,6 +173,66 @@ async fn run(cfg: Config) {
             }
         });
     }
+    // Nodes (nodes.rs): a join token for the node next to Brod, and nodes that went quiet marked offline.
+    brod::nodes::write_local_join_token(&st).await;
+    {
+        let st = st.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(2));
+            loop {
+                tick.tick().await;
+                if let Err(e) = brod::nodes::sweep(&st).await {
+                    tracing::warn!("could not check nodes: {}", e.message);
+                }
+            }
+        });
+    }
+    // Container apps (deployments.rs): what was in progress when Brod stopped has failed; deployments follow the apps'
+    // pointers every few seconds; the registry keeps only recent images (pruned nightly).
+    if let Err(e) = brod::deployments::recover(&st).await {
+        tracing::warn!("could not mark interrupted deployments: {}", e.message);
+    }
+    {
+        let st = st.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(3));
+            loop {
+                tick.tick().await;
+                if let Err(e) = brod::deployments::reconcile(&st).await {
+                    tracing::warn!("could not check deployments: {}", e.message);
+                }
+            }
+        });
+    }
+    if st.registry.is_some() {
+        let st = st.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(300)).await;
+            let mut tick = tokio::time::interval(Duration::from_secs(24 * 3600));
+            loop {
+                tick.tick().await;
+                match brod::deployments::prune_images(&st).await {
+                    Ok(0) => {}
+                    Ok(n) => tracing::info!("deleted {n} old images from the registry; run `registry garbage-collect` to free their space"),
+                    Err(e) => tracing::warn!("could not prune old images: {}", e.message),
+                }
+            }
+        });
+    }
+    // Apps' managed databases (databases.rs, backups.rs): sizes, nightly backups, weekly restore drills, retention.
+    if st.cfg.apps_db.is_some() {
+        let st = st.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(120)).await;
+            let mut tick = tokio::time::interval(Duration::from_secs(600));
+            loop {
+                tick.tick().await;
+                if let Err(e) = brod::backups::tick(&st).await {
+                    tracing::warn!("could not look after app databases: {}", e.message);
+                }
+            }
+        });
+    }
     // Server apps' databases are measured in the runtime: refresh their sizes every 10 minutes.
     if st.cfg.runtime.is_some() {
         let st = st.clone();

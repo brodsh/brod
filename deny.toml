@@ -1,6 +1,7 @@
-# cargo-deny policy for both Rust crates. CI runs:
+# cargo-deny policy for the Rust crates. CI runs:
 #   cargo deny --manifest-path server/Cargo.toml --config deny.toml check
 #   cargo deny --manifest-path deploy/runtime/supervisor/Cargo.toml --config deny.toml check
+#   cargo deny --manifest-path node/Cargo.toml --config deny.toml check
 
 [graph]
 all-features = true

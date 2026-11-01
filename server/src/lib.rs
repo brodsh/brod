@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Brod, the self-hosted server: the gateway, the MCP endpoint, the REST API and the sign-in pages in one binary.
+// The MCP tool list (mcp.rs) is one json! literal, deeper than the default limit.
+#![recursion_limit = "256"]
 
 pub mod abuse;
 pub mod admin;
@@ -7,26 +9,35 @@ pub mod analytics;
 pub mod api;
 pub mod app;
 pub mod auth;
+pub mod backups;
 pub mod billing;
 pub mod config;
 pub mod connect;
+pub mod containers;
 pub mod control;
 pub mod copy;
+pub mod databases;
 pub mod db;
+pub mod deployments;
 pub mod domains;
 pub mod email;
 pub mod gateway;
 pub mod home;
 pub mod http;
+pub mod identity;
 pub mod market;
 pub mod mcp;
 pub mod model;
 pub mod network;
+pub mod nodes;
+pub mod open_paths;
 pub mod people;
 pub mod preview;
 pub mod problem;
+pub mod registry;
 pub mod runtime;
 pub mod scan;
+pub mod scheduler;
 pub mod secrets;
 pub mod settings;
 pub mod setup;

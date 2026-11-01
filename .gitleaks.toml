@@ -11,4 +11,10 @@ regexes = [
   '''^0123456789abcdef$''',
   # An earlier version of the runtime supervisor's secret-file test (commit f671792).
   '''^0123456789abcdef0123$''',
+  # The Ed25519 secret key of RFC 8032 section 7.1 test 1, the identity signing key in e2e scripts, and its JWK
+  # thumbprint asserted in identity.rs tests. Published in the RFC; never used outside tests.
+  '''^9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60$''',
+  '''^kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k$''',
+  # HeyCatch publishable keys: shipped to browsers by design (feat/heycatch-landing), not a secret.
+  '''^hck_pk_[A-Za-z0-9_-]+$''',
 ]

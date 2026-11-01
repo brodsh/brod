@@ -1,10 +1,12 @@
-# Brod: the server, its Postgres database and the runtime for server apps.
+# Brod: the server, its Postgres database, the runtime for server apps, a node (brod-node) on the same machine that
+# runs container apps, and the image registry for those apps.
 #   cp .env.example .env      (then set BROD_ADMIN_EMAIL)
 #   docker compose up -d
 #   docker compose logs brod  (the sign-in link and the line that connects your agent)
 # No password or secret needs setting: Brod generates its secrets into the brod-data volume and shares only the
 # runtime's secret with the runtime, and Postgres is reached only through a socket the two containers share, with no
-# network port.
+# network port. Container apps that ask for a database (request_database) get one in apps-postgres, a second Postgres
+# with no network at all: apps reach it only through their node and Brod (brod-db.internal), never directly.
 # For a server with a domain and HTTPS, see docs/deploy-production.md.
 name: brod
 
@@ -20,6 +22,16 @@ services:
       BROD_RUNTIME_URL: http://runtime:8081
       # Where Brod writes the secret it shares with the runtime: a volume that holds nothing else.
       BROD_RUNTIME_SECRET_FILE: /run/brod/runtime-secret
+      # Where Brod writes a join token for the node below while no node has joined: a volume that holds nothing else.
+      BROD_NODE_JOIN_TOKEN_FILE: /run/brod-node/token
+      # The registry below, for container apps' images. Brod signs its tokens and writes their certificate to the
+      # registry-cert volume; the signing key is generated into brod-data's secrets.env (REGISTRY_SIGNING_KEY).
+      BROD_REGISTRY_URL: http://registry:5000
+      BROD_REGISTRY_CERT_FILE: /run/brod-registry/registry-token.crt
+      # apps-postgres below, through its socket. Its admin password is generated into brod-data's secrets.env
+      # (APPS_DATABASE_PASSWORD) and written to the apps-postgres-secret volume for apps-postgres's first start.
+      BROD_APPS_DATABASE_URL: postgres://brod_admin@%2Fvar%2Frun%2Fapps-postgresql/postgres
+      BROD_APPS_DATABASE_PASSWORD_FILE: /run/brod-apps-postgres/password
     ports:
       # Only this machine can reach it. Use "8080:8080" (and a proxy with HTTPS) to let others in.
       - "127.0.0.1:8080:8080"
@@ -27,6 +39,10 @@ services:
       - brod-data:/data
       - postgres-socket:/var/run/postgresql
       - runtime-secret:/run/brod
+      - node-join:/run/brod-node
+      - registry-cert:/run/brod-registry
+      - apps-postgres-socket:/var/run/apps-postgresql
+      - apps-postgres-secret:/run/brod-apps-postgres
     depends_on:
       postgres:
         condition: service_healthy
@@ -49,6 +65,34 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+
+  # Apps' databases, separate from Brod's own: one database and one role per app (databases.rs). No network at all,
+  # not even a private one: Brod is the only client, through the shared socket, and apps reach their database only
+  # through Brod's tunnel to their node. Password authentication on the socket too, so each app's role needs its own
+  # password. Brod's image carries pg_dump and pg_restore of the same major version for backups.
+  apps-postgres:
+    image: postgres:17-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826
+    restart: unless-stopped
+    network_mode: none
+    command: ["postgres", "-c", "listen_addresses="]
+    environment:
+      POSTGRES_USER: brod_admin
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD_FILE: /run/brod-apps-postgres/password
+      POSTGRES_INITDB_ARGS: --auth-local=scram-sha-256 --auth-host=scram-sha-256
+    volumes:
+      - apps-postgres-data:/var/lib/postgresql/data
+      - apps-postgres-socket:/var/run/postgresql
+      - apps-postgres-secret:/run/brod-apps-postgres:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "brod_admin"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    depends_on:
+      # Brod writes the password file before it reports healthy.
+      brod:
+        condition: service_healthy
 
   runtime:
     image: ghcr.io/brodsh/brod-runtime:${BROD_VERSION:-latest}
@@ -75,9 +119,65 @@ services:
         # workerd looks up Brod's address once at start, so it restarts whenever Brod's container is recreated.
         restart: true
 
+  # A node on this machine. It joins and connects exactly as a node on another machine does: it dials Brod's
+  # /_node/connect, proves its key, and Brod reaches it over that connection. It joins once, with the token Brod wrote
+  # to the node-join volume; its key and id stay in node-state. It builds container apps' images and runs them.
+  # On the host's network, with NET_ADMIN, so it can reach each app's bridge directly and put iptables rules in place
+  # that keep app containers off private networks, the cloud metadata service and this machine (Linux only).
+  node:
+    image: ghcr.io/brodsh/brod-node:${BROD_VERSION:-latest}
+    build:
+      context: .
+      dockerfile: deploy/node/Dockerfile
+    restart: unless-stopped
+    init: true
+    network_mode: host
+    cap_add: [NET_ADMIN]
+    environment:
+      # Brod's published port on this machine (see brod's ports above).
+      BROD_URL: http://127.0.0.1:8080
+      BROD_NODE_JOIN_TOKEN_FILE: /run/brod-node/token
+      BROD_NODE_NAME: ${BROD_NODE_NAME:-local}
+      BROD_NODE_REACH: ip
+    volumes:
+      - node-state:/var/lib/brod-node
+      - node-join:/run/brod-node:ro
+      # Only this service sees the Docker socket: it builds and runs app containers. Nothing else in this file does.
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      brod:
+        condition: service_healthy
+
+  # The image registry for container apps. Only Brod talks to it, with short-lived tokens it signs: no port is
+  # published, and nodes get images through Brod. Unused images are deleted nightly; to reclaim their disk space run
+  #   docker compose exec registry registry garbage-collect --delete-untagged /etc/docker/registry/config.yml
+  registry:
+    image: registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+    restart: unless-stopped
+    environment:
+      REGISTRY_AUTH: token
+      REGISTRY_AUTH_TOKEN_REALM: http://brod:8080/v1/registry/token
+      REGISTRY_AUTH_TOKEN_SERVICE: brod-registry
+      REGISTRY_AUTH_TOKEN_ISSUER: brod
+      REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE: /run/brod-registry/registry-token.crt
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+    volumes:
+      - registry-data:/var/lib/registry
+      - registry-cert:/run/brod-registry:ro
+    depends_on:
+      brod:
+        condition: service_healthy
+
 volumes:
   brod-data:
   postgres-data:
   postgres-socket:
   runtime-data:
   runtime-secret:
+  node-join:
+  node-state:
+  registry-data:
+  registry-cert:
+  apps-postgres-data:
+  apps-postgres-socket:
+  apps-postgres-secret:

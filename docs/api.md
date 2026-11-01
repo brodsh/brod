@@ -93,6 +93,8 @@ tar -czf - -C dist . | curl -sS -X PUT --data-binary @- "<upload_url>"
 | `PUT /v1/apps/:slug/secrets/:NAME` `{value}`, `DELETE /v1/apps/:slug/secrets/:NAME` | Set or remove a secret |
 | `GET /v1/apps/:slug/access` | The access mode and who it is shared with (`access`, `shared_with`) |
 | `POST /v1/apps/:slug/access` `{access, password?, add?, remove?}` | Change access and role grants. See [Access](apps.md#access). |
+| `GET /v1/apps/:slug/open-paths` | Approved open paths, what the live and staging versions declare, what is open and what waits for a person |
+| `PUT /v1/apps/:slug/open-paths` `{open_paths}` | Replace the approved [open paths](apps.md#open-paths). Removing applies at once; adding, from an agent, waits for a person to confirm. |
 | `POST /v1/apps/:slug/rollback` `{version}` | Serve an earlier version |
 | `POST /v1/apps/:slug/publish` | Make the staging version live |
 | `DELETE /v1/apps/:slug/staging` | Take the version off staging and keep it |
@@ -182,6 +184,8 @@ Each action is recorded in the workspace's audit log (`GET /v1/events`) as by `B
 | `POST /v1/admin/workspaces/:workspace/suspend` `{reason}` | Suspend a workspace. `reason` is required. |
 | `POST /v1/admin/workspaces/:workspace/unsuspend` `{note?}` | Lift a suspension |
 | `POST /v1/admin/workspaces/:workspace/trust` `{note?}` | Let a new workspace open apps to everyone before it is a day old |
+| `POST /v1/admin/backups/run` | Back up every container app's database now ([apps.md](apps.md#databases)) |
+| `POST /v1/admin/backups/drill` | Run the restore drill now: restore each database's latest backup into a scratch database and compare row counts |
 
 ```sh
 A="Authorization: Bearer $ADMIN_SECRET"
