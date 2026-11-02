@@ -229,6 +229,7 @@ pub fn request(st: &State, mut parts: axum::http::request::Parts, body: axum::bo
     };
     Ok(Req {
         method: parts.method,
+        version: parts.version,
         scheme,
         host,
         path: crate::http::normalize_path(parts.uri.path()),

@@ -25,8 +25,9 @@ use crate::config::Config;
 use crate::db::{Connection, Sql, Val, params, tx};
 use crate::http::Req;
 use crate::model::Caller;
-use crate::problem::Result;
+use crate::problem::{Problem, Result};
 use crate::state::State;
+use crate::traffic::Class;
 use crate::util::now;
 
 const MINUTE: i64 = 60_000;
@@ -36,7 +37,7 @@ const DAY: i64 = 86_400_000;
 const SESSION_GAP: i64 = 30 * MINUTE;
 /// Rows held in memory between flushes; past this a flood is dropped rather than growing without bound.
 const MAX_PENDING: usize = 200_000;
-/// Rows per multi-row INSERT (17 columns: well under both databases' parameter limits).
+/// Rows per multi-row INSERT (19 columns: well under both databases' parameter limits).
 const CHUNK: usize = 50;
 /// Entries per breakdown in a report.
 const TOP: usize = 50;
@@ -66,6 +67,9 @@ pub struct View {
     pub signed_in: bool,
     pub status: i64,
     pub ms: i64,
+    /// "human", "suspicious" or "bot", and the signals that decided it (traffic.rs).
+    pub traffic: String,
+    pub traffic_reason: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -91,6 +95,7 @@ struct Stat {
     s4xx: i64,
     s5xx: i64,
     bots: i64,
+    suspicious: i64,
     ms_total: i64,
     lat: [i64; 8],
 }
@@ -114,7 +119,10 @@ pub struct Analytics {
 pub struct Hit {
     t0: Instant,
     at: i64,
+    /// The user agent says it is a bot. Such requests are not counted as visits (usage.rs).
     pub bot: bool,
+    /// Its class (traffic.rs), set by the gateway once it knows.
+    pub traffic: crate::traffic::Verdict,
     /// The workspace and app it reached, once known; requests that reach no app are not counted.
     pub app: Option<(String, String)>,
     /// The page view it is, if it is one someone may see.
@@ -123,7 +131,14 @@ pub struct Hit {
 
 impl Hit {
     pub fn new(req: &Req) -> Hit {
-        Hit { t0: Instant::now(), at: now(), bot: is_bot(req.header("user-agent").unwrap_or("")), app: None, view: None }
+        Hit {
+            t0: Instant::now(),
+            at: now(),
+            bot: is_bot(req.header("user-agent").unwrap_or("")),
+            traffic: Default::default(),
+            app: None,
+            view: None,
+        }
     }
 }
 
@@ -146,7 +161,8 @@ impl Analytics {
             500..=599 => s.s5xx += 1,
             _ => {}
         }
-        s.bots += i64::from(hit.bot);
+        s.bots += i64::from(hit.traffic.class == crate::traffic::Class::Bot);
+        s.suspicious += i64::from(hit.traffic.class == crate::traffic::Class::Suspicious);
         s.ms_total += ms;
         s.lat[LATENCY_BOUNDS.iter().position(|b| ms < *b).unwrap_or(7)] += 1;
         if let Some(mut v) = hit.view
@@ -154,6 +170,8 @@ impl Analytics {
         {
             v.status = i64::from(status);
             v.ms = ms;
+            v.traffic = hit.traffic.class.as_str().into();
+            v.traffic_reason = hit.traffic.reason;
             p.views.push(v);
         }
     }
@@ -337,6 +355,8 @@ pub fn page_view(cfg: &Config, req: &Req, workspace_id: &str, app_id: &str, visi
         signed_in,
         status: 200,
         ms: 0,
+        traffic: "human".into(),
+        traffic_reason: String::new(),
     }
 }
 
@@ -363,6 +383,8 @@ pub fn ingest(
             let mut v = page_view(cfg, req, workspace_id, app_id, visitor.to_string(), signed_in, &path);
             // A navigation inside the app has no outside referrer; its campaign tags were counted on the first load.
             (v.referrer, v.utm_source, v.utm_medium, v.utm_campaign) = Default::default();
+            // Only a browser that runs the script sends it (traffic.rs).
+            v.traffic_reason = "js".into();
             views.push(v);
             continue;
         }
@@ -431,12 +453,14 @@ fn write(conn: &Connection, p: Pending) -> Result<()> {
                 Val::Int(i64::from(v.signed_in)),
                 Val::Int(v.status),
                 Val::Int(v.ms),
+                Val::Text(v.traffic),
+                Val::Text(v.traffic_reason),
             ]
         });
         insert_rows(
             x,
-            "INSERT INTO page_views (workspace_id, app_id, at, visitor, path, referrer, utm_source, utm_medium, utm_campaign, country, lang, browser, os, device, signed_in, status, ms)",
-            17,
+            "INSERT INTO page_views (workspace_id, app_id, at, visitor, path, referrer, utm_source, utm_medium, utm_campaign, country, lang, browser, os, device, signed_in, status, ms, traffic, traffic_reason)",
+            19,
             views.collect(),
         )?;
         let events = p.events.into_iter().map(|e| {
@@ -455,13 +479,13 @@ fn write(conn: &Connection, p: Pending) -> Result<()> {
         insert_rows(x, "INSERT INTO app_events (workspace_id, app_id, at, visitor, path, kind, name, value, label)", 9, events.collect())?;
         for ((app, hour), s) in p.stats {
             x.run(
-                "INSERT INTO request_stats (app_id, hour, workspace_id, requests, bytes, s2xx, s3xx, s4xx, s5xx, bots, ms_total,
-                   lat0, lat1, lat2, lat3, lat4, lat5, lat6, lat7) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                "INSERT INTO request_stats (app_id, hour, workspace_id, requests, bytes, s2xx, s3xx, s4xx, s5xx, bots, suspicious, ms_total,
+                   lat0, lat1, lat2, lat3, lat4, lat5, lat6, lat7) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                  ON CONFLICT (app_id, hour) DO UPDATE SET requests = request_stats.requests + excluded.requests,
                    bytes = request_stats.bytes + excluded.bytes, s2xx = request_stats.s2xx + excluded.s2xx,
                    s3xx = request_stats.s3xx + excluded.s3xx, s4xx = request_stats.s4xx + excluded.s4xx,
                    s5xx = request_stats.s5xx + excluded.s5xx, bots = request_stats.bots + excluded.bots,
-                   ms_total = request_stats.ms_total + excluded.ms_total,
+                   suspicious = request_stats.suspicious + excluded.suspicious, ms_total = request_stats.ms_total + excluded.ms_total,
                    lat0 = request_stats.lat0 + excluded.lat0, lat1 = request_stats.lat1 + excluded.lat1,
                    lat2 = request_stats.lat2 + excluded.lat2, lat3 = request_stats.lat3 + excluded.lat3,
                    lat4 = request_stats.lat4 + excluded.lat4, lat5 = request_stats.lat5 + excluded.lat5,
@@ -477,6 +501,7 @@ fn write(conn: &Connection, p: Pending) -> Result<()> {
                     s.s4xx,
                     s.s5xx,
                     s.bots,
+                    s.suspicious,
                     s.ms_total,
                     s.lat[0],
                     s.lat[1],
@@ -669,8 +694,184 @@ fn vital_bounds(name: &str) -> Option<(f64, f64)> {
     })
 }
 
-/// GET /v1/analytics?days=30&app=`<slug>`&tz=`<minutes east of UTC>`: everything the analytics page shows.
-pub fn report(conn: &Connection, cfg: &Config, c: &Caller, app: Option<&str>, days: Option<i64>, tz: Option<i64>) -> Result<Value> {
+/// What a report reads, from GET /v1/analytics's query string.
+#[derive(Clone, Debug, Default)]
+pub struct Query {
+    /// An app's slug; every app in the workspace when None.
+    pub app: Option<String>,
+    pub days: Option<i64>,
+    pub tz: Option<i64>,
+    /// The classes of traffic to include (`traffic=human|suspicious|bot|all`, or a comma-separated list). People
+    /// only when empty.
+    pub traffic: Vec<Class>,
+    pub filters: Filters,
+}
+
+/// Drill-down filters on page views, each one exact. "(none)" matches the empty value (direct visits, an unknown
+/// country).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Filters {
+    pub country: Option<String>,
+    pub path: Option<String>,
+    pub referrer: Option<String>,
+    pub browser: Option<String>,
+    pub os: Option<String>,
+    pub device: Option<String>,
+    pub visitor: Option<String>,
+    /// "404", or a class of statuses: "4xx".
+    pub status: Option<String>,
+}
+
+/// A filter value that stands for "empty".
+pub const NONE: &str = "(none)";
+
+impl Query {
+    /// From a request's query parameters; 400 for a traffic class or status that does not exist.
+    pub fn from_params(get: impl Fn(&str) -> Option<String>) -> Result<Query> {
+        let num = |k: &str| get(k).and_then(|d| d.parse::<i64>().ok());
+        let text = |k: &str| get(k).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).map(|v| clip(&v, 300));
+        let mut traffic = Vec::new();
+        for t in get("traffic").unwrap_or_default().split(',').map(str::trim).filter(|t| !t.is_empty()) {
+            match (t, Class::parse(t)) {
+                ("all", _) => traffic.extend(Class::ALL),
+                (_, Some(c)) => traffic.push(c),
+                _ => {
+                    return Err(Problem::new(
+                        400,
+                        "bad_traffic",
+                        format!("traffic is human, suspicious, bot or all (or a comma-separated list), not \"{t}\"."),
+                    ));
+                }
+            }
+        }
+        traffic.sort_by_key(|c| Class::ALL.iter().position(|x| x == c));
+        traffic.dedup();
+        let status = text("status");
+        if let Some(st) = &status {
+            let b = st.as_bytes();
+            let ok = b.len() == 3 && b[0].is_ascii_digit() && (b[1..].iter().all(u8::is_ascii_digit) || &b[1..] == b"xx");
+            if !ok {
+                return Err(Problem::new(
+                    400,
+                    "bad_status",
+                    format!("status is a status code like 404, or a class like 4xx, not \"{st}\"."),
+                ));
+            }
+        }
+        Ok(Query {
+            app: text("app"),
+            days: num("days"),
+            tz: num("tz"),
+            traffic,
+            filters: Filters {
+                country: text("country").map(|c| if c == NONE { c } else { c.to_ascii_uppercase() }),
+                path: text("path"),
+                referrer: text("referrer"),
+                browser: text("browser"),
+                os: text("os"),
+                device: text("device"),
+                visitor: text("visitor"),
+                status,
+            },
+        })
+    }
+
+    /// The classes shown: people only, unless the query asked for others.
+    fn classes(&self) -> Vec<Class> {
+        if self.traffic.is_empty() { vec![Class::Human] } else { self.traffic.clone() }
+    }
+}
+
+impl Filters {
+    fn columns(&self) -> [(&'static str, &Option<String>); 7] {
+        [
+            ("country", &self.country),
+            ("path", &self.path),
+            ("referrer", &self.referrer),
+            ("browser", &self.browser),
+            ("os", &self.os),
+            ("device", &self.device),
+            ("visitor", &self.visitor),
+        ]
+    }
+
+    /// " AND col = ?" for each filter on page_views, with its parameters.
+    fn sql(&self) -> (String, Vec<Val>) {
+        let (mut sql, mut vals) = (String::new(), Vec::new());
+        for (col, v) in self.columns() {
+            if let Some(v) = v {
+                sql.push_str(&format!(" AND {col} = ?"));
+                vals.push(Val::Text(if v == NONE { String::new() } else { v.clone() }));
+            }
+        }
+        if let Some(st) = &self.status {
+            match st.strip_suffix("xx").and_then(|c| c.parse::<i64>().ok()) {
+                Some(c) => {
+                    sql.push_str(" AND status >= ? AND status < ?");
+                    vals.extend([Val::Int(c * 100), Val::Int(c * 100 + 100)]);
+                }
+                None => {
+                    sql.push_str(" AND status = ?");
+                    vals.push(Val::Int(st.parse().unwrap_or(0)));
+                }
+            }
+        }
+        (sql, vals)
+    }
+
+    /// Filters only page views have: what the browser reported is then limited to the visitors those views came from.
+    fn on_views_only(&self) -> bool {
+        [&self.country, &self.referrer, &self.browser, &self.os, &self.device, &self.status].iter().any(|f| f.is_some())
+    }
+
+    fn json(&self) -> Value {
+        let mut m = serde_json::Map::new();
+        for (k, v) in self.columns().into_iter().chain([("status", &self.status)]) {
+            if let Some(v) = v {
+                m.insert(k.into(), json!(v));
+            }
+        }
+        Value::Object(m)
+    }
+}
+
+/// The class a stored view counts as: a suspicious one whose browser ran the insights script was a person's.
+fn effective_class(stored: &str, js: bool) -> Class {
+    match Class::parse(stored).unwrap_or_default() {
+        Class::Suspicious if js => Class::Human,
+        c => c,
+    }
+}
+
+/// Visitors whose browser reported to the insights script between `from` and `to`.
+fn js_visitors(conn: &Connection, col: &str, id: &str, from: i64, to: i64) -> Result<HashSet<String>> {
+    let mut out = HashSet::new();
+    conn.each(&format!("SELECT DISTINCT visitor FROM app_events WHERE {col} = ? AND at >= ? AND at < ?"), params![id, from, to], |r| {
+        out.insert(r.get::<_, String>(0)?);
+        Ok(())
+    })?;
+    Ok(out)
+}
+
+/// What one visitor did, for the top visitors list.
+#[derive(Default)]
+struct VisitorRow {
+    views: i64,
+    first: i64,
+    last: i64,
+    class: Class,
+    reason: String,
+    country: String,
+    browser: String,
+    os: String,
+    device: String,
+}
+
+/// GET /v1/analytics?days=30&app=`<slug>`&tz=`<minutes east of UTC>`&traffic=human&country=..: everything the
+/// analytics page shows, for the classes of traffic asked for (people by default) and what the filters leave.
+pub fn report(conn: &Connection, cfg: &Config, c: &Caller, q: &Query) -> Result<Value> {
+    let (app, days, tz) = (q.app.as_deref(), q.days, q.tz);
+    let classes = q.classes();
     crate::people::require_role(c, "builder", "see analytics")?;
     let keep = crate::allowances::effective(conn, cfg, &c.workspace)?.analytics_days;
     let days = days.unwrap_or(30).clamp(1, keep);
@@ -712,17 +913,36 @@ pub fn report(conn: &Connection, cfg: &Config, c: &Caller, app: Option<&str>, da
     let (mut signed_in, mut page_ms, mut live) = (0i64, 0i64, HashSet::new());
     // Each visitor's views (time, path), for sessions; previous-period ones only for the comparison.
     let mut trails: HashMap<u32, Vec<(i64, u32)>> = HashMap::new();
+    let js = js_visitors(conn, col, id, prev_from, range.to)?;
+    // Views and visitors per class in the period, whichever classes the report shows, for the traffic toggle.
+    let mut by_class: HashMap<Class, (i64, HashSet<u32>)> = HashMap::new();
+    let (mut statuses, mut reasons) = (Dim::default(), Dim::default());
+    let mut visitors: HashMap<u32, VisitorRow> = HashMap::new();
+    let mut shown: HashSet<u32> = HashSet::new();
+    let (filter_sql, filter_vals) = q.filters.sql();
+    let mut vals: Vec<Val> = vec![Val::Text(id.to_string()), Val::Int(prev_from), Val::Int(range.to)];
+    vals.extend(filter_vals);
     conn.each(
         &format!(
-            "SELECT at, visitor, path, referrer, utm_source, utm_medium, utm_campaign, country, lang, browser, os, device, signed_in, status, ms, app_id
-             FROM page_views WHERE {col} = ? AND at >= ? AND at < ?"
+            "SELECT at, visitor, path, referrer, utm_source, utm_medium, utm_campaign, country, lang, browser, os, device, signed_in, status, ms, app_id,
+               traffic, traffic_reason
+             FROM page_views WHERE {col} = ? AND at >= ? AND at < ?{filter_sql}"
         ),
-        params![id, prev_from, range.to],
+        vals,
         |r| {
             let at: i64 = r.get(0)?;
             let visitor: String = r.get(1)?;
+            let class = effective_class(&r.get::<_, String>(16)?, js.contains(&visitor));
             let n = ids.len() as u32;
             let vid = *ids.entry(visitor).or_insert(n);
+            if range.bucket(at).is_some() {
+                let e = by_class.entry(class).or_default();
+                e.0 += 1;
+                e.1.insert(vid);
+            }
+            if !classes.contains(&class) {
+                return Ok(());
+            }
             let path: String = r.get(2)?;
             let pid = match path_ids.get(&path) {
                 Some(p) => *p,
@@ -741,6 +961,25 @@ pub fn report(conn: &Connection, cfg: &Config, c: &Caller, app: Option<&str>, da
             };
             cur.views += 1;
             cur.visitors.insert(vid);
+            shown.insert(vid);
+            let status: i64 = r.get(13)?;
+            statuses.add(&status.to_string(), vid);
+            let reason: String = r.get(17)?;
+            if class != Class::Human {
+                for one in reason.split(',').filter(|x| !x.is_empty()) {
+                    reasons.add(one, vid);
+                }
+            }
+            let row = visitors.entry(vid).or_default();
+            if row.views == 0 {
+                (row.first, row.country, row.browser, row.os, row.device) = (at, r.get(7)?, r.get(9)?, r.get(10)?, r.get(11)?);
+            }
+            row.views += 1;
+            row.first = row.first.min(at);
+            row.last = row.last.max(at);
+            if row.views == 1 || class as u8 > row.class as u8 {
+                (row.class, row.reason) = (class, reason);
+            }
             series_views[b] += 1;
             series_visitors[b].insert(vid);
             let local = at + range.tz;
@@ -828,7 +1067,8 @@ pub fn report(conn: &Connection, cfg: &Config, c: &Caller, app: Option<&str>, da
     let hour_from = prev_from - prev_from.rem_euclid(HOUR);
     conn.each(
         &format!(
-            "SELECT hour, requests, bytes, s2xx, s3xx, s4xx, s5xx, bots, ms_total, lat0, lat1, lat2, lat3, lat4, lat5, lat6, lat7
+            "SELECT hour, requests, bytes, s2xx, s3xx, s4xx, s5xx, bots, ms_total, lat0, lat1, lat2, lat3, lat4, lat5, lat6, lat7,
+               suspicious
              FROM request_stats WHERE {col} = ? AND hour >= ? AND hour < ?"
         ),
         params![id, hour_from, range.to],
@@ -849,6 +1089,7 @@ pub fn report(conn: &Connection, cfg: &Config, c: &Caller, app: Option<&str>, da
             req.s4xx += g(5)?;
             req.s5xx += g(6)?;
             req.bots += g(7)?;
+            req.suspicious += g(17)?;
             req.ms_total += g(8)?;
             for (k, l) in req.lat.iter_mut().enumerate() {
                 *l += g(9 + k)?;
@@ -862,6 +1103,7 @@ pub fn report(conn: &Connection, cfg: &Config, c: &Caller, app: Option<&str>, da
     )?;
 
     // ----- what the browser reported -----
+    let (events_shown, views_only) = (classes.contains(&Class::Human), q.filters.on_views_only());
     let mut vitals: HashMap<String, Vec<f64>> = HashMap::new();
     let (mut engaged, mut engaged_n) = (0.0f64, 0i64);
     let mut engaged_pages: HashMap<String, (f64, i64)> = HashMap::new();
@@ -874,9 +1116,27 @@ pub fn report(conn: &Connection, cfg: &Config, c: &Caller, app: Option<&str>, da
         |r| {
             let at: i64 = r.get(0)?;
             let visitor: String = r.get(1)?;
-            let n = ids.len() as u32;
-            let vid = *ids.entry(visitor).or_insert(n);
+            // What the browser reported comes from people's browsers only, and follows the filters: those only page
+            // views have limit it to the visitors whose views they left.
+            if !events_shown || q.filters.visitor.as_ref().is_some_and(|v| *v != visitor) {
+                return Ok(());
+            }
+            let vid = match ids.get(&visitor) {
+                Some(v) => *v,
+                None if views_only => return Ok(()),
+                None => {
+                    let n = ids.len() as u32;
+                    ids.insert(visitor, n);
+                    n
+                }
+            };
+            if views_only && !shown.contains(&vid) {
+                return Ok(());
+            }
             let (path, kind, name): (String, String, String) = (r.get(2)?, r.get(3)?, r.get(4)?);
+            if q.filters.path.as_ref().is_some_and(|p| *p != path) {
+                return Ok(());
+            }
             let value: Option<f64> = r.get(5)?;
             match kind.as_str() {
                 "vital" => {
@@ -957,6 +1217,10 @@ pub fn report(conn: &Connection, cfg: &Config, c: &Caller, app: Option<&str>, da
     let latency: Vec<Value> = req.lat.iter().enumerate().map(|(i, n)| json!({ "under_ms": LATENCY_BOUNDS.get(i), "count": n })).collect();
     let requests = json!({
         "total": req.requests, "bytes": req.bytes, "bots": req.bots,
+        // Requests are counted per hour for every class together; this is how they split.
+        "by_class": {
+            "human": (req.requests - req.bots - req.suspicious).max(0), "suspicious": req.suspicious, "bot": req.bots,
+        },
         "status": { "2xx": req.s2xx, "3xx": req.s3xx, "4xx": req.s4xx, "5xx": req.s5xx },
         "error_rate": if req.requests > 0 { req.s5xx as f64 / req.requests as f64 } else { 0.0 },
         "avg_ms": if req.requests > 0 { req.ms_total / req.requests } else { 0 },
@@ -983,6 +1247,29 @@ pub fn report(conn: &Connection, cfg: &Config, c: &Caller, app: Option<&str>, da
         "avg_engaged_seconds": avg_engaged,
         "requests": req.requests, "bytes": req.bytes, "bots": req.bots,
     });
+    // What the traffic toggle shows: views and visitors per class in the period, after the filters.
+    let traffic_json = json!({
+        "shown": classes.iter().map(|c| c.as_str()).collect::<Vec<_>>(),
+        "classes": Class::ALL.iter().map(|c| {
+            let (v, who) = by_class.get(c).map(|(v, w)| (*v, w.len())).unwrap_or_default();
+            (c.as_str().to_string(), json!({ "views": v, "visitors": who }))
+        }).collect::<serde_json::Map<_, _>>(),
+    });
+    // The visitors with the most views, to drill into one: their hash is the `visitor` filter.
+    let names: HashMap<u32, &String> = ids.iter().map(|(k, v)| (*v, k)).collect();
+    let mut rows: Vec<(u32, VisitorRow)> = visitors.into_iter().filter(|(_, r)| r.last >= range.from).collect();
+    rows.sort_by(|a, b| b.1.views.cmp(&a.1.views).then(b.1.last.cmp(&a.1.last)));
+    let top_visitors: Vec<Value> = rows
+        .into_iter()
+        .take(TOP)
+        .map(|(vid, r)| {
+            json!({
+                "visitor": names.get(&vid), "views": r.views, "first": crate::util::iso(r.first), "last": crate::util::iso(r.last),
+                "traffic": r.class.as_str(), "reason": r.reason,
+                "country": r.country, "browser": r.browser, "os": r.os, "device": r.device,
+            })
+        })
+        .collect();
     let l = session_lengths;
     let lengths = json!([["1", l[0]], ["2", l[1]], ["3", l[2]], ["4–5", l[3]], ["6–10", l[4]], ["11+", l[5]]]);
 
@@ -1027,6 +1314,11 @@ pub fn report(conn: &Connection, cfg: &Config, c: &Caller, app: Option<&str>, da
     put("outbound", outbound.top());
     put("events", custom_top);
     put("errors", Value::Array(errors));
+    put("traffic", traffic_json);
+    put("filters", q.filters.json());
+    put("statuses", statuses.top());
+    put("reasons", reasons.top());
+    put("visitors", Value::Array(top_visitors));
     Ok(Value::Object(out))
 }
 
@@ -1124,6 +1416,10 @@ mod tests {
         assert_eq!(h.bucket(t + 30 * MINUTE), Some(23));
     }
 
+    fn q(app: Option<&str>, days: Option<i64>, tz: Option<i64>) -> Query {
+        Query { app: app.map(Into::into), days, tz, ..Default::default() }
+    }
+
     #[tokio::test]
     async fn reports_sessions_breakdowns_and_requests() {
         let db = test_db();
@@ -1201,7 +1497,8 @@ mod tests {
             },
         ]);
         for (status, bot) in [(200, false), (200, true), (404, false), (500, false)] {
-            let mut hit = Hit { t0: Instant::now(), at: t, bot, app: Some(("ws_a".into(), "app_1".into())), view: None };
+            let traffic = crate::traffic::Verdict { class: if bot { Class::Bot } else { Class::Human }, ..Default::default() };
+            let mut hit = Hit { t0: Instant::now(), at: t, bot, traffic, app: Some(("ws_a".into(), "app_1".into())), view: None };
             hit.at = t - MINUTE;
             a.finish(hit, status, 100);
         }
@@ -1219,9 +1516,9 @@ mod tests {
                 write(c, p)?;
                 let mut cfg = Config::for_tests();
                 cfg.mode = crate::config::Mode::Hosted;
-                let all = report(c, &cfg, &caller("free"), None, Some(7), Some(0))?;
-                let one = report(c, &cfg, &caller("free"), Some("app_1"), Some(1), Some(0))?;
-                let long = report(c, &cfg, &caller("free"), None, Some(400), None)?;
+                let all = report(c, &cfg, &caller("free"), &q(None, Some(7), Some(0)))?;
+                let one = report(c, &cfg, &caller("free"), &q(Some("app_1"), Some(1), Some(0)))?;
+                let long = report(c, &cfg, &caller("free"), &q(None, Some(400), None))?;
                 Ok((all, one, long))
             })
             .await
@@ -1290,6 +1587,72 @@ mod tests {
             .unwrap();
         let left: Vec<(&str, i64)> = left.iter().map(|(w, n)| (w.as_str(), *n)).collect();
         assert_eq!(left, vec![("ws_f", 1), ("ws_gone", 1), ("ws_s", 2), ("ws_t", 3)]);
+    }
+
+    #[tokio::test]
+    async fn shows_people_by_default_and_filters_by_class_and_field() {
+        let db = test_db();
+        let t = now();
+        let a = Analytics::default();
+        // A person, a scanner, a suspicious client that later ran the insights script, and one that never did.
+        for (visitor, path, class, reason, country) in [
+            ("p1", "/", "human", "", "NP"),
+            ("p1", "/about", "human", "", "NP"),
+            ("b1", "/wp-login.php", "bot", "probe,no_lang", "NL"),
+            ("b1", "/.env", "bot", "probe", "NL"),
+            ("s1", "/", "suspicious", "no_lang", "NL"),
+            ("s2", "/", "suspicious", "burst", "DE"),
+        ] {
+            let mut v = view("app_1", t - 10 * MINUTE, visitor, path);
+            v.traffic = class.into();
+            v.traffic_reason = reason.into();
+            v.country = country.into();
+            a.view(v);
+        }
+        a.events(vec![Event {
+            workspace_id: "ws_a".into(),
+            app_id: "app_1".into(),
+            at: t - 9 * MINUTE,
+            visitor: "s1".into(),
+            path: "/".into(),
+            kind: "engage".into(),
+            name: "time".into(),
+            value: Some(5.0),
+            label: String::new(),
+        }]);
+        let p = a.take();
+        let r = db
+            .call(move |c| {
+                c.run("INSERT INTO workspaces (id, slug, name, created_at) VALUES ('ws_a','a','A',1)", ())?;
+                c.run("INSERT INTO users (id, email, created_at) VALUES ('usr_a','a@a.test',1)", ())?;
+                c.run(
+                    "INSERT INTO apps (id, workspace_id, owner_id, slug, name, created_at) VALUES ('app_1','ws_a','usr_a','app_1','App',1)",
+                    (),
+                )?;
+                write(c, p)?;
+                let cfg = Config::for_tests();
+                let mut out = vec![];
+                for query in ["", "traffic=bot", "traffic=all", "traffic=human&country=NL", "traffic=all&path=/"] {
+                    let req = crate::http::Req::for_tests("GET", &format!("/v1/analytics?days=1&tz=0&{query}"), &[]);
+                    let q = Query::from_params(|k| req.param(k)).unwrap();
+                    out.push(report(c, &cfg, &caller("free"), &q)?);
+                }
+                Ok(out)
+            })
+            .await
+            .unwrap();
+        // People only: p1, and s1 which proved it runs JavaScript.
+        assert_eq!(r[0]["totals"]["visitors"], 2);
+        assert_eq!(r[0]["totals"]["views"], 3);
+        assert_eq!(r[0]["traffic"]["classes"]["bot"]["visitors"], 1);
+        assert_eq!(r[0]["traffic"]["classes"]["suspicious"]["visitors"], 1);
+        assert_eq!(r[1]["totals"]["visitors"], 1);
+        assert_eq!(r[1]["totals"]["views"], 2);
+        assert!(r[1]["reasons"].as_array().unwrap().iter().any(|x| x["key"] == "probe"));
+        assert_eq!(r[2]["totals"]["visitors"], 4);
+        assert_eq!(r[3]["totals"]["visitors"], 1);
+        assert_eq!(r[4]["totals"]["views"], 3);
+        assert!(Query::from_params(|k| (k == "traffic").then(|| "robots".to_string())).is_err());
     }
 
     #[tokio::test]
