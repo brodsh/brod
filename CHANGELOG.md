@@ -6,7 +6,7 @@ generated from conventional commits.
 
 ## 0.2.0 (2026-11-01)
 
-Container apps on nodes, managed Postgres for apps, and admin mode.
+Container apps on nodes, managed Postgres for apps, admin mode, and git-backed app versions.
 
 ### Added
 
@@ -21,11 +21,20 @@ Container apps on nodes, managed Postgres for apps, and admin mode.
 - `@brod/auth`, the identity SDK for JavaScript.
 - Admin mode: operators, instance settings, workspace limits and overrides, an audit log and the operator console
   (including node management).
+- Git-backed app versions: files are stored once by content hash (`blobs/<sha256>`) and each version is a manifest.
+  Old versions are converted lazily, with no downtime.
+- Patch deploys: `deploy_app` and `POST /v1/deploys` take `base_version` plus changed and deleted files. A stale base
+  is merged three-way; conflicts return 409 `merge_conflict`. `get_files` takes `since`; new `diff_versions` tool.
+- Git export and import: clone an app read-only over smart HTTP or download a bundle (`export_app`); import a URL or
+  bundle into staging (`import_app`), merged at the common ancestor.
+- Git mirror and sync (`set_git_mirror`, `get_git_mirror`): fast-forward pushes to GitHub/GitLab, and signed webhooks
+  or polling bring remote pushes into staging.
 
 ### Changed
 
 - `docker-compose.yml` adds the `apps-postgres`, `registry` and `node` services; the Caddyfile passes `/_node/connect`
   through as HTTP/1.1 Upgrade. Existing installs must update both files before upgrading.
+- Migrations 0025-0027 add the version store, git commit map and git mirror tables.
 
 ### Fixed
 
