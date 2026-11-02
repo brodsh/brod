@@ -4,6 +4,19 @@ All notable changes to Brod. The format follows [Keep a Changelog](https://keepa
 [Semantic Versioning](https://semver.org/) (0.x: minor versions may change behaviour). Release notes on GitHub are
 generated from conventional commits.
 
+## 0.2.1 (2026-11-02)
+
+### Fixed
+
+- Hosted mode (`BROD_MODE=hosted`) now generates `REGISTRY_SIGNING_KEY` and `APPS_DATABASE_PASSWORD` into
+  `<data>/secrets.env` when they are unset, like self-hosted does. Before, the shipped `docker-compose.yml` would not
+  start in hosted mode without them.
+- The image now gives `/run/brod-registry` to Brod's user, so a new `registry-cert` volume is writable and Brod can
+  write the registry's token certificate.
+- The error for a bad `REGISTRY_SIGNING_KEY` says it must be PKCS#8 (not SEC1) and shows how to make one.
+- `deploy/upgrade.sh` rollback recreates the containers and ignores a `BROD_VERSION` set in the caller's environment,
+  so a failed upgrade really goes back to the previous version.
+
 ## 0.2.0 (2026-11-01)
 
 Container apps on nodes, managed Postgres for apps, admin mode, and git-backed app versions.

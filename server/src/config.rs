@@ -97,7 +97,7 @@ pub struct Config {
 pub struct AppsDbConfig {
     /// A postgres:// URL; a Unix socket folder goes in the host, percent-encoded (postgres://brod_admin@%2Frun%2Fpg/postgres).
     pub url: String,
-    /// APPS_DATABASE_PASSWORD, when the URL carries none (self-hosted, generated into secrets.env).
+    /// APPS_DATABASE_PASSWORD, when the URL carries none (generated into secrets.env when unset).
     pub password: Option<String>,
     /// BROD_PG_BIN_DIR: where pg_dump and pg_restore are, matching the server's major version. Default: the PATH.
     pub bin_dir: Option<PathBuf>,
@@ -182,7 +182,8 @@ impl std::fmt::Display for ConfigError {
 impl Config {
     /// Read the process environment, after loading `.env` from the working directory if there is one.
     /// Self-hosted, secrets that are not set are generated once and kept in `<data>`/secrets.env, so a first start needs
-    /// no configuration at all. Hosted, every secret must come from the environment.
+    /// no configuration at all. Hosted, every secret must come from the environment, except the two that only pair Brod
+    /// with its own Compose containers (REGISTRY_SIGNING_KEY, APPS_DATABASE_PASSWORD), which are generated in both modes.
     pub fn from_env() -> Result<Config, ConfigError> {
         let _ = dotenvy::dotenv();
         let mut vars: HashMap<String, String> = std::env::vars().collect();
@@ -203,16 +204,18 @@ impl Config {
                 }
             }
         }
-        // The registry key is not one of GENERATED (it is a PKCS#8 key, not 32 hex bytes): self-hosted, it is added to
-        // secrets.env the first time a registry is configured.
-        if !hosted && set(&vars, "BROD_REGISTRY_URL") && !set(&vars, "REGISTRY_SIGNING_KEY") {
+        // The registry key is not one of GENERATED (it is a PKCS#8 key, not 32 hex bytes): it is added to secrets.env the
+        // first time a registry is configured. Unlike GENERATED, this and the apps-postgres password below are made in
+        // hosted mode too: they only pair Brod with containers of the same Compose install (the registry, apps-postgres),
+        // nothing outside it, so the shipped docker-compose.yml starts without extra secrets in either mode.
+        if set(&vars, "BROD_REGISTRY_URL") && !set(&vars, "REGISTRY_SIGNING_KEY") {
             let key = registry_key_from_secrets(&data_dir)?;
             vars.insert("REGISTRY_SIGNING_KEY".into(), key);
             generated.push("REGISTRY_SIGNING_KEY".into());
         }
         // The apps-postgres admin password, like the registry key, is made the first time apps-postgres is configured,
         // and written to BROD_APPS_DATABASE_PASSWORD_FILE for the database container's POSTGRES_PASSWORD_FILE.
-        if !hosted && set(&vars, "BROD_APPS_DATABASE_URL") && !set(&vars, "APPS_DATABASE_PASSWORD") {
+        if set(&vars, "BROD_APPS_DATABASE_URL") && !set(&vars, "APPS_DATABASE_PASSWORD") {
             let pw = kept_secret(&data_dir, "APPS_DATABASE_PASSWORD", || crate::util::random_id("", 32))?;
             vars.insert("APPS_DATABASE_PASSWORD".into(), pw);
             generated.push("APPS_DATABASE_PASSWORD".into());
@@ -465,14 +468,22 @@ impl Config {
                         "BROD_REGISTRY_URL must be an http:// or https:// address, such as http://registry:5000.".into(),
                     ));
                 }
-                let key = get("REGISTRY_SIGNING_KEY")
-                    .ok_or_else(|| ConfigError("BROD_REGISTRY_URL needs REGISTRY_SIGNING_KEY (generated self-hosted).".into()))?;
+                let key = get("REGISTRY_SIGNING_KEY").ok_or_else(|| {
+                    ConfigError("BROD_REGISTRY_URL needs REGISTRY_SIGNING_KEY (generated into <data>/secrets.env when unset).".into())
+                })?;
                 use base64::Engine;
                 let key_pkcs8 = base64::engine::general_purpose::STANDARD
                     .decode(key.as_bytes())
                     .ok()
                     .filter(|k| crate::registry::check_key(k))
-                    .ok_or_else(|| ConfigError("REGISTRY_SIGNING_KEY must be an ECDSA P-256 PKCS#8 key in base64.".into()))?;
+                    .ok_or_else(|| {
+                        ConfigError(
+                            "REGISTRY_SIGNING_KEY must be an ECDSA P-256 PKCS#8 key in base64, not SEC1 (`openssl ecparam` output); \
+                             make one with `openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -outform DER | base64 -w0`, \
+                             or leave it unset to have one generated."
+                                .into(),
+                        )
+                    })?;
                 let cert_file = get("BROD_REGISTRY_CERT_FILE").map(PathBuf::from).unwrap_or_else(|| data_dir.join("registry-token.crt"));
                 Some(RegistryConfig { url: url.trim_end_matches('/').to_string(), key_pkcs8, cert_file })
             }
