@@ -35,7 +35,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     if [ "$TARGETARCH" = "$BUILDARCH" ]; then unset CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER CC_x86_64_unknown_linux_gnu CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER CC_aarch64_unknown_linux_gnu; fi; \
     cargo build --release --locked --manifest-path server/Cargo.toml --target "$(cat /triple)"; \
     cp "server/target/$(cat /triple)/release/brod" /brod; \
-    mkdir -p /data /run-brod /run-brod-node /run-brod-apps-postgres
+    mkdir -p /data /run-brod /run-brod-node /run-brod-apps-postgres /run-brod-registry
 
 # pg_dump and pg_restore for backups of apps' databases (backups.rs), from the same image and major version as
 # docker-compose.yml's apps-postgres, with the libraries they load that the distroless base lacks.
@@ -63,6 +63,9 @@ COPY --from=build --chown=65532:65532 /run-brod /run/brod
 COPY --from=build --chown=65532:65532 /run-brod-node /run/brod-node
 # And the one it writes apps-postgres's admin password to, for that container's first start (config.rs).
 COPY --from=build --chown=65532:65532 /run-brod-apps-postgres /run/brod-apps-postgres
+# And the one it writes the registry's token certificate to (registry.rs). A new named volume copies the owner of the
+# image's directory, so without this it is root's and Brod cannot write the certificate.
+COPY --from=build --chown=65532:65532 /run-brod-registry /run/brod-registry
 ENV BROD_LISTEN=0.0.0.0:8080 \
     BROD_DATA_DIR=/data \
     BROD_PG_BIN_DIR=/usr/local/lib/brod-pg/bin

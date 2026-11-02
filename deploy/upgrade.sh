@@ -23,6 +23,8 @@ version="${1:?usage: upgrade.sh <version, e.g. 0.2.0>}"
 version="${version#v}"
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "bad version: $version" >&2; exit 2; }
 cd "${BROD_DIR:-$(pwd)}"
+# .env decides the version; one left in the caller's environment would override it and defeat the rollback.
+unset BROD_VERSION
 [ -f docker-compose.yml ] && [ -f .env ] || { echo "no docker-compose.yml/.env in $(pwd)" >&2; exit 2; }
 
 exec 9>.upgrade.lock
@@ -37,8 +39,8 @@ set_version() {
     printf 'BROD_VERSION=%s\n' "$1" >> .env
   fi
 }
-healthy() {
-  docker compose up -d --wait --wait-timeout 180 >/dev/null 2>&1 || return 1
+healthy() { # extra arguments go to `docker compose up`, e.g. --force-recreate
+  docker compose up -d --wait --wait-timeout 180 "$@" >/dev/null 2>&1 || return 1
   [ -n "${BROD_HEALTH_URL:-}" ] || return 0
   for _ in 1 2 3 4 5 6; do
     curl -fsS --max-time 10 -o /dev/null "$BROD_HEALTH_URL" && return 0
@@ -90,6 +92,7 @@ log "FAILED $version: unhealthy"
 docker compose logs --since 5m brod 2>&1 | tail -20
 if [ -n "$prev" ]; then
   set_version "$prev"
-  if healthy; then log "ROLLED BACK to $prev"; else log "ROLLBACK UNHEALTHY: $prev also failed, restore from the backup"; fi
+  # Recreate, so containers left restarting by the failed version are replaced, not waited on.
+  if healthy --force-recreate; then log "ROLLED BACK to $prev"; else log "ROLLBACK UNHEALTHY: $prev also failed, restore from the backup"; fi
 fi
 exit 1
