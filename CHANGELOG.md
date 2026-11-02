@@ -4,6 +4,19 @@ All notable changes to Brod. The format follows [Keep a Changelog](https://keepa
 [Semantic Versioning](https://semver.org/) (0.x: minor versions may change behaviour). Release notes on GitHub are
 generated from conventional commits.
 
+## Unreleased
+
+### Added
+
+- Smart traffic: every visit to an app is labelled human, suspicious or bot from several signals (user agent, missing
+  headers, scanner probe paths, burst rate, 4xx share, and whether a browser ran the insights script), stored with
+  its reason (migration 0028). Analytics show people by default; `GET /v1/analytics` takes `traffic=` and drill-down
+  filters (`country`, `path`, `referrer`, `browser`, `os`, `device`, `visitor`, `status`) and lists top visitors and
+  the reasons; the dashboard has a People/Suspicious/Bots/All toggle and clickable filters.
+- The shield (`BROD_SHIELD`, on by default): a per-address request limit for apps, blocking addresses that scan for
+  vulnerable paths, and a self-hosted proof-of-work check for suspicious or very busy clients. Configurable in the
+  admin console or with `BROD_SHIELD_*`.
+
 ## 0.2.1 (2026-11-02)
 
 ### Fixed
