@@ -84,6 +84,18 @@ requests carry no identity, no session cookie and no `x-brod-*` header.
 size (10 MB) and total size (60 MB unpacked). Files are served with a `Content-Type` from their extension and
 `X-Content-Type-Options: nosniff`.
 
+**Git mirror and inbound sync.** The push token is sealed with `SECRETS_KEY` (bound to the app), is only decrypted for a push, and
+is never returned by any API, tool, log or export. It goes out as HTTP Basic auth (`x-access-token`) and is dropped on a redirect to
+another host. Only the app's owner or an admin can set it. The remote must be https and every request, including the poller's, goes
+through the same outbound guard as `import_app` (no loopback, private or metadata addresses, DNS pinned, redirects checked);
+loopback is allowed only with `DEV_MODE=1` and `DEV_ALLOW_LOOPBACK_GIT=1`. Pushes are fast-forward only: Brod never sends a
+forced update, never moves a tag, and marks a branch it cannot fast-forward as `diverged`. The webhook endpoint has no session:
+it accepts a request only when the GitHub HMAC-SHA256 signature (`X-Hub-Signature-256`) or the GitLab token matches the app's
+webhook secret, compared in constant time over the raw body; the secret is random, sealed and shown once. The endpoint has a body
+cap (5 MB) and a rate limit per address and per app, and bad signatures get the same 401 whether or not the app exists. Inbound
+changes only ever land on staging (never live) and conflicts create no version. Commits Brod pushed itself are recorded and
+ignored when they come back, so a mirror and a webhook cannot loop.
+
 **Weak configuration.** In hosted mode Brod refuses to start without `SECRETS_KEY` or `IDENTITY_SIGNING_KEY`, or with a
 secret shorter than 32 characters or one of the example values from its own docs. In self-hosted mode it generates any secret that is not set
 and warns about weak ones.
@@ -116,6 +128,14 @@ Be clear about these before you put Brod in front of people:
 - **Plain HTTP.** Without HTTPS, cookies have no `__Host-` prefix or `Secure` flag, and anything on the network can
   read sessions. The quickstart binds to `127.0.0.1` for that reason. Use HTTPS for anything else
   ([docs/deploy-production.md](deploy-production.md#https)).
+- **Git import and export.** `import_app` with a `url` makes the server fetch an address a person gave it, so the fetch
+  goes through an outbound guard: http(s) only, every resolved address must be public (no loopback, private,
+  link-local or metadata ranges, also for redirects, each of which is checked again), the connection uses the address
+  that was checked (no DNS rebinding), 10 s to connect, 120 s in all and a size cap (`BROD_GIT_MAX_IMPORT_MB`).
+  Imports refuse symbolic links, submodules, Git LFS pointers, `.git` folders, `..` and absolute paths and files over
+  the deploy limits, and then go through the normal deploy checks. Exports never contain secrets or app data, and
+  authors are `<user id>@users.noreply.<apps domain>` unless `BROD_GIT_REAL_EMAILS` is set. The git endpoint is
+  read-only (`git-receive-pack` is refused) and takes the same tokens and rate limits as the API.
 - **The operator.** Whoever runs Brod can read every app's files and database, and with `SECRETS_KEY` every app secret.
 - **Third-party requests from pages.** Brod's own pages load fonts from Google Fonts, so visitors' browsers contact
   Google. Self-hosting the fonts is on the [roadmap](roadmap.md).

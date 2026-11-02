@@ -143,6 +143,9 @@ This page is generated from `.env.example` by `node scripts/config-docs.mjs`. Ed
 | `BROD_RATE_DEPLOYS_PER_HOUR` | `30` | Deploys per workspace per hour. |
 | `BROD_RATE_CALLS_PER_MINUTE` | `600` | REST and MCP calls per connection per minute. |
 | `BROD_RATE_WORKSPACES_PER_USER_DAY` | `3` | Workspaces one person may create per day. |
+| `BROD_GIT_REAL_EMAILS` | `false` | Use people's real email addresses as the author of exported git commits. Off: &lt;user id&gt;@users.noreply.&lt;apps domain&gt;. |
+| `BROD_GIT_MAX_IMPORT_MB` | `50` | Largest git bundle or repository (in MB) import_app accepts. |
+| `BROD_GIT_SYNC_POLL_MINUTES` | `10` | How often (minutes) Brod polls the remote of a git mirror with inbound sync when no webhook arrived recently. 0: never. |
 
 ## Hosted only
 
@@ -160,6 +163,7 @@ This page is generated from `.env.example` by `node scripts/config-docs.mjs`. Ed
 | --- | --- | --- |
 | `DEV_MODE` | `0` | Never on a reachable server: returns sign-in links in API responses. |
 | `DEV_FREE_STORAGE_MB` |  | With DEV_MODE: a smaller free-plan storage limit in MB, so tests can fill it. |
+| `DEV_ALLOW_LOOPBACK_GIT` | `0` | With DEV_MODE: git mirrors may use http:// and 127.0.0.1 remotes, so tests can serve a repository. |
 | `STRIPE_API_BASE` | `https://api.stripe.com` | A stand-in for Stripe's API, for tests. |
 | `BROD_TEST_DATABASE_URL` |  | A Postgres database for `cargo test` to run its database tests against. |
 | `BROD_DEV_ASSETS` | `server/src` | Debug builds only: read the admin page from this folder on every request, for editing it without a rebuild. |

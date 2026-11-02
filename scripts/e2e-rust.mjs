@@ -39,7 +39,7 @@ const dns = await serveFakeDns();
 const env = {
   ...process.env, APPS_DOMAIN: `localhost:${PORT}`, API_ORIGIN: API, ADMIN_SECRET: 'dev-admin-secret', IDENTITY_SECRET: 'dev-identity-secret',
   IDENTITY_SIGNING_KEY: '9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60',
-  SECRETS_KEY: 'dev-secrets-key-0123456789', DEV_MODE: '1', BROD_LISTEN: `127.0.0.1:${PORT}`, BROD_DATA_DIR: state,
+  SECRETS_KEY: 'dev-secrets-key-0123456789', DEV_MODE: '1', DEV_ALLOW_LOOPBACK_GIT: '1', BROD_LISTEN: `127.0.0.1:${PORT}`, BROD_DATA_DIR: state,
   // The full suite covers the hosted service's plans, billing, marketplace and abuse checks; e2e-self-hosted.mjs covers the default.
   BROD_MODE: 'hosted',
   STRIPE_SECRET_KEY: STRIPE_KEY, STRIPE_WEBHOOK_SECRET: WEBHOOK_SECRET, STRIPE_PRICE_SOLO: 'price_solo', STRIPE_PRICE_TEAM: 'price_team',
@@ -149,8 +149,8 @@ try {
   if (code !== 0) console.error(`\n--- server log ---\n${log.slice(-5000)}${runtime ? `\n--- runtime log ---\n${rtLog.slice(-5000)}` : ''}${preview ? `\n--- preview log ---\n${pvLog.slice(-3000)}` : ''}`);
   if (mode === 's3') {
     const files = [...fake.s3.objects.keys()];
-    const ok = files.length > 0 && files.every(k => /^brod-bundles\/(app|lst)_/.test(k));
-    console.log(`${ok ? 'PASS' : 'FAIL'}  app files are in S3 (${files.length} objects)`);
+    const ok = files.length > 0 && files.every(k => /^brod-bundles\/((app|lst)_|blobs\/[0-9a-f]{64}$)/.test(k));
+    console.log(`${ok ? 'PASS' : 'FAIL'}  app files are in S3 (${files.length} objects)${ok ? "" : " " + files.filter(k => !/^brod-bundles\/((app|lst)_|blobs\/)/.test(k)).slice(0, 5).join(", ")}`);
     if (!ok) code = 1;
   }
 } catch (e) {

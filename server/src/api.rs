@@ -19,6 +19,37 @@ fn created(v: Value) -> Response {
 
 /// Unpack an uploaded archive and deploy it with the upload address's caller. A refused deploy leaves the address usable.
 async fn deploy_upload(st: &State, id: String, archive: Vec<u8>) -> Result<Response> {
+    // A git bundle is an import (git_import.rs): the address's app and note apply, and it lands on staging.
+    if archive.starts_with(b"# v2 git bundle\n") || archive.starts_with(b"# v3 git bundle\n") {
+        let id2 = id.clone();
+        let (caller, target) = st.db.call(move |c| control::claim_upload(c, &id2)).await?;
+        let run = async {
+            let Some(app) = target.app_slug().map(String::from) else {
+                return Err(Problem::new(
+                    400,
+                    "need_app",
+                    "A git bundle is imported into an existing app: create the address with \"app\".",
+                ));
+            };
+            let mut o = target.options.clone().unwrap_or_default();
+            o.insert("target".into(), json!(target.environment.clone().unwrap_or_else(|| "staging".into())));
+            if let Some(b) = &target.base_version {
+                o.insert("base_version".into(), b.clone());
+            }
+            if let Some(n) = &target.note {
+                o.insert("note".into(), json!(n));
+            }
+            let req = crate::git_import::ImportRequest::from_json(&app, &o, crate::git_import::Source::Bundle(archive))?;
+            crate::git_import::run(st, &caller, req).await
+        };
+        return match run.await {
+            Ok(v) => Ok(created(v)),
+            Err(e) => {
+                st.db.call(move |c| control::release_upload(c, &id)).await?;
+                Err(e)
+            }
+        };
+    }
     // A tar with a Dockerfile at its top is a container app's source (deployments.rs); it may be up to 200 MB.
     let (archive, container) = tokio::task::spawn_blocking(move || {
         let container = crate::containers::survey(&archive).ok().flatten().is_some_and(|s| s.dockerfile);
@@ -79,16 +110,28 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
 
     // A download address, like an upload address, is its own credential.
     if s(0) == Some("downloads") && s(1).is_some() && s(2).is_none() && m == Method::GET {
-        let (name, body) = control::download(st, &seg[1]).await?;
+        let (name, body, kind) = control::download(st, &seg[1]).await?;
         return Ok(crate::http::response(
             200,
             body,
             &[
-                ("content-type", "application/gzip".into()),
+                ("content-type", kind.into()),
                 ("content-disposition", format!("attachment; filename=\"{name}\"")),
                 ("cache-control", "no-store".into()),
             ],
         ));
+    }
+
+    // A push on a mirrored remote (git_mirror.rs): the signature is the credential.
+    if s(0) == Some("apps") && s(1).is_some() && s(2) == Some("git-webhook") && s(3).is_none() && m == Method::POST {
+        return crate::git_mirror::webhook(st, &mut req, &seg[1]).await;
+    }
+
+    // Read-only git over HTTP (git_export.rs): git clients sign in with HTTP Basic, so it is answered before sign-in.
+    if s(0) == Some("apps") && s(1).and_then(crate::git_export::git_slug).is_some() {
+        let slug = crate::git_export::git_slug(&seg[1]).unwrap_or_default().to_string();
+        let rest: Vec<&str> = seg[2..].iter().map(String::as_str).collect();
+        return crate::git_export::smart_http(st, &mut req, &slug, &rest).await;
     }
 
     // The operator's API for nodes (nodes.rs), then the report queue, takedowns, suspensions (abuse.rs).
@@ -361,6 +404,9 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
             if m == Method::POST {
                 let b = req.json_object().await?;
                 let target = DeployTarget::from_json(&b);
+                if let Some(patch) = crate::patch::parse(&b)? {
+                    return Ok(created(crate::patch::deploy_patch(st, &c, target, patch).await?));
+                }
                 return match b.get("files") {
                     None => Ok(created(db(Box::new(move |conn, cfg, c| control::create_upload(conn, cfg, c, &target))).await?)),
                     Some(files) => {
@@ -399,7 +445,39 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
                     let slug = slug.clone();
                     if action == "files" && m == Method::GET {
                         let version = req.param("version").map(|v| json!(v));
-                        return Ok(json(control::get_files(st, &c, &slug, version).await?));
+                        let since = req.param("since").map(|v| json!(v));
+                        return Ok(json(control::get_files(st, &c, &slug, version, since).await?));
+                    }
+                    if action == "export.bundle" && m == Method::GET {
+                        let (name, body) = crate::git_export::export_bundle(st, &c, &slug).await?;
+                        return Ok(crate::http::response(
+                            200,
+                            body,
+                            &[
+                                ("content-type", "application/x-git-bundle".into()),
+                                ("content-disposition", format!("attachment; filename=\"{name}\"")),
+                                ("cache-control", "no-store".into()),
+                            ],
+                        ));
+                    }
+                    if action == "git-mirror" {
+                        if m == Method::GET {
+                            return Ok(json(db(Box::new(move |conn, cfg, c| crate::git_mirror::get(conn, cfg, c, &slug))).await?));
+                        }
+                        if m == Method::PUT {
+                            let b = req.json_object().await?;
+                            return Ok(json(crate::git_mirror::set(st, &c, &slug, &b).await?));
+                        }
+                        if m == Method::DELETE {
+                            return Ok(json(db(Box::new(move |conn, _, c| crate::git_mirror::remove(conn, c, &slug))).await?));
+                        }
+                    }
+                    if action == "import" && m == Method::POST {
+                        return Ok(created(import_request(st, &c, &slug, &mut req).await?));
+                    }
+                    if action == "diff" && m == Method::GET {
+                        let (from, to) = (req.param("from").map(|v| json!(v)), req.param("to").map(|v| json!(v)));
+                        return Ok(json(crate::patch::diff_versions(st, &c, &slug, from.as_ref(), to.as_ref()).await?));
                     }
                     if action == "usage" && m == Method::GET {
                         crate::usage::flush(st).await?;
@@ -545,4 +623,28 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
         _ => {}
     }
     Err(Problem::new(404, "not_found", format!("No such API route: {m} {p}")))
+}
+
+/// POST /v1/apps/:slug/import: a JSON body {url, ref, ...} or a raw git bundle with the options in the query string.
+async fn import_request(st: &State, c: &Caller, slug: &str, req: &mut Req) -> Result<Value> {
+    use crate::git_import::{ImportRequest, Source};
+    let is_json = req.header("content-type").is_some_and(|t| t.to_ascii_lowercase().contains("json"));
+    let cap = (crate::instance::current(st).await.int("git.max_import_mb").max(1) as usize) * 1024 * 1024;
+    if is_json {
+        let b = req.json_object().await?;
+        let Some(url) = b.get("url").and_then(Value::as_str).filter(|u| !u.trim().is_empty()) else {
+            return Err(Problem::new(400, "need_source", "Send {\"url\": \"https://...\"} or a git bundle as the request body."));
+        };
+        let r = ImportRequest::from_json(slug, &b, Source::Url(url.to_string()))?;
+        return crate::git_import::run(st, c, r).await;
+    }
+    let bundle = req.bytes(cap, "The bundle").await?;
+    let mut o = Map::new();
+    for k in ["ref", "base_version", "history", "target", "note"] {
+        if let Some(v) = req.param(k) {
+            o.insert(k.into(), json!(v));
+        }
+    }
+    let r = ImportRequest::from_json(slug, &o, Source::Bundle(bundle))?;
+    crate::git_import::run(st, c, r).await
 }

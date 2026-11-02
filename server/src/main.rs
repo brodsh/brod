@@ -154,6 +154,9 @@ async fn run(cfg: Config) {
             }
         });
     }
+    // Git mirror: the push worker and the inbound poller (git_mirror.rs).
+    tokio::spawn(brod::git_mirror::worker(st.clone()));
+    tokio::spawn(brod::git_mirror::poller(st.clone()));
     if let Some(tls) = st.cfg.tls.clone()
         && let Err(e) = brod::tls::start(st.clone(), tls).await
     {
@@ -176,6 +179,22 @@ async fn run(cfg: Config) {
                 }
                 if let Err(e) = brod::analytics::flush(&st).await {
                     tracing::warn!("could not save analytics: {}", e.message);
+                }
+            }
+        });
+    }
+    // File contents no version refers to any more are deleted every hour (versions.rs).
+    {
+        let st = st.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(120)).await;
+            let mut tick = tokio::time::interval(Duration::from_secs(3600));
+            loop {
+                tick.tick().await;
+                match brod::versions::gc(&st, brod::versions::GC_GRACE_MS).await {
+                    Ok(0) => {}
+                    Ok(n) => tracing::info!("deleted {n} unused file contents"),
+                    Err(e) => tracing::warn!("could not collect unused file contents: {}", e.message),
                 }
             }
         });

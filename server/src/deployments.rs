@@ -1069,6 +1069,7 @@ async fn serve(st: &State, d: &Deployment) -> Result<String> {
                     params![now(), d.app_id, d.environment, d.id],
                 )?;
                 let to = if d.environment == "live" { "" } else { " on staging" };
+                crate::git_mirror::poke(&app.id);
                 event(x, &app.workspace_id, &d.actor, Some(&app.id), "deployed", &format!("v{} is serving{to} (container on {})", d.version, d.node_id.as_deref().unwrap_or("?")))?;
                 Ok(format!("serving: v{} is {}", d.version, if d.environment == "live" { "live" } else { "on staging" }))
             })

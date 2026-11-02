@@ -383,9 +383,7 @@ pub async fn internal(st: &State, mut req: Req) -> Result<Response> {
         let server: ServerInfo = serde_json::from_str(&server)?;
         let mut modules = Map::new();
         for p in &server.modules {
-            let bytes = st
-                .store
-                .read(&format!("{app_id}/{version}/{p}"), crate::tar::FILE_BYTES)
+            let bytes = crate::versions::read_file(st, &app_id, version, p, crate::tar::FILE_BYTES)
                 .await?
                 .ok_or_else(|| Problem::new(500, "missing_module", format!("The server module {p} is missing.")))?;
             modules.insert(p.clone(), json!(STANDARD.encode(bytes)));
