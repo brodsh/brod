@@ -152,7 +152,7 @@ services:
   # published, and nodes get images through Brod. Unused images are deleted nightly; to reclaim their disk space run
   #   docker compose exec registry registry garbage-collect --delete-untagged /etc/docker/registry/config.yml
   registry:
-    image: registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+    image: registry:3@sha256:d4032d4cc323c1731c707931ecada07a53076eac38e3b61ae57533f170f2c6c3
     restart: unless-stopped
     environment:
       REGISTRY_AUTH: token
