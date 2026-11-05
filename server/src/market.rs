@@ -357,7 +357,7 @@ fn source(conn: &Connection, c: &Caller, app_id: &str, version: Option<i64>) -> 
 /// Copy the source version's files into the release, then record the release (and the listing, when it is new) in one
 /// transaction. If recording fails, the copied files are removed again.
 async fn publish(st: &State, c: &Caller, listing_id: &str, n: i64, src: Source, note: String, insert: Option<Listing>) -> Result<()> {
-    let files = read_tree(st, &format!("{}/{}/", src.app_id, src.version)).await?;
+    let files = crate::versions::read_files(st, &src.app_id, src.version).await?;
     let prefix = format!("{listing_id}/{n}/");
     write_tree(st, &prefix, files).await?;
     let (c2, id) = (c.clone(), listing_id.to_string());

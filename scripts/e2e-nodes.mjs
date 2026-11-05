@@ -20,6 +20,7 @@ if (process.env.BROD_NODE_BIN === undefined) execFileSync('cargo', ['build', '--
 const bin = resolve(process.env.BROD_BIN ?? join('server', 'target', 'release', 'brod'));
 const nodeBin = resolve(process.env.BROD_NODE_BIN ?? join('node', 'target', 'release', 'brod-node'));
 const tokenFile = join(state, 'node-join', 'token');
+const nodeVersion = readFileSync(join('node', 'Cargo.toml'), 'utf8').match(/^version = "([^"]+)"/m)[1];
 
 let passed = 0, failed = 0;
 const check = (name, ok, detail = '') => { ok ? passed++ : failed++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok || !detail ? '' : `\n      ${detail}`}`); };
@@ -94,7 +95,7 @@ try {
   check('join -> online, connected', !!v, JSON.stringify(v ?? (await nodeView(id))));
   v = await until('heartbeat', async () => { const n = await nodeView(id); return n?.resources?.memory_total > 0 && n; }, 15_000);
   check('GET /v1/admin/nodes shows the heartbeat\'s resources and capabilities',
-    v?.resources?.disk_total > 0 && v?.capabilities?.cpus >= 1 && ['amd64', 'arm64'].includes(v?.capabilities?.arch) && v?.version === '0.1.0' && v?.name === 'e2e-1',
+    v?.resources?.disk_total > 0 && v?.capabilities?.cpus >= 1 && ['amd64', 'arm64'].includes(v?.capabilities?.arch) && v?.version === nodeVersion && v?.name === 'e2e-1',
     JSON.stringify(v));
   const list = await adminJson('');
   check('the node list has it', list.json?.nodes?.length === 1 && list.json.nodes[0].id === id, JSON.stringify(list.json));

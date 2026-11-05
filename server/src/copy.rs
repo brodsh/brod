@@ -21,6 +21,13 @@ pub const TABLES: &[&str] = &[
     "grants",
     "domains",
     "versions",
+    "blobs",
+    "version_manifests",
+    "manifest_entries",
+    "version_git_commits",
+    "git_mirrors",
+    "git_mirror_refs",
+    "git_sync_events",
     "secrets",
     "app_settings",
     "network_reports",
@@ -36,6 +43,7 @@ pub const TABLES: &[&str] = &[
     "app_logs",
     "oauth_clients",
     "oauth_codes",
+    "app_tokens",
     "stripe_events",
     "visits",
     "nodes",
@@ -52,6 +60,8 @@ pub const TABLES: &[&str] = &[
     "installs",
     "rate_limits",
     "listing_media",
+    "instance_settings",
+    "workspace_limits",
 ];
 
 /// Tables whose ids come from AUTOINCREMENT in SQLite and an identity column in Postgres.

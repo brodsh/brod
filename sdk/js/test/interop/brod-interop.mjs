@@ -1,5 +1,5 @@
 // Interop with a real Brod: start the server and its workerd runtime, sign in, deploy a server app that runs
-// @brod/auth itself (bundled with esbuild) and echoes x-brod-identity, then verify the real tokens with the built SDK
+// @brodsh/auth itself (bundled with esbuild) and echoes x-brod-identity, then verify the real tokens with the built SDK
 // from Node, against the inline key set from env and against the live /.well-known/jwks.json.
 //
 // Usage (from sdk/js, after npm run build):
@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import { BrodAuthError, clearKeyCache, currentUser, verifyIdentityToken } from '@brod/auth';
+import { BrodAuthError, clearKeyCache, currentUser, verifyIdentityToken } from '@brodsh/auth';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const sdk = resolve(here, '..', '..');
@@ -92,9 +92,9 @@ async function waitFor(url, headers, proc, out, what) {
   }
 }
 
-// The server app: @brod/auth running inside workerd, bundled into one _worker.js.
+// The server app: @brodsh/auth running inside workerd, bundled into one _worker.js.
 const WORKER_SOURCE = `
-import { currentUser } from '@brod/auth';
+import { currentUser } from '@brodsh/auth';
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -148,7 +148,7 @@ try {
   const deploy = async (name) => (await admin.api('/v1/deploys', { json: { name, files: [{ path: '_worker.js', content: worker }] } })).body;
   const app = await deploy('Auth echo');
   const other = await deploy('Other app');
-  check('a server app bundling @brod/auth deploys', app.kind === 'server' && !!app.url, JSON.stringify(app));
+  check('a server app bundling @brodsh/auth deploys', app.kind === 'server' && !!app.url, JSON.stringify(app));
   await admin.open(app.url + '/');
   await admin.open(other.url + '/');
 

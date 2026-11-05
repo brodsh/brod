@@ -15,7 +15,7 @@ beforeEach(() => clearKeyCache());
 
 const opts = () => ({ env: { BROD_ISSUER: ISSUER, BROD_APP_ID: APP_ID, BROD_IDENTITY_JWKS: JSON.stringify(jwksOf(key)) } });
 
-describe('@brod/auth/next', () => {
+describe('@brodsh/auth/next', () => {
   it('reads the person from next/headers', async () => {
     current.headers = new Headers({ 'x-brod-identity': await sign(key) });
     expect((await currentUserFromHeaders(opts()))?.email).toBe('ada@example.com');

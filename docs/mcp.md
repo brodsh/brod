@@ -70,9 +70,14 @@ Use the Streamable HTTP transport at `/mcp` with the header `Authorization: Bear
 
 | Tool | What it does |
 | --- | --- |
-| `deploy_app` | Deploy a new app or a new version: files inline (up to 1 MB), or a one-time upload address for a bigger build. Returns the address. A source with a `Dockerfile` becomes a [container app](apps.md#container-apps) (`port`, `health`, `cpu`, `memory_mb`). |
+| `deploy_app` | Deploy a new app or a new version: files inline (up to 1 MB), a patch (`base_version` + `changes` + `deletes`, merged per file when the base is stale, see [patch deploys](apps.md#patch-deploys-and-merging)), or a one-time upload address for a bigger build. Returns the address. A source with a `Dockerfile` becomes a [container app](apps.md#container-apps) (`port`, `health`, `cpu`, `memory_mb`). |
 | `list_apps` | The workspace's apps: address, status, who can open each, live version. |
-| `get_files` | The files of an app's current version (or a named one), to change them. |
+| `get_files` | The files of an app's current version (or a named one), to change them, each with its `sha256` and `size`. `since` (a version number) lists only what changed since then. |
+| `diff_versions` | A unified diff between two versions of an app (`from`, `to`), capped, with the paths added, modified and deleted. |
+| `export_app` | An app as a git repository: a short-lived download address for a git bundle and a clone address (`format`: `git-bundle`). See [Git](apps.md#git). |
+| `import_app` | Turn a git commit into a new version on staging: from a public https `url`, or (without it) an upload address for a bundle. `ref`, `base_version`, `history` (`tip` or `all`), `target`, `note`. Merges when the commit descends from a known version. |
+| `set_git_mirror` | Mirror an app to a git remote (owner or admin only): `url` (https), `token` or `token_secret`, `enabled`, `branches`, `push_tags`, `sync_inbound`, `inbound_branch`, `rotate_webhook_secret`. Pushes fast-forward only; the answer holds a one-time `webhook_secret` when inbound sync is on. See [Git mirror and sync](apps.md#git-mirror-and-sync). |
+| `get_git_mirror` | The mirror's settings, last push status and error, each ref, inbound sync status, conflicts and recent sync events. Never shows the token or the webhook secret. |
 | `get_status` | One app: access, roles, who it is shared with, versions, what is on staging, custom domains, secret names, open paths (approved, open, waiting). |
 | `get_logs` | An app's activity (deploys, access changes, refusals) and, for server apps, recent requests with console output and errors. |
 | `get_deployment` | A [container app](apps.md#container-apps)'s deployment: its state (building, serving, failed) and the last 50 lines of its log. A failed one answers `build_failed`, `migration_failed` or `deployment_failed`. |
@@ -90,8 +95,8 @@ Use the Streamable HTTP transport at `/mcp` with the header `Authorization: Bear
 | `backup_database` | Back up a container app's database now. |
 | `get_workspace` | The workspace's groups, default roles and access modes, and how an app reads the signed-in person. |
 
-A read-only connection (OAuth scope `brod:read`, or a token made read-only) sees only `list_apps`, `get_files`,
-`get_status`, `get_logs`, `get_deployment`, `get_auth_integration` and `get_workspace`.
+A read-only connection (OAuth scope `brod:read`, or a token made read-only) sees only `list_apps`, `get_files`, `diff_versions`,
+`export_app`, `get_git_mirror`, `get_status`, `get_logs`, `get_deployment`, `get_auth_integration` and `get_workspace`.
 
 The server also sends instructions with `initialize`. They tell the agent to ask before changing a live app, to deploy
 updates to staging first, and to pass `base_version` so it never overwrites someone else's work.
@@ -205,3 +210,16 @@ last one hour. Refresh tokens rotate on every use, and reusing an old one discon
 
 A request without a valid token gets `401` with a `WWW-Authenticate` header that points the client at the metadata, as
 the MCP specification describes.
+
+## Apps that are MCP servers
+
+The same OAuth server signs people in to an app's own MCP endpoint ([app MCP](apps.md#app-mcp)). The app declares
+`"mcp": "/api/mcp"` in its `brod.json` and handles that path, reading the caller with `currentUser()` from
+`@brodsh/auth`. A client is given only `https://<app host>/api/mcp`: it gets `401` there with a pointer to the
+endpoint's protected-resource metadata, registers, and signs the person in at Brod with `resource` set to that address
+(RFC 8707). The consent page names the app and its workspace; nobody who cannot open the app gets that far.
+
+Tokens issued this way work only at that one address and are checked against the app's access on every request. They
+never work on Brod's own `/mcp`, and Brod's own tokens never work at an app. A sign-in without `resource`, or with
+Brod's own `/mcp` as the resource, is a Brod connection exactly as above. `get_auth_integration` explains this to an
+agent writing the app.

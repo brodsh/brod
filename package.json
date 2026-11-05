@@ -1,6 +1,6 @@
 {
   "name": "brod",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Brod: the self-hosted cloud your AI agent deploys team tools to, over MCP. Node is used only for the end-to-end tests.",
   "license": "AGPL-3.0-only",
@@ -20,6 +20,7 @@
     "e2e:nodes": "node scripts/e2e-nodes.mjs",
     "e2e:containers": "node scripts/e2e-containers.mjs",
     "e2e:postgres": "node scripts/e2e-postgres.mjs",
+    "e2e:app-mcp": "node scripts/e2e-app-mcp.mjs",
     "gen:og": "node scripts/gen-og.mjs"
   },
   "devDependencies": {

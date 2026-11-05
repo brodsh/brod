@@ -1,8 +1,8 @@
 -- A small SQLite database with rows in every table, for the migrate-to-postgres test (src/copy.rs).
 -- Text sorts differently in the two databases, nulls sit in nullable columns, and events were pruned, so the
 -- AUTOINCREMENT high-water mark (100) is past the largest id left.
-INSERT INTO users VALUES ('usr_a', 'ana@acme.test', 'Ana', 1700000000000, 1700000000001, 1700000000002);
-INSERT INTO users VALUES ('usr_B', 'Bo@acme.test', '', NULL, NULL, 1700000000003);
+INSERT INTO users VALUES ('usr_a', 'ana@acme.test', 'Ana', 1700000000000, 1700000000001, 1700000000002, 1700000000004);
+INSERT INTO users VALUES ('usr_B', 'Bo@acme.test', '', NULL, NULL, 1700000000003, NULL);
 INSERT INTO workspaces VALUES ('ws_1', 'acme', 'Acme', 'team', '#1f6f4a', 'A', 1700000000000, 'cus_1', 'sub_1', 'active', 1800000000000, NULL, NULL, '', 1700000001000);
 INSERT INTO members VALUES ('ws_1', 'usr_a', 'admin', 1700000000000), ('ws_1', 'usr_B', 'guest', 1700000000001);
 INSERT INTO groups VALUES ('grp_1', 'ws_1', 'finance', 1700000000000), ('grp_2', 'ws_1', 'Zebra', 1700000000000);
@@ -13,13 +13,13 @@ INSERT INTO tokens VALUES ('tok_2', 'ws_1', 'usr_a', 'Claude Desktop', 'h7', 1, 
 INSERT INTO apps VALUES ('app_1', 'ws_1', 'usr_a', 'reading', 'Reading', 'Reading list', 'Hi', 'live', 'people', '["owner","editor","viewer"]', 2, 1, 3, 'sp_1', 4096, 8192, NULL, NULL, '', 3, 2, '[]', 'db_1');
 INSERT INTO apps VALUES ('app_2', 'ws_1', 'usr_a', 'draft', 'draft', '', '', 'live', 'password', '["owner"]', NULL, 2, 0, NULL, 0, 0, 'pbkdf2$100000$c2FsdA$aGFzaA', 1700000002000, 'Phishing ''kit''', NULL, NULL, '[]', NULL);
 INSERT INTO grants VALUES ('app_1', 'user:usr_B', 'viewer', 1), ('app_1', 'domain:acme.test', 'editor', 2);
-INSERT INTO versions VALUES ('app_1', 1, 'First version', 'ana@acme.test', 2, 120, 1, NULL, '[]', NULL, NULL, NULL, NULL, NULL, 'auto', NULL);
-INSERT INTO versions VALUES ('app_1', 2, 'Update', 'Claude (ana@acme.test)', 3, 4096, 2, '{"main":"_worker.js","modules":["_worker.js"]}', '["a password field"]', 3, '[{"key":"name","label":"Name","type":"text","default":"Reading"}]', '["api.stripe.com"]', 1, NULL, 'auto', NULL);
+INSERT INTO versions VALUES ('app_1', 1, 'First version', 'ana@acme.test', 2, 120, 1, NULL, '[]', NULL, NULL, NULL, NULL, NULL, 'auto', NULL, NULL);
+INSERT INTO versions VALUES ('app_1', 2, 'Update', 'Claude (ana@acme.test)', 3, 4096, 2, '{"main":"_worker.js","modules":["_worker.js"]}', '["a password field"]', 3, '[{"key":"name","label":"Name","type":"text","default":"Reading"}]', '["api.stripe.com"]', 1, NULL, 'auto', NULL, '/api/mcp');
 INSERT INTO secrets VALUES ('app_1', 'STRIPE_KEY', 'iv.ct', 1, 'ana@acme.test');
 INSERT INTO app_settings VALUES ('app_1', 'name', '"Our reading"', NULL, 0, 1, 'ana@acme.test'), ('app_1', 'logo', '"k3y"', 'image/png', 2048, 2, 'ana@acme.test');
 INSERT INTO network_reports VALUES ('app_1', 'evil.test', 'browser', 2, 3, 0, 1, 2), ('app_1', 'api.other.test', 'server', NULL, 1, 1, 1, 1);
 INSERT INTO uploads VALUES ('up_1', 'ws_1', 'usr_a', 'ana@acme.test', NULL, 'reading', 'n', 9, NULL, 'staging', 2, NULL);
-INSERT INTO downloads VALUES ('dl_1', 'ws_1', 'app_1', 2, 'usr_a', 9);
+INSERT INTO downloads VALUES ('dl_1', 'ws_1', 'app_1', 2, 'usr_a', 9, 'tar');
 INSERT INTO editing VALUES ('app_1', 'usr_a', 'ana@acme.test', 'Claude', 2, 1, 2), ('app_1', 'usr_B', 'Bo@acme.test', 'Bo@acme.test', NULL, 3, 4);
 INSERT INTO login_links VALUES ('h3', 'ana@acme.test', '/', 1, 2, 3);
 INSERT INTO sessions VALUES ('h4', 'usr_a', NULL, NULL, 1, 2, NULL), ('h5', 'usr_a', 'app_1', 'h4', 1, 2, NULL);
@@ -36,13 +36,14 @@ INSERT INTO visits VALUES ('app_1', '2026-10-09', 12, 3), ('app_1', '2026-10-10'
 INSERT INTO nodes VALUES ('node_1', 'pk1', 'local', 'online', '{"arch":"amd64"}', '{"memory_total":1}', '0.1.0', '10.0.0.2', 1, 1);
 INSERT INTO node_join_tokens VALUES ('hash_1', 'admin', 2, 1);
 INSERT INTO visit_visitors VALUES ('app_1', '2026-10-10', 'hash1');
-INSERT INTO page_views VALUES ('ws_1', 'app_1', 1760000000000, 'hash1', '/', 'google.com', 'news', 'email', 'launch', 'NP', 'ne', 'Firefox', 'Linux', 'Desktop', 1, 200, 12);
+INSERT INTO page_views VALUES ('ws_1', 'app_1', 1760000000000, 'hash1', '/', 'google.com', 'news', 'email', 'launch', 'NP', 'ne', 'Firefox', 'Linux', 'Desktop', 1, 200, 12, 'suspicious', 'no_lang');
 INSERT INTO app_events VALUES ('ws_1', 'app_1', 1760000000000, 'hash1', '/', 'vital', 'LCP', 1234.5, '');
-INSERT INTO request_stats VALUES ('app_1', 1759997200000, 'ws_1', 3, 4096, 2, 0, 1, 0, 1, 40, 2, 1, 0, 0, 0, 0, 0, 0);
+INSERT INTO request_stats VALUES ('app_1', 1759997200000, 'ws_1', 3, 4096, 2, 0, 1, 0, 1, 40, 2, 1, 0, 0, 0, 0, 0, 0, 1);
 INSERT INTO spaces VALUES ('sp_1', 'ws_1', 'Front desk', '', 1), ('sp_2', 'ws_1', 'back office', 'note', 2);
 INSERT INTO space_members VALUES ('sp_1', 'usr_B', 'editor', 1);
 INSERT INTO oauth_clients VALUES ('cli_1', 'Claude', '["http://127.0.0.1/cb"]', 1);
-INSERT INTO oauth_codes VALUES ('h7', 'cli_1', 'usr_a', 'ws_1', 'http://127.0.0.1/cb', 'chal', 2, NULL, 'read');
+INSERT INTO oauth_codes VALUES ('h7', 'cli_1', 'usr_a', 'ws_1', 'http://127.0.0.1/cb', 'chal', 2, NULL, 'read', 'https://reading.acme.brod.test/api/mcp');
+INSERT INTO app_tokens VALUES ('atk_1', 'app_1', 'usr_a', 'https://reading.acme.brod.test/api/mcp', 'Claude', 'cli_1', 'h10', 1, 2, 3, 'h11', NULL, 4, NULL);
 INSERT INTO domains VALUES ('dom_1', 'reading.example.com', 'ws_1', 'app_1', 'tok1', 5, 'alice@acme.test', 4), ('dom_2', 'apps.example.com', 'ws_1', NULL, 'tok2', NULL, 'alice@acme.test', 5);
 INSERT INTO listings VALUES ('lst_1', 'ws_1', 'app_1', 'reading-list', 'Reading list', 'Track what to read', 'Long text', 0, 'usd', 'listed', 1, 1, 2, 1);
 INSERT INTO releases VALUES ('lst_1', 1, 2, 'First release', '["owner","editor","viewer"]', '["STRIPE_KEY"]', NULL, 3, 4096, 'ana@acme.test', 1, NULL, '["api.stripe.com"]');
@@ -52,3 +53,12 @@ INSERT INTO listing_media VALUES ('med_1', 'lst_1', 'video', 'video/mp4', 2048, 
 INSERT INTO databases VALUES ('db_1', 'app_1', 'postgres', 'app_1', 'app_1', 'DATABASE_URL', 1, 8192, 2, 3);
 INSERT INTO backups VALUES ('bk_1', 'db_1', 'app_1', 'backups/db_1/20261031T000000000Z.dump.enc', 4096, 'done', 'nightly', NULL, '{"public.notes":2}', 1, 2, 3, NULL, NULL);
 INSERT INTO deployments VALUES ('dep_1', 'app_1', 2, 'live', 'node_1', 'serving', NULL, NULL, 'brod-dep-1', 'built', 0.5, 512, 1, 'ana@acme.test', 1, 2, 2, NULL, NULL, '2026-10-31T00:00:00Z');
+INSERT INTO instance_settings VALUES ('limits.max_running_apps', '5', 'ana@acme.test', 1700000000005);
+INSERT INTO workspace_limits VALUES ('ws_1', 10, NULL, -1, NULL, 'pilot', 'ana@acme.test', 1700000000006);
+INSERT INTO version_git_commits (app_id, version, commit_oid, tree_oid, source_commit_oid) VALUES ('app_1', 2, 'c0ffee0000000000000000000000000000000001', 'c0ffee0000000000000000000000000000000002', NULL);
+INSERT INTO git_mirrors (app_id, url, enabled, branches, push_tags, token_sealed, token_secret, sync_inbound, inbound_branch, webhook_secret, last_webhook_at, last_poll_at, last_inbound_oid, last_push_at, last_status, last_error, inbound_status, inbound_error, inbound_conflicts, created_at, updated_at, updated_by) VALUES ('app_1', 'https://git.example.test/acme/reading.git', 1, '{"main":"main","staging":"staging"}', 1, 'iv.ct', NULL, 1, 'main', 'iv.ct', 1, 2, 'c0ffee0000000000000000000000000000000003', 3, 'ok', NULL, 'conflict', 'Both sides changed index.html', '["index.html"]', 1, 2, 'ana@acme.test');
+INSERT INTO git_mirror_refs (app_id, ref_name, remote_oid, tree_oid, version, status, message, pushed_at) VALUES ('app_1', 'refs/heads/main', 'c0ffee0000000000000000000000000000000001', 'c0ffee0000000000000000000000000000000002', 2, 'ok', NULL, 3);
+INSERT INTO git_sync_events (id, app_id, at, source, remote_oid, branch, result, version, detail) VALUES ('gse_1', 'app_1', 4, 'webhook', 'c0ffee0000000000000000000000000000000003', 'main', 'conflict', NULL, 'index.html');
+INSERT INTO blobs (sha256, size, created_at) VALUES ('aa00000000000000000000000000000000000000000000000000000000000001', 12, 1700000000);
+INSERT INTO version_manifests (app_id, version, parent, author, note, created_at, file_count, bytes) VALUES ('app_1', 2, 1, 'usr_a', 'Update', 1700000000, 1, 12);
+INSERT INTO manifest_entries (app_id, version, path, sha256, size, mode) VALUES ('app_1', 2, 'index.html', 'aa00000000000000000000000000000000000000000000000000000000000001', 12, 420);

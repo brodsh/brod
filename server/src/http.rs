@@ -25,6 +25,8 @@ pub enum Via {
 
 pub struct Req {
     pub method: Method,
+    /// The HTTP version the client spoke (behind a proxy, the proxy's).
+    pub version: axum::http::Version,
     /// "http" or "https".
     pub scheme: String,
     /// The Host, lowercased, with its port.
@@ -60,6 +62,7 @@ impl Req {
         }
         Req {
             method: method.parse().unwrap(),
+            version: axum::http::Version::HTTP_11,
             scheme: "https".into(),
             host: "x.test".into(),
             path: path.into(),

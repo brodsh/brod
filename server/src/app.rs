@@ -182,8 +182,11 @@ pub async fn may_have_certificate(st: &State, domain: &str) -> Result<bool> {
             st.db.call(move |c| c.exists("SELECT 1 FROM workspaces WHERE slug = ?", [w])).await?
         }
         [a, w] => {
-            // `<app>--staging.<workspace>` is the app's staging address and needs a certificate of its own.
-            let a = a.strip_suffix(crate::util::STAGING_SUFFIX).unwrap_or(a).to_string();
+            // <app>--staging.<workspace> is the app's staging address, so it needs a certificate as much as the app's own.
+            let a = match a.strip_suffix(crate::util::STAGING_SUFFIX) {
+                Some(base) if !base.is_empty() => base.to_string(),
+                _ => a.clone(),
+            };
             let w = w.clone();
             st.db
                 .call(move |c| {
@@ -229,6 +232,7 @@ pub fn request(st: &State, mut parts: axum::http::request::Parts, body: axum::bo
     };
     Ok(Req {
         method: parts.method,
+        version: parts.version,
         scheme,
         host,
         path: crate::http::normalize_path(parts.uri.path()),

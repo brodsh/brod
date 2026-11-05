@@ -1,6 +1,6 @@
 [package]
 name = "brod"
-version = "0.1.0"
+version = "0.2.1"
 edition = "2024"
 description = "Brod: a cloud for small software. The self-hosted server."
 license = "AGPL-3.0-only"
@@ -54,6 +54,9 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["s
 time = "0.3"
 unicode-normalization = "0.1"
 x509-parser = "0.18"
+diffy = "0.5.2"
+sha1 = "0.10"
+url = "2"
 
 [profile.release]
 lto = "thin"

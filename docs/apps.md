@@ -90,14 +90,14 @@ const { payload } = await jwtVerify(token, jwks, {
 });
 ```
 
-#### In JavaScript: `@brod/auth`
+#### In JavaScript: `@brodsh/auth`
 
-[`@brod/auth`](../sdk/js/README.md) does all of this in one call, in Node, Next.js (server components, route handlers,
+[`@brodsh/auth`](../sdk/js/README.md) does all of this in one call, in Node, Next.js (server components, route handlers,
 middleware) and Workers. It reads `BROD_ISSUER`, `BROD_APP_ID` and `BROD_IDENTITY_JWKS` from the environment, accepts
 only `EdDSA`, allows 30 seconds of clock skew, and fetches and caches the JWKS when there is no inline copy:
 
 ```js
-import { currentUser } from '@brod/auth';
+import { currentUser } from '@brodsh/auth';
 
 const user = await currentUser(request); // a Request, Headers, or a Node / Express request
 // null: anonymous (an open path, or a public app with nobody signed in)
@@ -105,7 +105,7 @@ const user = await currentUser(request); // a Request, Headers, or a Node / Expr
 // A token that does not verify throws a BrodAuthError with status 401.
 ```
 
-In Next.js, `currentUserFromHeaders()` from `@brod/auth/next` reads the current request in server components and
+In Next.js, `currentUserFromHeaders()` from `@brodsh/auth/next` reads the current request in server components and
 route handlers. On workerd, pass the Worker's env: `currentUser(request, { env })`. The
 [README](../sdk/js/README.md) has examples for each, and the 403 pattern for an app that keeps its own users table.
 
@@ -230,7 +230,7 @@ These three were checked against a token signed the way Brod signs (PyJWT 2.15, 
 a valid token verifies, a missing one is anonymous, and another app's audience is refused.
 
 Agents can ask the `get_auth_integration` tool for this contract and ready-made snippets for Next.js, Node, Python,
-Go, Rust and workerd. The Next.js, Node and workerd ones use `@brod/auth`, with the plain `jose` code beside them.
+Go, Rust and workerd. The Next.js, Node and workerd ones use `@brodsh/auth`, with the plain `jose` code beside them.
 
 The signing key is `IDENTITY_SIGNING_KEY`. A self-hosted server generates one on first start; a hosted server refuses
 to start without one. Changing it invalidates tokens already handed out, which matters little at five minutes.
@@ -262,9 +262,10 @@ effect on the next request. Each app gets its own SQLite database on the sidecar
 (`BROD_RUNTIME_URL` not set), a deploy with server code is refused with `server_apps_unavailable`. See
 [architecture.md](architecture.md).
 
-- **Routing.** A file that exists in the bundle is served as is. Every other request, with any method, goes to `fetch`.
-  The server code itself is never served. A path must name the file exactly: `/` and folder paths go to `fetch`, not to
-  an `index.html`. Serve the page from `fetch`, or import it from a `_worker/` folder as text
+- **Routing.** A file that exists in the bundle is served as is, and `/` and folder paths serve the folder's
+  `index.html` when the bundle has one. Every other request, with any method, goes to `fetch`, so there is no
+  single-page-app fallback: a path with no file behind it is the server code's to answer. The server code itself is
+  never served. A page can also come from `fetch`, imported from a `_worker/` folder as text
   (`import page from './page.html'`), as [examples/hello-team](../examples/hello-team) does. Files in `_worker/` with
   the extensions `.html`, `.css`, `.txt`, `.md`, `.sql`, `.svg` and `.csv` import as strings.
 - **Identity.** Access is decided before the request reaches the app. The person arrives as `x-brod-user-id`,
@@ -293,8 +294,11 @@ effect on the next request. Each app gets its own SQLite database on the sidecar
   A version whose code throws while loading, or does not export `fetch`, is refused with `server_failed`, and the live
   version keeps serving. A request that throws gets a plain error page. The visitor never sees the exception. The owner
   sees it in the logs.
-- **Outgoing requests.** `fetch` to the public internet is allowed, subject to the app's
-  [outside addresses](#outside-addresses). Apps cannot reach Brod's private network.
+- **Outgoing requests.** `fetch` to the public internet over HTTP and HTTPS is allowed, subject to the app's
+  [outside addresses](#outside-addresses). HTTPS certificates are checked against the CAs browsers trust. Apps cannot
+  reach Brod's private network: private, loopback and link-local addresses (including cloud metadata at
+  `169.254.169.254`), internal names such as `brod` or `*.internal`, and public names that resolve to any of these. A
+  fetch that fails throws `Brod could not reach <origin>: <reason>`, and that message shows in the app's logs.
 
 ### Limits for server apps
 
@@ -381,6 +385,94 @@ started from, and Brod refuses it when the app has moved on.
 - **Version numbers.** Each deploy takes the next number from a counter on the app, so two deploys at once never share
   a number, and a deleted or refused version's number is never used again. Numbers can skip.
 - `base_version` is optional, but agents should pass it whenever they update an app.
+
+### Patch deploys and merging
+
+To change a few files, send only those. `deploy_app` and `POST /v1/deploys` take, instead of `files`, a patch:
+`base_version` (required), `changes` (path -> exactly one of `{ "content" }`, `{ "content_base64" }` or `{ "sha256" }` of
+content this app already has, as `get_files` lists it) and `deletes` (paths). Brod applies it to the base version and
+runs the result through the same checks as a full upload (paths, size limits, abuse scan, storage allowance, staging).
+A `sha256` the app does not have is refused with `422 unknown_blobs` and a `missing` list. A patch to an app or version
+that has no files to patch (a container app, a deleted version) is a 404.
+
+If the app moved on since `base_version`, Brod merges per file instead of refusing. A file only one side changed takes
+that side. A text file both sides changed is merged by line (three-way, diff3); a binary file both changed, or a file
+one side deleted and the other changed, is a conflict. Any conflict is `409 merge_conflict` with `conflicts`
+(`path`, `kind` `text`, `binary` or `delete_modify`, and `hunks` of `base`, `current`, `incoming` text) and nothing is
+deployed; fix those files against `current_version` and send the patch again. A merged deploy answers with a `patch`
+object (`base_version`, `merged_onto`, `stale_base`, `changed`, `merged`). A full upload with a stale base keeps the
+`stale_base` refusal above.
+
+`get_files` with `since=<version>` lists only the files added, modified or deleted since that version (unchanged
+ones are named, not sent). `diff_versions {app, from, to}` (`GET /v1/apps/:slug/diff?from=&to=`) returns the changed
+paths and a unified diff, capped at 100 KB. Each version records its parent, its author and its note.
+
+### How versions are stored
+
+Files are stored once by content: a blob at `blobs/<sha256>` in storage, written only when it is missing. A version is
+a manifest (path, sha256, size, mode, in path order) in the database (`version_manifests`, `manifest_entries`), so a
+deploy that changes one file uploads one blob, and rollback, staging, serving and downloads only read manifests.
+Download tarballs are built on demand and are deterministic. Versions deployed before this stored one object per
+file; each is converted the first time it is read, and its old objects are deleted
+only after the manifest is saved. Nothing is converted at start-up. Blobs no manifest refers to are removed hourly,
+once they are more than an hour old (the grace period lets a deploy that is still being committed keep its blobs).
+Marketplace releases and previews keep their own per-file layout.
+
+Storage use counts the unique content of an app once: the same bytes in ten versions, or twice in one version, count
+once for that app. The same bytes in two apps count once for each, so an app's usage never depends on another's.
+
+## Git
+
+An app's history is a git repository. `export_app {app}` (or `GET /v1/apps/:slug/export.bundle`) gives a git bundle;
+`git clone https://x:TOKEN@your.brod/v1/apps/notes.git` clones it over read-only smart HTTP (any user name, a Brod token
+as the password; a read-only token works). `main` is the live version, `staging` the version waiting on staging, and each
+version is a commit tagged `v<N>` with its note as the message and a `Brod-Version: N` trailer. The commits are
+deterministic: the same app exports the same ids. Authors are the person's name with
+`<user id>@users.noreply.<apps domain>`; the instance setting `BROD_GIT_REAL_EMAILS` uses real addresses instead.
+Secrets, databases and other app data are never exported. Pushing is refused (403): changes come back with import.
+
+`import_app {app, url?, ref?, base_version?, history?, target?}` (`POST /v1/apps/:slug/import`, a JSON body or a raw
+bundle) turns a commit into a new version, on staging unless `target` is `production`. Without `url` it gives an upload
+address for a bundle (`git bundle create app.bundle --all`, then `curl -X PUT --data-binary @app.bundle`). With `url`
+Brod fetches a public https repository itself, through an outbound guard that refuses private, loopback, link-local and
+metadata addresses (also after redirects), with 10 s to connect and 120 s in all.
+
+If the commit or an ancestor is one Brod exported (or imported before), that version is the merge base and the change is
+merged like a [patch](#patch-deploys-and-merging). Otherwise every file is replaced and the result has a `warning`
+("no common ancestor; replaced all files"). `history: "all"` makes one version per new first-parent commit, oldest first
+(at most 50). Refused, with the path named: symbolic links, submodules, Git LFS pointers, `.git` folders, paths with `..`
+or absolute paths, and files over the deploy limits. The pack may be up to `BROD_GIT_MAX_IMPORT_MB` (default 50).
+
+### Git mirror and sync
+
+An app can be mirrored to a repository on GitHub, GitLab or any git host, and can take pushes back.
+
+**Push mirror.** `set_git_mirror` (or `PUT /v1/apps/:slug/git-mirror`) takes the repository `url` (https), a `token` that may push
+(GitHub: a fine-grained token with Contents write, user name `x-access-token`) or `token_secret`, the name of one of the app's
+secrets that holds it, and `enabled`. After every deploy, publish, rollback or staging change Brod pushes in the background:
+the live version to `main`, the version on staging to `staging`, and every version as a tag `v<N>`. The `branches` setting
+renames them. Pushes are batched: several changes in quick succession become one push, and a failing push is retried five
+times with growing waits (10 s, 40 s, 160 s, up to 10 minutes) before the status becomes `error`. A deploy never waits for it.
+
+Pushes only ever fast-forward. If a remote branch holds commits Brod does not know and that are not its ancestors, the branch is
+left alone and the status is `diverged` with a message; nothing is forced. When the remote tip is a commit Brod imported or
+knows from before (for example after a rollback), Brod adds a commit on top of it so the push still fast-forwards. A tag that
+exists with another commit is never moved (its ref shows `skipped`).
+
+`get_git_mirror` (read-only) and `get_status` show `git_mirror: {status, last_push_at, error}` with the status `idle`, `ok`,
+`retrying`, `diverged`, `error` or `disabled`. The token is stored sealed and is never returned or exported. Only the app's owner
+or a workspace admin can configure the mirror; builders can see it.
+
+**Inbound sync.** With `sync_inbound: true`, a push to the remote branch (default: the one mapped to `main`) is imported into
+staging with the same merge-base logic as `import_app`: it is merged with what is on staging, never onto live. Enabling it shows a
+`webhook_secret` once (`rotate_webhook_secret` makes a new one) and the `webhook_url`. In the repository's webhook settings use
+that address, content type `application/json`, the secret, and the push event. GitHub is verified by `X-Hub-Signature-256`,
+GitLab by `X-Gitlab-Token`. Without a webhook Brod looks at the remote every `BROD_GIT_SYNC_POLL_MINUTES` (default 10, 0 = never)
+and fetches only when the branch moved.
+
+If the pushed changes clash with staging, no version is made; `get_git_mirror` shows `inbound.status: conflict` with the paths
+and the owner gets an email. Commits Brod pushed itself are recognised and never imported again. Every inbound event is in
+`recent_sync` with its result (`imported`, `conflict`, `ignored`, `unchanged`, `error`).
 
 ## Access
 
@@ -549,8 +641,8 @@ the app may only talk to its own address. The list is checked at deploy (`400 ba
 
 ## Open paths
 
-Some routes must answer callers who cannot sign in: a payment provider's webhook, an MCP endpoint with its own tokens,
-a health check. An app lists them as `open_paths` in its `brod.json` (`server/src/open_paths.rs`):
+Some routes must answer callers who cannot sign in: a payment provider's webhook, a health check. (For an MCP server
+of the app's own, declare it as [app MCP](#app-mcp) instead: callers then sign in, and the app knows who they are.) An app lists them as `open_paths` in its `brod.json` (`server/src/open_paths.rs`):
 
 ```json
 {
@@ -590,6 +682,71 @@ a health check. An app lists them as `open_paths` in its `brod.json` (`server/sr
   adding them asks for a confirmation when an agent does it.
 - `get_status` shows `open_paths`: what is approved, what the live and staging versions declare, what is open and what
   waits for a confirmation.
+
+## App MCP
+
+An app can be an MCP server that agents use as the signed-in person: a client is given only its address, and Brod
+does the sign-in. The app writes no OAuth, keeps no tokens and puts no secret in the URL (`server/src/app_mcp.rs`).
+
+**Declare the path** in `brod.json`. One path per app; it covers its sub-paths too (`/api/mcp/messages`):
+
+```json
+{ "mcp": "/api/mcp" }
+```
+
+The path follows the open-path rules (no `/`, `*`, `..`, `%` or `/_brod`), without the trailing `/*`. It needs server
+code (`_worker.js` or a container): a static bundle that declares it is refused with `400 bad_mcp`. The declaration
+travels with the version, like open paths and settings, so a rollback brings it back and a version without it turns
+the endpoint off. `get_status` (and every deploy result) shows `mcp.url`, the address to give a client, and
+`mcp.staging_url` when the staging version declares one.
+
+Declaring it needs no person to confirm, unlike [open paths](#open-paths): it lets in nobody who could not open the
+app already, and each request reaches the app as the person who signed in, with the app's usual role for them.
+
+**Handle the path** like any other route. The person arrives the usual way, so `currentUser()` from `@brodsh/auth` (or
+the `x-brod-identity` token) tells the handler who is calling:
+
+```js
+// app/api/mcp/route.ts (Next.js), or the same in _worker.js
+import { currentUser } from '@brodsh/auth/next';
+
+export async function POST(request) {
+  const user = await currentUser(request);
+  if (!user) return new Response('Unauthorized', { status: 401 });
+  return handleMcp(await request.json(), user); // your JSON-RPC handler; user.role is their role in this app
+}
+```
+
+**Connect a client.** Add the address as a remote (HTTP) MCP server, for example
+`claude mcp add --transport http notes https://notes.acme.brod.example/api/mcp`, or paste it into Claude's custom
+connector. What happens:
+
+1. The client calls the address without a token. The gateway answers `401` with
+   `WWW-Authenticate: Bearer resource_metadata="https://<app host>/.well-known/oauth-protected-resource/api/mcp"`. It
+   never redirects this path to the sign-in page.
+2. That metadata (RFC 9728), served on the app's host without sign-in, names the address as the resource and Brod as
+   the authorization server.
+3. The client registers itself with Brod (RFC 7591) and sends the person to `/oauth/authorize` with
+   `resource=https://<app host>/api/mcp` (RFC 8707) and PKCE. The consent page says
+   "<client> wants to use <app> in <workspace> as you". Somebody who cannot open the app gets `403` instead.
+4. The token endpoint issues an access token (an hour) and a rotating refresh token, both bound to that address.
+5. On each call the gateway checks the token is for exactly this address, then checks that the person may still open
+   the app (the same check as a browser visit), removes the `Authorization` header and forwards the request with the
+   person's identity.
+
+**What a token is good for.** Only the address it was issued for. Each host the app is served at is its own
+resource: the live address, the staging address (which only the app's builders and top role can open, as in the
+browser) and each custom domain. A token for Brod's own `/mcp`, for another app or for another address of this app
+gets `401` with `error="invalid_token"`; an app token is refused by Brod's own `/mcp` and API. When the person loses
+access to the app (unshared, removed from the workspace or group, the app made private), their next call gets `403`
+with `error="insufficient_scope"` and the refresh token stops renewing. A browser that is signed in to the app and
+may open it reaches the path as before.
+
+**Tokens for automation.** A builder can make a token for one app's endpoint, for a script with no browser:
+`POST /v1/tokens` with `{ "name": "nightly sync", "app": "notes", "expires_in_days": 30 }` (add `"staging": true` for
+the staging address). It acts as that person, is checked the same way on every request, and works nowhere else. App
+connections, sign-ins and tokens alike, show on the workspace's connections page and in `GET /v1/tokens` with
+`"kind": "app"`, and are disconnected the same way.
 
 ## Container apps
 
@@ -728,6 +885,7 @@ now with `POST /v1/admin/backups/run` and run the drill with `POST /v1/admin/bac
 | An uploaded bundle (tar.gz) | 25 MB |
 | A bundle, unpacked | 60 MB, 2,000 files |
 | One file | 10 MB |
+| A patch deploy | the same limits; inline `content` up to 1 MB in all |
 | Upload and download addresses | valid for 15 minutes |
 | Deploys | 30 an hour per workspace (`429 rate_limited`) |
 | `env.KV` value | 128 KB |

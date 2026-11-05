@@ -11,7 +11,11 @@ const config :Workerd.Config = (
     # Where each app's database (one SQLite Durable Object per app) is kept.
     (name = "data", disk = (path = "/data", writable = true)),
     # Apps' own outgoing fetch: the public internet only, never the private network Brod and the runtime are on.
-    (name = "internet", network = (allow = ["public"], deny = ["private", "local"])),
+    # The addresses are checked after DNS, so a public name that resolves to a private address is refused too.
+    # tlsOptions is what lets this service speak HTTPS at all: without it workerd answers every https:// fetch with
+    # "internal error" (its log: "this HttpClient doesn't support HTTPS"). The CAs are the ones browsers trust,
+    # built into workerd, so the image needs no CA bundle of its own.
+    (name = "internet", network = (allow = ["public"], deny = ["private", "local"], tlsOptions = (trustBrowserCas = true))),
   ],
   sockets = [ (name = "http", address = "0.0.0.0:8081", http = (), service = "host") ],
 );
