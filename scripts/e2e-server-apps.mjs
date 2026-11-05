@@ -64,6 +64,11 @@ export default {
     if (url.pathname === '/api/env') return Response.json({ issuer: env.BROD_ISSUER, app: env.BROD_APP_ID, jwks: env.BROD_IDENTITY_JWKS });
     if (url.pathname === '/api/secret') return new Response(env.API_TOKEN ?? 'none');
     if (url.pathname === '/api/boom') throw new Error('kaboom');
+    if (url.pathname === '/api/out') {
+      try { const r = await fetch(url.searchParams.get('u'), { headers: { 'user-agent': 'brod-e2e' }, redirect: 'manual' }); await r.body?.cancel(); return Response.json({ status: r.status }); }
+      catch (e) { return Response.json({ error: String(e) }); }
+    }
+    if (url.pathname === '/api/out-uncaught') { await fetch(url.searchParams.get('u')); return new Response('reached'); }
     if (request.method === 'POST') return new Response('posted ' + await request.text());
     return new Response('<html><body>server home</body></html>', { headers: { 'content-type': 'text/html' } });
   },
@@ -153,6 +158,32 @@ for (let i = 0; i < 40 && !found.length; i++) {
 }
 check('the exception shows in the logs', found[0]?.request === 'GET /api/boom' && found[0]?.outcome === 'exception', JSON.stringify(found[0]));
 check('a search with no match finds nothing', (await admin.api(`/v1/apps/${d.body.app}/logs?search=nothing-like-this`)).body.requests.length === 0);
+
+// ---------- outgoing requests: the public internet over HTTP and HTTPS, never Brod's own network ----------
+const out = async (u) => JSON.parse((await admin.go(`${url}/api/out?u=${encodeURIComponent(u)}`)).body);
+if (process.env.E2E_OFFLINE) {
+  console.log('SKIP  outgoing requests to the public internet (E2E_OFFLINE is set)');
+} else {
+  for (const u of ['http://example.com/', 'https://example.com/', 'https://api.github.com/']) {
+    const r = await out(u);
+    check(`an app reaches ${u}`, typeof r.status === 'number', JSON.stringify(r));
+  }
+  // A public name that resolves to 127.0.0.1: only the runtime's address check (after DNS) can stop it.
+  const rebound = await out(`http://localtest.me:${api.port || 80}/`);
+  check('a public name that resolves to a private address is not reached', /Brod could not reach/.test(rebound.error ?? ''), JSON.stringify(rebound));
+}
+for (const u of ['http://169.254.169.254/latest/meta-data/', 'http://10.0.0.1/', 'http://192.168.1.1/', `http://127.0.0.1:${api.port || 80}/`,
+  'http://[::1]/', 'http://0x7f.1/', 'http://brod:8080/', 'http://registry:5000/', 'http://metadata.google.internal/']) {
+  const r = await out(u);
+  check(`an app cannot reach ${u}, and is told why`, /^Error: Brod could not reach .*refused/.test(r.error ?? ''), JSON.stringify(r));
+}
+await admin.go(`${url}/api/out-uncaught?u=${encodeURIComponent('http://169.254.169.254/')}`);
+let outLogs = [];
+for (let i = 0; i < 40 && !outLogs.length; i++) {
+  outLogs = (await admin.api(`/v1/apps/${d.body.app}/logs?search=${encodeURIComponent('Brod could not reach')}`)).body.requests;
+  if (!outLogs.length) await new Promise(r => setTimeout(r, 250));
+}
+check('a failed outgoing request shows its reason in the logs', outLogs.some(r => r.request.startsWith('GET /api/out-uncaught')), JSON.stringify(outLogs[0]));
 
 check('no secret yet', (await admin.go(url + '/api/secret')).body === 'none');
 await admin.api(`/v1/apps/${d.body.app}/secrets/API_TOKEN`, { method: 'PUT', json: { value: 'tok-123' } });
