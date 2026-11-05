@@ -146,7 +146,10 @@ check('the insights script is served on the app host', script.status === 200 && 
 const beacon = await send(url + '/_brod/insights', { method: 'POST', headers: { 'user-agent': chrome, 'content-type': 'text/plain' },
   body: JSON.stringify([{ k: 'nav', p: '/settings' }, { k: 'vital', n: 'LCP', v: 1800 }, { k: 'event', n: 'signup', v: 1 }, { k: 'error', n: 'boom', l: '/app.js:1' }]) });
 check('what the browser reports is taken in', beacon.status === 204);
-const an = await ada.api(`/v1/analytics?days=7&app=${APP}`);
+// A scanner with a browser's user agent and no Accept-Language, probing for WordPress and secrets (what brod.sh saw).
+for (const path of ['/wp-login.php', '/.env', '/wp-admin/']) await send(url + path, { headers: { 'user-agent': chrome, 'sec-fetch-dest': 'document', accept: 'text/html' } });
+// The test clients send no Accept or Accept-Language, so their visits are suspicious; include them for the totals.
+const an = await ada.api(`/v1/analytics?days=7&app=${APP}&traffic=human,suspicious`);
 const A = an.body, has = (list, key) => (list ?? []).some(x => x.key === key);
 check('analytics count page views, but not crawlers', an.status === 200 && A.totals.views === 7 && A.requests.bots >= 1, JSON.stringify(A.totals));
 check('analytics break visits down by referrer, campaign, country, browser and device',
@@ -158,6 +161,15 @@ check('analytics include web vitals, custom events and JavaScript errors',
   A.vitals.find(v => v.name === 'LCP')?.samples === 1 && has(A.events, 'signup') && A.errors[0]?.message === 'boom', JSON.stringify([A.vitals[0], A.events, A.errors]));
 check('analytics cover sessions, requests and the period before', A.totals.sessions > 0 && A.requests.total >= 8 && A.series.length === 7 && A.previous.views === 0);
 const long = await ada.api('/v1/analytics?days=365');
+const people = (await ada.api(`/v1/analytics?days=7&app=${APP}`)).body;
+check('analytics show people only by default: the browser that ran the insights script', people.traffic?.shown?.join() === 'human'
+  && people.totals.visitors === 1 && people.totals.views === 2 && people.traffic.classes.suspicious.visitors >= 3, JSON.stringify([people.totals, people.traffic]));
+const bots = (await ada.api(`/v1/analytics?days=7&app=${APP}&traffic=bot`)).body;
+check('the bots toggle shows crawlers and scanners, with the reason', bots.totals.visitors >= 2 && has(bots.reasons, 'probe') && has(bots.reasons, 'ua')
+  && bots.visitors.some(v => v.traffic === 'bot' && v.reason.includes('probe')), JSON.stringify([bots.totals, bots.reasons]));
+const de = (await ada.api(`/v1/analytics?days=7&app=${APP}&traffic=all&country=DE&path=/`)).body;
+check('analytics filter by country and page', de.totals.views === 1 && de.filters?.country === 'DE', JSON.stringify([de.totals, de.filters]));
+check('an unknown traffic class is refused', (await ada.api(`/v1/analytics?traffic=robots`)).status === 400);
 check('the free plan keeps 30 days of analytics', long.status === 200 && long.body.days === 30 && long.body.retention_days === 30 && has(long.body.by_app, APP));
 check('members cannot see analytics', (await bo.api('/v1/analytics')).status === 403);
 

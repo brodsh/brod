@@ -235,23 +235,27 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, archive: Vec<u8>) -
     std::fs::create_dir_all(&dir).map_err(Problem::internal)?;
     let context = dir.join(format!("{id}.tar"));
     let ctx_path = context.clone();
-    let (spec, ctx, declared_open) = tokio::task::spawn_blocking(move || -> Result<(Spec, containers::Context, Option<String>)> {
-        let survey = containers::survey(&archive)?
-            .filter(|s| s.dockerfile)
-            .ok_or_else(|| Problem::new(400, "bad_container", "A container app's source needs a Dockerfile at the top of the archive."))?;
-        let spec = containers::spec_of(survey.manifest.as_deref(), options.as_ref())?;
-        // brod.json's open_paths work as for any app (open_paths.rs).
-        let manifest = survey.manifest.clone().map(|bytes| crate::tar::BundleFile { path: crate::settings::MANIFEST.to_string(), bytes });
-        let declared_open = crate::open_paths::from_bundle(manifest.as_slice())?;
-        let ignore = containers::Ignore::parse(survey.dockerignore.as_deref().unwrap_or(""));
-        let ctx = containers::write_context(&archive, &ignore, &ctx_path)?;
-        Ok((spec, ctx, declared_open))
-    })
-    .await
-    .map_err(Problem::internal)?
-    .inspect_err(|_| {
-        let _ = std::fs::remove_file(&context);
-    })?;
+    let (spec, ctx, declared_open, mcp) =
+        tokio::task::spawn_blocking(move || -> Result<(Spec, containers::Context, Option<String>, Option<String>)> {
+            let survey = containers::survey(&archive)?.filter(|s| s.dockerfile).ok_or_else(|| {
+                Problem::new(400, "bad_container", "A container app's source needs a Dockerfile at the top of the archive.")
+            })?;
+            let spec = containers::spec_of(survey.manifest.as_deref(), options.as_ref())?;
+            // brod.json's open_paths work as for any app (open_paths.rs).
+            let manifest =
+                survey.manifest.clone().map(|bytes| crate::tar::BundleFile { path: crate::settings::MANIFEST.to_string(), bytes });
+            let declared_open = crate::open_paths::from_bundle(manifest.as_slice())?;
+            // And its MCP endpoint (app_mcp.rs).
+            let mcp = crate::app_mcp::from_bundle(manifest.as_slice())?;
+            let ignore = containers::Ignore::parse(survey.dockerignore.as_deref().unwrap_or(""));
+            let ctx = containers::write_context(&archive, &ignore, &ctx_path)?;
+            Ok((spec, ctx, declared_open, mcp))
+        })
+        .await
+        .map_err(Problem::internal)?
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(&context);
+        })?;
     let connected = st.nodes.connected_ids();
     let (c2, o2, cfg, spec2, id2) = (c.clone(), o.clone(), st.cfg.clone(), spec.clone(), id.clone());
     let out = st
@@ -280,8 +284,8 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, archive: Vec<u8>) -
             let environment = if staging { "staging" } else { "live" };
             tx(conn, |x| {
                 x.run(
-                    "INSERT INTO versions (app_id, n, note, actor, file_count, bytes, created_at, scan, based_on, runtime, spec, open_paths) VALUES (?,?,?,?,?,?,?,'[]',?,'container',?,?)",
-                    params![app.id, n, note, c2.actor, ctx.files as i64, ctx.bytes as i64, now(), base, spec2.to_json(), declared_open],
+                    "INSERT INTO versions (app_id, n, note, actor, file_count, bytes, created_at, scan, based_on, runtime, spec, open_paths, mcp) VALUES (?,?,?,?,?,?,?,'[]',?,'container',?,?,?)",
+                    params![app.id, n, note, c2.actor, ctx.files as i64, ctx.bytes as i64, now(), base, spec2.to_json(), declared_open, mcp],
                 )?;
                 x.run(
                     "INSERT INTO deployments (id, app_id, version, environment, node_id, state, cpu, memory_mb, actor, created_at, updated_at) VALUES (?,?,?,?,?,'scheduled',?,?,?,?,?)",
@@ -595,8 +599,10 @@ async fn steps(st: &State, d: &Deployment, log: &mut Log) -> Step<()> {
         }
     }
     let fail = failed("deployment_failed");
-    let image = spec.image_id.clone().ok_or_else(|| fail(Problem::internal("the version has no image id")))?;
-    pull(st, &registry, &node, &app_id, n, &spec, log).await.map_err(&fail)?;
+    if spec.image_id.is_none() {
+        return Err(fail(Problem::internal("the version has no image id")));
+    }
+    let image = pull(st, &registry, &node, &app_id, n, &spec, log).await.map_err(&fail)?;
     let name = container_of(&d.id);
     let env = environment(st, &app_id).await.map_err(&fail)?;
     let database = {
@@ -920,13 +926,37 @@ pub fn load_files(
     ]
 }
 
-/// Make sure the node has the image: it loads it from the registry when it does not.
-async fn pull(st: &State, registry: &std::sync::Arc<Registry>, node: &str, app_id: &str, n: i64, spec: &Spec, log: &mut Log) -> Result<()> {
-    let image = spec.image_id.clone().unwrap_or_default();
-    let have = node_call(st, node, Method::GET, &format!("/v1/images/{image}"), None, 30).await?;
-    if have["exists"].as_bool() == Some(true) {
+/// The ids a node's Docker may know the image by. The classic image store names an image by its config
+/// digest; the containerd image store (the default since Docker 29) names it by its manifest digest.
+fn image_refs(spec: &Spec) -> Vec<String> {
+    [spec.image_id.clone(), spec.digest.clone()].into_iter().flatten().filter(|s| !s.is_empty()).collect()
+}
+
+/// The id the node's Docker knows the image by, if it has it.
+async fn local_image(st: &State, node: &str, spec: &Spec) -> Result<Option<String>> {
+    for image in image_refs(spec) {
+        let have = node_call(st, node, Method::GET, &format!("/v1/images/{image}"), None, 30).await?;
+        if have["exists"].as_bool() == Some(true) {
+            return Ok(Some(image));
+        }
+    }
+    Ok(None)
+}
+
+/// Make sure the node has the image: it loads it from the registry when it does not. Returns the id the
+/// node's Docker knows the image by, which is what containers are created from.
+async fn pull(
+    st: &State,
+    registry: &std::sync::Arc<Registry>,
+    node: &str,
+    app_id: &str,
+    n: i64,
+    spec: &Spec,
+    log: &mut Log,
+) -> Result<String> {
+    if let Some(image) = local_image(st, node, spec).await? {
         log.line("the node has the image already").await;
-        return Ok(());
+        return Ok(image);
     }
     let repo = registry::repository(app_id);
     let digest = spec.digest.clone().unwrap_or_default();
@@ -1028,7 +1058,13 @@ async fn pull(st: &State, registry: &std::sync::Arc<Registry>, node: &str, app_i
         ));
     }
     log.line(format!("the node loaded the image ({tag})")).await;
-    Ok(())
+    local_image(st, node, spec).await?.ok_or_else(|| {
+        Problem::new(
+            502,
+            "deployment_failed",
+            format!("The node loaded the image but does not know it by any of {}.", image_refs(spec).join(", ")),
+        )
+    })
 }
 
 /// What the container gets in its environment: Brod's identity settings and the app's secrets.
@@ -1518,6 +1554,15 @@ pub async fn prune_images(st: &State) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_is_looked_up_by_config_then_manifest_digest() {
+        // Classic store: config digest; containerd store (Docker 29+): manifest digest.
+        let spec = Spec { image_id: Some("sha256:config".into()), digest: Some("sha256:manifest".into()), ..Spec::default() };
+        assert_eq!(image_refs(&spec), vec!["sha256:config", "sha256:manifest"]);
+        assert_eq!(image_refs(&Spec { digest: Some(String::new()), ..spec.clone() }), vec!["sha256:config"]);
+        assert!(image_refs(&Spec::default()).is_empty());
+    }
 
     #[test]
     fn states_only_move_forward() {
