@@ -293,8 +293,11 @@ effect on the next request. Each app gets its own SQLite database on the sidecar
   A version whose code throws while loading, or does not export `fetch`, is refused with `server_failed`, and the live
   version keeps serving. A request that throws gets a plain error page. The visitor never sees the exception. The owner
   sees it in the logs.
-- **Outgoing requests.** `fetch` to the public internet is allowed, subject to the app's
-  [outside addresses](#outside-addresses). Apps cannot reach Brod's private network.
+- **Outgoing requests.** `fetch` to the public internet over HTTP and HTTPS is allowed, subject to the app's
+  [outside addresses](#outside-addresses). HTTPS certificates are checked against the CAs browsers trust. Apps cannot
+  reach Brod's private network: private, loopback and link-local addresses (including cloud metadata at
+  `169.254.169.254`), internal names such as `brod` or `*.internal`, and public names that resolve to any of these. A
+  fetch that fails throws `Brod could not reach <origin>: <reason>`, and that message shows in the app's logs.
 
 ### Limits for server apps
 
