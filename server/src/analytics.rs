@@ -24,7 +24,7 @@ use serde_json::{Value, json};
 use crate::config::Config;
 use crate::db::{Connection, Sql, Val, params, tx};
 use crate::http::Req;
-use crate::model::{Caller, plan, plan_named};
+use crate::model::Caller;
 use crate::problem::Result;
 use crate::state::State;
 use crate::util::now;
@@ -503,21 +503,24 @@ pub async fn flush(st: &State) -> Result<()> {
     st.db.call(move |c| write(c, p)).await
 }
 
-/// Delete what is older than each workspace's plan keeps. Rows of deleted workspaces go with the shortest plan's.
-pub fn purge(conn: &Connection) -> Result<usize> {
+/// Delete what is older than each workspace keeps (its plan, the instance settings or the operator's override).
+/// Rows of deleted workspaces go after the shortest time any workspace keeps them.
+pub fn purge(conn: &Connection, cfg: &Config) -> Result<usize> {
     let t = now();
     let mut gone = 0;
-    let long = ["solo", "team"];
-    for (table, at) in [("page_views", "at"), ("app_events", "at"), ("request_stats", "hour")] {
-        for p in long {
-            gone += conn.run(
-                &format!("DELETE FROM {table} WHERE {at} < ? AND workspace_id IN (SELECT id FROM workspaces WHERE plan = ?)"),
-                params![t - plan_named(p).analytics_days * DAY, p],
-            )?;
+    let workspaces = conn.all("SELECT id, plan FROM workspaces", (), |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    let mut shortest = crate::allowances::for_id(conn, cfg, "", "free")?.analytics_days;
+    for (id, plan) in &workspaces {
+        let days = crate::allowances::for_id(conn, cfg, id, plan)?.analytics_days;
+        shortest = shortest.min(days);
+        for (table, at) in [("page_views", "at"), ("app_events", "at"), ("request_stats", "hour")] {
+            gone += conn.run(&format!("DELETE FROM {table} WHERE {at} < ? AND workspace_id = ?"), params![t - days * DAY, id])?;
         }
+    }
+    for (table, at) in [("page_views", "at"), ("app_events", "at"), ("request_stats", "hour")] {
         gone += conn.run(
-            &format!("DELETE FROM {table} WHERE {at} < ? AND workspace_id NOT IN (SELECT id FROM workspaces WHERE plan IN (?, ?))"),
-            params![t - plan_named("free").analytics_days * DAY, long[0], long[1]],
+            &format!("DELETE FROM {table} WHERE {at} < ? AND workspace_id NOT IN (SELECT id FROM workspaces)"),
+            params![t - shortest * DAY],
         )?;
     }
     Ok(gone)
@@ -667,9 +670,9 @@ fn vital_bounds(name: &str) -> Option<(f64, f64)> {
 }
 
 /// GET /v1/analytics?days=30&app=`<slug>`&tz=`<minutes east of UTC>`: everything the analytics page shows.
-pub fn report(conn: &Connection, c: &Caller, app: Option<&str>, days: Option<i64>, tz: Option<i64>) -> Result<Value> {
+pub fn report(conn: &Connection, cfg: &Config, c: &Caller, app: Option<&str>, days: Option<i64>, tz: Option<i64>) -> Result<Value> {
     crate::people::require_role(c, "builder", "see analytics")?;
-    let keep = plan(&c.workspace).analytics_days;
+    let keep = crate::allowances::effective(conn, cfg, &c.workspace)?.analytics_days;
     let days = days.unwrap_or(30).clamp(1, keep);
     let tz = tz.unwrap_or(0).clamp(-14 * 60, 14 * 60);
     let t = now();
@@ -1214,9 +1217,11 @@ mod tests {
                     )?;
                 }
                 write(c, p)?;
-                let all = report(c, &caller("free"), None, Some(7), Some(0))?;
-                let one = report(c, &caller("free"), Some("app_1"), Some(1), Some(0))?;
-                let long = report(c, &caller("free"), None, Some(400), None)?;
+                let mut cfg = Config::for_tests();
+                cfg.mode = crate::config::Mode::Hosted;
+                let all = report(c, &cfg, &caller("free"), None, Some(7), Some(0))?;
+                let one = report(c, &cfg, &caller("free"), Some("app_1"), Some(1), Some(0))?;
+                let long = report(c, &cfg, &caller("free"), None, Some(400), None)?;
                 Ok((all, one, long))
             })
             .await
@@ -1274,7 +1279,9 @@ mod tests {
                     }
                 }
                 write(c, a.take())?;
-                purge(c)?;
+                let mut cfg = Config::for_tests();
+                cfg.mode = crate::config::Mode::Hosted;
+                purge(c, &cfg)?;
                 c.all("SELECT workspace_id, COUNT(*) FROM page_views GROUP BY workspace_id ORDER BY workspace_id", (), |r| {
                     Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
                 })

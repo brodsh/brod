@@ -115,8 +115,8 @@ fn live(status: &str) -> bool {
 /// GET /v1/billing: the plan, what it allows and costs, what is used, and the recent invoices.
 pub async fn summary(st: &State, c: &Caller) -> Result<Value> {
     require_role(c, "admin", "see billing")?;
-    let c2 = c.clone();
-    let (acct, running, members, storage, workspace_plan) = st
+    let (c2, cfg) = (c.clone(), st.cfg.clone());
+    let (acct, running, members, storage, workspace_plan, limits) = st
         .db
         .call(move |conn| {
             let a = account(conn, &c2.workspace.id)?;
@@ -125,7 +125,9 @@ pub async fn summary(st: &State, c: &Caller) -> Result<Value> {
             let storage = crate::usage::workspace_storage(conn, &c2.workspace.id)?.total();
             // The plan as stored now, which a webhook may have moved since this request was authenticated.
             let p: String = conn.first("SELECT plan FROM workspaces WHERE id = ?", [&c2.workspace.id], |r| r.get(0))?.unwrap_or_default();
-            Ok((a, running, members, storage, p))
+            // What the workspace may use: its plan, unless the operator gave it its own limits.
+            let limits = crate::allowances::for_id(conn, &cfg, &c2.workspace.id, &p)?;
+            Ok((a, running, members, storage, p, limits))
         })
         .await?;
     let enabled = st.cfg.stripe.is_some();
@@ -164,7 +166,6 @@ pub async fn summary(st: &State, c: &Caller) -> Result<Value> {
             .unwrap_or_default(),
         _ => vec![],
     };
-    let limits = plan_named(&workspace_plan);
     Ok(json!({
         "enabled": enabled, "plan": workspace_plan, "status": acct.status,
         "renews_at": acct.renews_at, "cancel_at": acct.cancel_at, "has_customer": acct.customer.is_some(),

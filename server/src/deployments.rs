@@ -213,10 +213,11 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, archive: Vec<u8>) -
     }
     {
         let (c, o) = (c.clone(), o.clone());
+        let per_hour = crate::instance::current(st).await.int("rate.deploys_per_hour");
         st.db
             .call(move |conn| {
                 require_role(&c, "builder", "deploy apps")?;
-                control::check_rate(conn, &c)?;
+                control::check_rate(conn, &c, per_hour)?;
                 crate::abuse::check_workspace_up(conn, &c)?;
                 match o.app_slug() {
                     Some(slug) => crate::abuse::check_up(conn, &control::get_app(conn, &c, slug)?),
@@ -598,8 +599,10 @@ async fn steps(st: &State, d: &Deployment, log: &mut Log) -> Step<()> {
         }
     }
     let fail = failed("deployment_failed");
-    let image = spec.image_id.clone().ok_or_else(|| fail(Problem::internal("the version has no image id")))?;
-    pull(st, &registry, &node, &app_id, n, &spec, log).await.map_err(&fail)?;
+    if spec.image_id.is_none() {
+        return Err(fail(Problem::internal("the version has no image id")));
+    }
+    let image = pull(st, &registry, &node, &app_id, n, &spec, log).await.map_err(&fail)?;
     let name = container_of(&d.id);
     let env = environment(st, &app_id).await.map_err(&fail)?;
     let database = {
@@ -923,13 +926,37 @@ pub fn load_files(
     ]
 }
 
-/// Make sure the node has the image: it loads it from the registry when it does not.
-async fn pull(st: &State, registry: &std::sync::Arc<Registry>, node: &str, app_id: &str, n: i64, spec: &Spec, log: &mut Log) -> Result<()> {
-    let image = spec.image_id.clone().unwrap_or_default();
-    let have = node_call(st, node, Method::GET, &format!("/v1/images/{image}"), None, 30).await?;
-    if have["exists"].as_bool() == Some(true) {
+/// The ids a node's Docker may know the image by. The classic image store names an image by its config
+/// digest; the containerd image store (the default since Docker 29) names it by its manifest digest.
+fn image_refs(spec: &Spec) -> Vec<String> {
+    [spec.image_id.clone(), spec.digest.clone()].into_iter().flatten().filter(|s| !s.is_empty()).collect()
+}
+
+/// The id the node's Docker knows the image by, if it has it.
+async fn local_image(st: &State, node: &str, spec: &Spec) -> Result<Option<String>> {
+    for image in image_refs(spec) {
+        let have = node_call(st, node, Method::GET, &format!("/v1/images/{image}"), None, 30).await?;
+        if have["exists"].as_bool() == Some(true) {
+            return Ok(Some(image));
+        }
+    }
+    Ok(None)
+}
+
+/// Make sure the node has the image: it loads it from the registry when it does not. Returns the id the
+/// node's Docker knows the image by, which is what containers are created from.
+async fn pull(
+    st: &State,
+    registry: &std::sync::Arc<Registry>,
+    node: &str,
+    app_id: &str,
+    n: i64,
+    spec: &Spec,
+    log: &mut Log,
+) -> Result<String> {
+    if let Some(image) = local_image(st, node, spec).await? {
         log.line("the node has the image already").await;
-        return Ok(());
+        return Ok(image);
     }
     let repo = registry::repository(app_id);
     let digest = spec.digest.clone().unwrap_or_default();
@@ -1031,7 +1058,13 @@ async fn pull(st: &State, registry: &std::sync::Arc<Registry>, node: &str, app_i
         ));
     }
     log.line(format!("the node loaded the image ({tag})")).await;
-    Ok(())
+    local_image(st, node, spec).await?.ok_or_else(|| {
+        Problem::new(
+            502,
+            "deployment_failed",
+            format!("The node loaded the image but does not know it by any of {}.", image_refs(spec).join(", ")),
+        )
+    })
 }
 
 /// What the container gets in its environment: Brod's identity settings and the app's secrets.
@@ -1072,6 +1105,7 @@ async fn serve(st: &State, d: &Deployment) -> Result<String> {
                     params![now(), d.app_id, d.environment, d.id],
                 )?;
                 let to = if d.environment == "live" { "" } else { " on staging" };
+                crate::git_mirror::poke(&app.id);
                 event(x, &app.workspace_id, &d.actor, Some(&app.id), "deployed", &format!("v{} is serving{to} (container on {})", d.version, d.node_id.as_deref().unwrap_or("?")))?;
                 Ok(format!("serving: v{} is {}", d.version, if d.environment == "live" { "live" } else { "on staging" }))
             })
@@ -1296,7 +1330,7 @@ pub async fn dispatch(
     if req.method == Method::HEAD {
         return Ok(response(status, Body::empty(), &pairs));
     }
-    if app.access == "public" && html && st.cfg.abuse_checks {
+    if app.access == "public" && html && st.settings.last().flag("features.abuse_checks") {
         let page = crate::http::read_capped(res.into_body(), crate::tar::FILE_BYTES * 2, "The page").await?;
         return Ok(response(status, crate::http::bytes_body(crate::gateway::append_to_body(&page, crate::gateway::REPORT_LINK)), &pairs));
     }
@@ -1520,6 +1554,15 @@ pub async fn prune_images(st: &State) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_is_looked_up_by_config_then_manifest_digest() {
+        // Classic store: config digest; containerd store (Docker 29+): manifest digest.
+        let spec = Spec { image_id: Some("sha256:config".into()), digest: Some("sha256:manifest".into()), ..Spec::default() };
+        assert_eq!(image_refs(&spec), vec!["sha256:config", "sha256:manifest"]);
+        assert_eq!(image_refs(&Spec { digest: Some(String::new()), ..spec.clone() }), vec!["sha256:config"]);
+        assert!(image_refs(&Spec::default()).is_empty());
+    }
 
     #[test]
     fn states_only_move_forward() {

@@ -64,6 +64,11 @@ export default {
     if (url.pathname === '/api/env') return Response.json({ issuer: env.BROD_ISSUER, app: env.BROD_APP_ID, jwks: env.BROD_IDENTITY_JWKS });
     if (url.pathname === '/api/secret') return new Response(env.API_TOKEN ?? 'none');
     if (url.pathname === '/api/boom') throw new Error('kaboom');
+    if (url.pathname === '/api/out') {
+      try { const r = await fetch(url.searchParams.get('u'), { headers: { 'user-agent': 'brod-e2e' }, redirect: 'manual' }); await r.body?.cancel(); return Response.json({ status: r.status }); }
+      catch (e) { return Response.json({ error: String(e) }); }
+    }
+    if (url.pathname === '/api/out-uncaught') { await fetch(url.searchParams.get('u')); return new Response('reached'); }
     if (request.method === 'POST') return new Response('posted ' + await request.text());
     return new Response('<html><body>server home</body></html>', { headers: { 'content-type': 'text/html' } });
   },
@@ -79,6 +84,13 @@ const d = await deploy({ name: 'Counter', files: [{ path: '_worker.js', content:
 check('a server app deploys with inline files', d.status === 201 && d.body.kind === 'server', JSON.stringify(d.body));
 const url = d.body.url;
 check('the server code answers pages', (await admin.open(url + '/')).body.includes('server home'));
+const front = await deploy({ name: 'Front', files: [
+  { path: '_worker.js', content: WORKER }, { path: 'index.html', content: '<html><body>static front</body></html>' },
+  { path: 'docs/index.html', content: '<html><body>docs page</body></html>' },
+] });
+check('"/" serves the bundle\'s index.html before the server code', (await admin.open(front.body.url + '/')).body.includes('static front'));
+check('a folder address serves its index.html', (await admin.go(front.body.url + '/docs/')).body.includes('docs page'));
+check('a folder without index.html goes to the server code', (await admin.go(front.body.url + '/other/')).body.includes('server home'));
 const c1 = JSON.parse((await admin.go(url + '/api/count')).body), c2 = JSON.parse((await admin.go(url + '/api/count')).body);
 check('its own database keeps data between requests', c1.count === 1 && c2.count === 2, JSON.stringify([c1, c2]));
 check('its key-value store works', (await admin.go(url + '/api/kv')).body === 'hej');
@@ -154,6 +166,32 @@ for (let i = 0; i < 40 && !found.length; i++) {
 check('the exception shows in the logs', found[0]?.request === 'GET /api/boom' && found[0]?.outcome === 'exception', JSON.stringify(found[0]));
 check('a search with no match finds nothing', (await admin.api(`/v1/apps/${d.body.app}/logs?search=nothing-like-this`)).body.requests.length === 0);
 
+// ---------- outgoing requests: the public internet over HTTP and HTTPS, never Brod's own network ----------
+const out = async (u) => JSON.parse((await admin.go(`${url}/api/out?u=${encodeURIComponent(u)}`)).body);
+if (process.env.E2E_OFFLINE) {
+  console.log('SKIP  outgoing requests to the public internet (E2E_OFFLINE is set)');
+} else {
+  for (const u of ['http://example.com/', 'https://example.com/', 'https://api.github.com/']) {
+    const r = await out(u);
+    check(`an app reaches ${u}`, typeof r.status === 'number', JSON.stringify(r));
+  }
+  // A public name that resolves to 127.0.0.1: only the runtime's address check (after DNS) can stop it.
+  const rebound = await out(`http://localtest.me:${api.port || 80}/`);
+  check('a public name that resolves to a private address is not reached', /Brod could not reach/.test(rebound.error ?? ''), JSON.stringify(rebound));
+}
+for (const u of ['http://169.254.169.254/latest/meta-data/', 'http://10.0.0.1/', 'http://192.168.1.1/', `http://127.0.0.1:${api.port || 80}/`,
+  'http://[::1]/', 'http://0x7f.1/', 'http://brod:8080/', 'http://registry:5000/', 'http://metadata.google.internal/']) {
+  const r = await out(u);
+  check(`an app cannot reach ${u}, and is told why`, /^Error: Brod could not reach .*refused/.test(r.error ?? ''), JSON.stringify(r));
+}
+await admin.go(`${url}/api/out-uncaught?u=${encodeURIComponent('http://169.254.169.254/')}`);
+let outLogs = [];
+for (let i = 0; i < 40 && !outLogs.length; i++) {
+  outLogs = (await admin.api(`/v1/apps/${d.body.app}/logs?search=${encodeURIComponent('Brod could not reach')}`)).body.requests;
+  if (!outLogs.length) await new Promise(r => setTimeout(r, 250));
+}
+check('a failed outgoing request shows its reason in the logs', outLogs.some(r => r.request.startsWith('GET /api/out-uncaught')), JSON.stringify(outLogs[0]));
+
 check('no secret yet', (await admin.go(url + '/api/secret')).body === 'none');
 await admin.api(`/v1/apps/${d.body.app}/secrets/API_TOKEN`, { method: 'PUT', json: { value: 'tok-123' } });
 check('a secret reaches the app on its next request', (await admin.go(url + '/api/secret')).body === 'tok-123');
@@ -227,8 +265,10 @@ check('deleting data is allowed while full', (await owner.go(furl + '/clear')).b
 await pause(500);
 const after = await owner.go(furl + '/fill');
 check('and frees the space, so writes work again', after.status === 200 && after.body === 'ok', `${after.status} ${after.body}`);
-await pause(500);
-check('the reported size shrinks with it', (await owner.api(`/v1/apps/${filler.body.app}/usage`)).body.storage.data < 1024 * 1024);
+// A shrinking size is reported at most every 5 seconds, so wait for it rather than for a fixed time.
+let shrunk = null;
+for (let i = 0; i < 16; i++) { await pause(500); shrunk = (await owner.api(`/v1/apps/${filler.body.app}/usage`)).body.storage.data; if (shrunk < 1024 * 1024) break; }
+check('the reported size shrinks with it', shrunk < 1024 * 1024, String(shrunk));
 
 // ---------- limits: an app that holds the runtime is cut off, and the others keep serving ----------
 // workerd runs every app on one thread and does not enforce the CPU limit; its supervisor (deploy/runtime/supervisor/)

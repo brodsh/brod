@@ -27,6 +27,8 @@ pub struct AppState {
     pub nodes: crate::nodes::Nodes,
     /// Brod's image registry for container apps (registry.rs), when BROD_REGISTRY_URL is set.
     pub registry: Option<Arc<crate::registry::Registry>>,
+    /// Instance settings an operator can change, cached (instance.rs). Read them with `instance::current`.
+    pub settings: crate::instance::Cache,
 }
 
 pub type State = Arc<AppState>;
@@ -48,6 +50,7 @@ impl AppState {
             }
         });
         Arc::new(AppState {
+            settings: crate::instance::Cache::new(&cfg),
             registry,
             cfg,
             db,

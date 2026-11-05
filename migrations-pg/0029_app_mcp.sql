@@ -1,4 +1,4 @@
--- App MCP, as migrations/0024_app_mcp.sql.
+-- App MCP, as migrations/0029_app_mcp.sql.
 ALTER TABLE versions ADD COLUMN mcp TEXT;
 ALTER TABLE oauth_codes ADD COLUMN resource TEXT;
 CREATE TABLE app_tokens (
