@@ -167,13 +167,14 @@ fn query(req: &Request<Incoming>, key: &str) -> Option<String> {
     })
 }
 
-async fn read_json(req: Request<Incoming>) -> Result<Value, Response<Body>> {
+/// The error is boxed: a Response is large (clippy::result_large_err) and only the rare bad request takes that path.
+async fn read_json(req: Request<Incoming>) -> Result<Value, Box<Response<Body>>> {
     let bytes = http_body_util::Limited::new(req.into_body(), 1024 * 1024)
         .collect()
         .await
-        .map_err(|e| fail(400, "bad_request", format!("The body did not arrive: {e}")))?
+        .map_err(|e| Box::new(fail(400, "bad_request", format!("The body did not arrive: {e}"))))?
         .to_bytes();
-    serde_json::from_slice(&bytes).map_err(|e| fail(400, "bad_request", format!("The body is not JSON: {e}")))
+    serde_json::from_slice(&bytes).map_err(|e| Box::new(fail(400, "bad_request", format!("The body is not JSON: {e}"))))
 }
 
 /// Whether the request is one work.rs answers.
@@ -207,7 +208,7 @@ pub async fn handle(node: Arc<Node>, req: Request<Incoming>) -> Response<Body> {
         (_, ["containers", name, ..]) if !valid_name(name) => fail(400, "bad_name", "Not a container name."),
         (&Method::PUT, ["containers", name]) => match read_json(req).await {
             Ok(spec) => answer(create(&node, name, &spec).await),
-            Err(r) => r,
+            Err(r) => *r,
         },
         (&Method::POST, ["containers", name, "start"]) => answer(start(&node, name).await),
         (&Method::POST, ["containers", name, "restart"]) => {
@@ -221,11 +222,11 @@ pub async fn handle(node: Arc<Node>, req: Request<Incoming>) -> Response<Body> {
         }
         (&Method::POST, ["containers", name, "run"]) => match read_json(req).await {
             Ok(v) => answer(run_once(&node, name, &v).await),
-            Err(r) => r,
+            Err(r) => *r,
         },
         (&Method::POST, ["containers", name, "health"]) => match read_json(req).await {
             Ok(v) => reply(200, health(&node, name, &v).await),
-            Err(r) => r,
+            Err(r) => *r,
         },
         (&Method::POST, ["containers", name, "stop"]) => {
             lock(&node.work.addresses).remove(*name);
