@@ -1,6 +1,6 @@
 [package]
 name = "brod-runtime"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 description = "Runs workerd for Brod's server apps and restarts it when an app stalls it, crashes it or makes it too big"
 license = "AGPL-3.0-only"
