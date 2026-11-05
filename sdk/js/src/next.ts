@@ -1,8 +1,8 @@
-// @brod/auth/next: the signed-in person in Next.js server components, route handlers and server actions.
+// @brodsh/auth/next: the signed-in person in Next.js server components, route handlers and server actions.
 //
-// Middleware gets the request itself: use currentUser(request) from '@brod/auth' there.
+// Middleware gets the request itself: use currentUser(request) from '@brodsh/auth' there.
 import { headers } from 'next/headers';
-import { currentUser, requireUser, type BrodAuthOptions, type BrodUser } from '@brod/auth';
+import { currentUser, requireUser, type BrodAuthOptions, type BrodUser } from '@brodsh/auth';
 
 /**
  * The person signed in to this app, from the current request's headers, or null when the request is anonymous.
@@ -19,5 +19,5 @@ export async function requireUserFromHeaders(opts?: BrodAuthOptions): Promise<Br
   return requireUser(await headers(), opts);
 }
 
-export { BrodAuthError, currentUser, requireUser, verifyIdentityToken } from '@brod/auth';
-export type { BrodAuthErrorCode, BrodAuthOptions, BrodClaims, BrodUser } from '@brod/auth';
+export { BrodAuthError, currentUser, requireUser, verifyIdentityToken } from '@brodsh/auth';
+export type { BrodAuthErrorCode, BrodAuthOptions, BrodClaims, BrodUser } from '@brodsh/auth';

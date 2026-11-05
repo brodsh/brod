@@ -222,19 +222,71 @@ function reportUndeclared(env, ctx, appId, version, host, blocked) {
     .then(res => res.body?.cancel()).catch(() => { /* Brod is unreachable for a moment: the next one reports it */ }));
 }
 
+/** IPv4 ranges an app may never reach: this host, private networks, CGNAT, link-local (cloud metadata), reserved, multicast. */
+const PRIVATE_V4 = ['0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12', '192.0.0.0/24',
+  '192.168.0.0/16', '198.18.0.0/15', '224.0.0.0/3'];
+function v4(s) {
+  const p = s.split('.');
+  return p.length === 4 && p.every(x => /^\d{1,3}$/.test(x) && +x < 256) ? p.reduce((a, x) => a * 256 + +x, 0) : null;
+}
+function privateV4(host) {
+  const ip = v4(host);
+  return ip !== null && PRIVATE_V4.some(cidr => {
+    const [base, bits] = cidr.split('/');
+    const size = 2 ** (32 - +bits);
+    return Math.floor(ip / size) === Math.floor(v4(base) / size);
+  });
+}
+/**
+ * Why Brod refuses a host before trying it, or null. This only explains the refusal: the network service in
+ * config.capnp enforces the same rule on the resolved address, which also covers public names pointing inside.
+ * The URL parser has already normalised the host (lowercase, IPv4 in dotted decimal, IPv6 in brackets).
+ */
+function internalHost(host) {
+  if (host.startsWith('[')) {
+    const v6 = host.slice(1, -1);
+    const mapped = v6.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    if (mapped) return internalHost(mapped[1]);
+    if (v6 === '::' || v6 === '::1' || /^f[cd]/.test(v6) || /^fe[89ab]/.test(v6) || /^::ffff:/.test(v6)) return 'a private IPv6 address';
+    return null;
+  }
+  if (privateV4(host)) return host.startsWith('169.254.') ? 'a link-local address (cloud metadata lives there)' : 'a private or reserved IP address';
+  if (!host.includes('.') || /\.(localhost|local|internal|lan|home\.arpa)$/.test(host)) return 'an internal name, not a public one';
+  return null;
+}
+
+/** An outgoing request that Brod could not complete, with as much of the reason as the runtime gives away. */
+function unreachable(url, why) {
+  return new Error(`Brod could not reach ${url.protocol}//${url.host}: ${why}`);
+}
+
 /**
  * The only way out for an app's own fetch(): every outgoing request passes here. A host the app declares in its
- * brod.json goes through; any other is reported to Brod, and refused when Brod enforces declarations.
+ * brod.json goes through; any other is reported to Brod, and refused when Brod enforces declarations. Private and
+ * internal addresses are never reachable. Failures are thrown with their reason, so they show in get_logs (or in
+ * whatever the app does with the error) instead of workerd's bare "internal error; reference = …".
  */
 export class AppOutbound extends WorkerEntrypoint {
   async fetch(request) {
     const { appId, version, network } = this.ctx.props;
-    const host = new URL(request.url).hostname;
-    if (network.policy === 'off' || declares(network.allow, host)) return fetch(request);
-    const blocked = network.policy === 'enforce';
-    reportUndeclared(this.env, this.ctx, appId, version, host, blocked);
-    if (!blocked) return fetch(request);
-    return new Response(`Brod refused this request: ${host} is not one of the hosts this app declares in the "network" list of its brod.json.`, { status: 403, headers: { 'x-brod-network': 'refused' } });
+    const url = new URL(request.url);
+    const host = url.hostname;
+    // Undeclared hosts are recorded first, private ones included, so the app's owners see every attempt.
+    if (network.policy !== 'off' && !declares(network.allow, host)) {
+      const blocked = network.policy === 'enforce';
+      reportUndeclared(this.env, this.ctx, appId, version, host, blocked);
+      if (blocked) return new Response(`Brod refused this request: ${host} is not one of the hosts this app declares in the "network" list of its brod.json.`, { status: 403, headers: { 'x-brod-network': 'refused' } });
+    }
+    const internal = internalHost(host);
+    if (internal) throw unreachable(url, `refused, ${host} is ${internal}. Apps can reach only the public internet.`);
+    try {
+      return await fetch(request);
+    } catch (e) {
+      if (request.signal?.aborted) throw e; // the app's own timeout or abort, not ours to explain
+      // workerd keeps the cause to itself (its log has it under the reference): name the likely ones.
+      const ref = String(e?.message ?? e).match(/reference = (\w+)/)?.[1];
+      throw unreachable(url, `the connection failed before any response (DNS lookup failed, connection refused or timed out, TLS failed, or the name resolves to a private address, which apps cannot reach)${ref ? `; runtime reference ${ref}` : ''}.`);
+    }
   }
 }
 

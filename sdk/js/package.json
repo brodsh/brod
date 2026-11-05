@@ -1,5 +1,5 @@
 {
-  "name": "@brod/auth",
+  "name": "@brodsh/auth",
   "version": "0.1.0",
   "description": "Read the person Brod signed in: verify the x-brod-identity JWT in Next.js, Node and Workers.",
   "license": "MIT",
@@ -27,6 +27,9 @@
     "README.md",
     "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
