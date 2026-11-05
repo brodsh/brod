@@ -68,6 +68,28 @@ audience and lasts five minutes. Anything can verify it against `/.well-known/jw
 the app receives the same normalised path that matched, so `/api/mcp/../admin` cannot reach `/admin`. Open-path
 requests carry no identity, no session cookie and no `x-brod-*` header.
 
+**App MCP tokens used somewhere else.** A client signs in to an app's MCP endpoint ([docs/apps.md](apps.md#app-mcp))
+with `resource` set to its exact address (RFC 8707), and the token is bound to it:
+
+- *Audience.* App tokens live in their own table (`app_tokens`) with the address they are for. The gateway takes one
+  only on that address of that app, so a token cannot be replayed on another app, on the same app's staging address
+  or custom domain, or on Brod's own `/mcp` and API, which read only `tokens`. Brod's own tokens are refused at apps
+  the same way. A refresh keeps the binding; asking for another resource is `invalid_target`.
+- *Access re-checked on every request.* A valid token is not a grant. Each call re-runs the browser's access decision
+  for the token's person (grants, groups, workspace membership, access mode; staging's stricter rule; a password never
+  substitutes), so unsharing an app or removing someone stops their client at its next call (`403`,
+  `insufficient_scope`), and its refresh token stops renewing. Revoked, expired and unknown tokens get `401`,
+  `invalid_token`. Sign-in also requires access: the consent page refuses people who cannot open the app.
+- *The app never sees a Brod token.* The gateway removes `Authorization` before forwarding and adds the usual
+  identity headers and a five-minute `x-brod-identity` for that app, so an app (or its logs) cannot leak something
+  that works elsewhere. No secret is ever part of a URL: the endpoint address is public, and the metadata at
+  `/.well-known/oauth-protected-resource<path>` holds nothing secret.
+- *Stored as hashes.* Access and refresh tokens are stored as SHA-256 hashes; refresh tokens rotate, and reusing an old
+  one disconnects the client. Access tokens last an hour.
+
+Declaring an MCP path needs no person to confirm, because it admits nobody the app's access mode does not: unlike an
+open path, it never makes part of the app anonymous.
+
 **Guessing and flooding.** Rate limits, kept in the database:
 
 | What | Limit |
@@ -79,6 +101,29 @@ requests carry no identity, no session cookie and no `x-brod-*` header.
 | Deploys | 30 an hour per workspace |
 | New workspaces | 3 a day per person |
 | Abuse reports (hosted) | 10 an hour per client address |
+| Requests to apps | 1,200 a minute per client address (the shield, below; kept in memory) |
+
+**Bots and scanners on apps.** Every request to an app is classified `human`, `suspicious` or `bot` from its user
+agent, its headers (`Accept-Language`, `Accept`, HTTP/1.0), probe paths such as `/wp-login.php`, `/.env` or `/.git/`,
+its address's recent burst rate and share of 4xx answers, and whether the client proved it runs a browser
+([docs/api.md](api.md#traffic-classes)). Analytics show people only unless asked. With the shield on (`BROD_SHIELD`,
+the default), the gateway also:
+
+- refuses (403, after a short tarpit) an address that asked for `BROD_SHIELD_SCANNER_PROBES` (8) probe paths within ten
+  minutes, for `BROD_SHIELD_BLOCK_MINUTES` (60);
+- answers 429 to an address over `BROD_SHIELD_REQUESTS_PER_MINUTE` (1,200) requests a minute;
+- puts a proof-of-work check in front of page loads that are suspicious, or whose address made more than
+  `BROD_SHIELD_CHALLENGE_PER_MINUTE` (300) requests this minute. The page's script finds a SHA-256 hash with
+  `BROD_SHIELD_CHALLENGE_BITS` (16) leading zero bits (well under a second in a browser) for a token signed with
+  `IDENTITY_SECRET`, bound to the address and valid for 10 minutes; the answer earns a signed, `HttpOnly` cookie bound
+  to the address for `BROD_SHIELD_PASS_HOURS` (24). No third-party service sees the visitor. Clients without
+  JavaScript cannot pass it.
+
+Never checked or blocked: people signed in to the app, open paths (webhooks), anything but a page load, Brod's own
+`/_brod/` endpoints, bots that say what they are, and loopback and private-network addresses. Those addresses are not
+tracked either, because everyone behind a LAN or an untrusted proxy shares one; behind a proxy, set
+`BROD_TRUST_PROXY=1` so the shield sees visitors' addresses. Blocks and counters live in memory and are lost on a
+restart. Off (`BROD_SHIELD=false`, or in the admin console), traffic is still classified for analytics.
 
 **Bad uploads.** Bundles are unpacked with checks on path traversal (`..`, absolute paths), file count (2,000), file
 size (10 MB) and total size (60 MB unpacked). Files are served with a `Content-Type` from their extension and

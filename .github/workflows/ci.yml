@@ -162,6 +162,11 @@ jobs:
         run: npm run e2e:rust:s3
         env:
           BROD_BIN: server/target/release/brod
+      - name: End-to-end tests, app MCP (an app's MCP endpoint signed in with Brod's OAuth)
+        run: npm run e2e:app-mcp
+        env:
+          BROD_BIN: server/target/release/brod
+          BROD_RUNTIME_BIN: deploy/runtime/supervisor/target/release/brod-runtime
       - name: End-to-end tests, nodes (join, the reversed tunnel, heartbeats, offline, drain/disable/delete)
         run: npm run e2e:nodes
         env:
