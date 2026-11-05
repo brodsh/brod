@@ -395,9 +395,8 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
             if m == Method::GET {
                 crate::usage::flush(st).await?;
                 crate::analytics::flush(st).await?;
-                let num = |k: &str| req.param(k).and_then(|d| d.parse::<i64>().ok());
-                let (days, tz, app) = (num("days"), num("tz"), req.param("app"));
-                return Ok(json(db(Box::new(move |conn, cfg, c| crate::analytics::report(conn, cfg, c, app.as_deref(), days, tz))).await?));
+                let q = crate::analytics::Query::from_params(|k| req.param(k))?;
+                return Ok(json(db(Box::new(move |conn, cfg, c| crate::analytics::report(conn, cfg, c, &q))).await?));
             }
         }
         Some("deploys") => {
