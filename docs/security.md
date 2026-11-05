@@ -68,6 +68,28 @@ audience and lasts five minutes. Anything can verify it against `/.well-known/jw
 the app receives the same normalised path that matched, so `/api/mcp/../admin` cannot reach `/admin`. Open-path
 requests carry no identity, no session cookie and no `x-brod-*` header.
 
+**App MCP tokens used somewhere else.** A client signs in to an app's MCP endpoint ([docs/apps.md](apps.md#app-mcp))
+with `resource` set to its exact address (RFC 8707), and the token is bound to it:
+
+- *Audience.* App tokens live in their own table (`app_tokens`) with the address they are for. The gateway takes one
+  only on that address of that app, so a token cannot be replayed on another app, on the same app's staging address
+  or custom domain, or on Brod's own `/mcp` and API, which read only `tokens`. Brod's own tokens are refused at apps
+  the same way. A refresh keeps the binding; asking for another resource is `invalid_target`.
+- *Access re-checked on every request.* A valid token is not a grant. Each call re-runs the browser's access decision
+  for the token's person (grants, groups, workspace membership, access mode; staging's stricter rule; a password never
+  substitutes), so unsharing an app or removing someone stops their client at its next call (`403`,
+  `insufficient_scope`), and its refresh token stops renewing. Revoked, expired and unknown tokens get `401`,
+  `invalid_token`. Sign-in also requires access: the consent page refuses people who cannot open the app.
+- *The app never sees a Brod token.* The gateway removes `Authorization` before forwarding and adds the usual
+  identity headers and a five-minute `x-brod-identity` for that app, so an app (or its logs) cannot leak something
+  that works elsewhere. No secret is ever part of a URL: the endpoint address is public, and the metadata at
+  `/.well-known/oauth-protected-resource<path>` holds nothing secret.
+- *Stored as hashes.* Access and refresh tokens are stored as SHA-256 hashes; refresh tokens rotate, and reusing an old
+  one disconnects the client. Access tokens last an hour.
+
+Declaring an MCP path needs no person to confirm, because it admits nobody the app's access mode does not: unlike an
+open path, it never makes part of the app anonymous.
+
 **Guessing and flooding.** Rate limits, kept in the database:
 
 | What | Limit |
