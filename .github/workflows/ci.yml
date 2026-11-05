@@ -30,7 +30,7 @@ jobs:
       - name: docs/configuration.md matches .env.example
         run: node scripts/config-docs.mjs --check
 
-  # The @brod/auth identity SDK (sdk/js): typecheck, unit tests and the ESM + CommonJS builds, on the oldest and the
+  # The @brodsh/auth identity SDK (sdk/js): typecheck, unit tests and the ESM + CommonJS builds, on the oldest and the
   # current supported Node. Never published from CI. The interop test against a real Brod runs in the rust job.
   sdk:
     runs-on: ubuntu-24.04
@@ -54,8 +54,8 @@ jobs:
       - run: npm run build
       - name: The built package loads as ESM and as CommonJS
         run: |
-          node --input-type=module -e "import { currentUser } from '@brod/auth'; if (typeof currentUser !== 'function') process.exit(1)"
-          node -e "const { currentUser } = require('@brod/auth'); if (typeof currentUser !== 'function') process.exit(1)"
+          node --input-type=module -e "import { currentUser } from '@brodsh/auth'; if (typeof currentUser !== 'function') process.exit(1)"
+          node -e "const { currentUser } = require('@brodsh/auth'); if (typeof currentUser !== 'function') process.exit(1)"
       - run: npm audit --audit-level=low
 
   # No secret anywhere in the history (.gitleaks.toml allows only the tests' placeholder values).
@@ -147,7 +147,7 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: End-to-end tests, server apps on workerd
         run: npm run e2e:rust
-      - name: Interop, @brod/auth against this server's real tokens (sdk/js/test/interop)
+      - name: Interop, @brodsh/auth against this server's real tokens (sdk/js/test/interop)
         working-directory: sdk/js
         run: npm ci && npm run build && npm run test:interop
       - name: End-to-end tests, self-hosted defaults (first start, no secrets or email set)
