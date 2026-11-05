@@ -104,6 +104,11 @@ check('HEAD / answers like GET, without the body', headHome.status === 200 && he
   && headHome.headers['content-length'] === (landing.headers['content-length'] ?? headHome.headers['content-length']), `${headHome.status} ${JSON.stringify(headHome.headers)}`);
 const headHealth = await send(`${API}/healthz`, { method: 'HEAD' });
 check('HEAD /healthz answers 200, without the body', headHealth.status === 200 && headHealth.body === '' && /^application\/json/.test(headHealth.headers['content-type'] ?? ''), `${headHealth.status} ${JSON.stringify(headHealth.headers)}`);
+// Readiness checks the database and, when it is set, the runtime (static-only runs have none: "off").
+const ready = await send(`${API}/readyz`);
+const readyBody = (() => { try { return JSON.parse(ready.body); } catch { return {}; } })();
+check('/readyz answers 200 with the database and runtime checked', ready.status === 200 && readyBody.ok === true && readyBody.checks?.database === 'ok'
+  && ['ok', 'off'].includes(readyBody.checks?.runtime) && readyBody.checks?.registry === 'off', `${ready.status} ${ready.body}`);
 const headSignIn = await send(`${API}/auth/signin`, { method: 'HEAD' }), headShort = await send(`${API}/signin`, { method: 'HEAD' });
 check('HEAD on the sign-in page answers 200, and HEAD on /signin redirects like GET', headSignIn.status === 200 && headSignIn.body === '' && headShort.status === 302
   && headShort.headers.location === '/auth/signin', `${headSignIn.status} ${headShort.status} ${headShort.headers.location}`);

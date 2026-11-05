@@ -211,8 +211,11 @@ server code. Disk use is the apps' files (every kept version counts) plus their 
 
 ## Monitoring
 
-- `GET /healthz` answers `200` when Brod is up. Both images have Docker health checks (`docker compose ps` shows
-  them): `brod` uses `/healthz`, and the runtime asks workerd directly.
+- `GET /healthz` answers `200` when Brod's process is up; it checks nothing else. Both images have Docker health
+  checks (`docker compose ps` shows them): `brod` uses `/healthz`, and the runtime asks workerd directly.
+- `GET /readyz` answers `200` only when Brod's database, the server-app runtime and the image registry (each when
+  configured) answer too, and `503` naming the failed check otherwise (the log says why). Point uptime monitors and
+  load balancers here; `deploy/upgrade.sh` rolls back when it does not pass (`BROD_HEALTH_URL=https://<host>/readyz`).
 - `docker compose logs brod` shows start-up, email and errors. `docker compose logs runtime` shows when an app stalled
   or ran the runtime out of memory, and which app was paused for it.
 - Each app's own activity and server logs are in the admin page and in `get_logs`.

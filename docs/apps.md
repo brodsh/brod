@@ -729,7 +729,9 @@ unless the workspace is trusted (`BROD_CONTAINERS=trusted`). With a read-only ro
 no privilege escalation, at most 512 processes, and its own bridge network. On a Linux node with iptables, it can
 reach the internet but not private addresses (10/8, 172.16/12, 192.168/16, 100.64/10), link-local ones (the cloud
 metadata service at 169.254.169.254), other apps or the node itself. On macOS and Windows (Docker Desktop) there are
-no such rules: a node there is for development only, and the deploy log says so.
+no such rules: a node there is for development only, and the deploy log says so. A hosted Brod requires the rules:
+when a node cannot put them in place (not Linux, not root, iptables failing), the container is not made and the
+deployment fails with `network_rules_failed`.
 
 **Requests** have the same rules as for server apps: at most 32 MB of body (`413` above that) and 60 s until the
 answer starts. When the node that runs the app is offline, visitors get `503`.

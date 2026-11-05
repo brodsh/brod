@@ -632,6 +632,11 @@ async fn create(node: &Node, name: &str, spec: &Value) -> Result<Value, String> 
     let user = user_for(img["Config"]["User"].as_str().unwrap_or(""), spec["trusted"].as_bool().unwrap_or(false))?;
     let mut warnings = vec![];
     let (warning, _) = ensure_network(node, network).await?;
+    // Brod in hosted mode requires the rules: a container that could reach private networks or the metadata service
+    // is never made.
+    if let Some(w) = warning.as_deref().filter(|_| spec["require_network_rules"].as_bool() == Some(true)) {
+        return Err(format!("{w} This Brod server requires network rules, so the container was not made."));
+    }
     warnings.extend(warning);
     let mut spec = spec.clone();
     if let Some(app) = spec["database"].as_str().filter(|a| valid_name(a)).map(String::from) {

@@ -16,5 +16,5 @@ esac
 [ $# -eq 1 ] || { echo "usage: <version> | force <version>" >&2; exit 2; }
 export BROD_DIR=/opt/brod
 export BROD_BACKUP_CMD=/root/backup/brod-backup.sh
-export BROD_HEALTH_URL=https://brod.sh/healthz
+export BROD_HEALTH_URL=https://brod.sh/readyz
 /opt/brod/upgrade.sh "$1" 2>&1 | tee -a /var/log/brod-upgrade.log
