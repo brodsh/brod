@@ -7,6 +7,8 @@
 // Network isolation (no metadata service, no Brod listener) needs a Linux node with iptables and root; elsewhere those
 // checks are skipped with the reason.
 // Usage: npm run e2e:containers   (builds both release binaries unless BROD_BIN and BROD_NODE_BIN are set)
+// E2E_NODE_SUDO=1 runs brod-node through sudo, as root, so it can install its network rules (CI does this on its Linux
+// runner); the network isolation check then has to run and pass instead of being skipped.
 // Needs Docker with buildx. Everything it creates is named brod-e2e* and removed at the end.
 import { execFileSync, spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, readdirSync, rmSync, existsSync } from 'node:fs';
@@ -32,6 +34,7 @@ const nodeBin = resolve(process.env.BROD_NODE_BIN ?? join('node', 'target', 'rel
 const tokenFile = join(state, 'node-join', 'token');
 const certFile = join(state, 'registry', 'token.crt');
 const linux = process.platform === 'linux';
+const asRoot = process.env.E2E_NODE_SUDO === '1';
 
 let passed = 0, failed = 0, skipped = 0;
 const check = (name, ok, detail = '') => { ok ? passed++ : failed++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok || !detail ? '' : `\n      ${detail}`}`); };
@@ -103,10 +106,13 @@ let log = '';
 server.stdout.on('data', d => (log += d)); server.stderr.on('data', d => (log += d));
 
 function startNode() {
-  const p = spawn(nodeBin, ['run'], { stdio: ['ignore', 'pipe', 'pipe'],
-    env: { PATH: process.env.PATH, HOME: process.env.HOME, DOCKER_HOST: process.env.DOCKER_HOST ?? '', BROD_NODE_DIR: join(state, 'node'), BROD_URL: API,
-      BROD_NODE_JOIN_TOKEN_FILE: tokenFile, BROD_NODE_NAME: 'e2e-docker', BROD_NODE_BUILDER: BUILDER,
-      ...(process.env.BROD_NODE_DOCKER_SOCKET ? { BROD_NODE_DOCKER_SOCKET: process.env.BROD_NODE_DOCKER_SOCKET } : {}) } });
+  const env = { PATH: process.env.PATH, HOME: process.env.HOME, DOCKER_HOST: process.env.DOCKER_HOST ?? '', BROD_NODE_DIR: join(state, 'node'), BROD_URL: API,
+    BROD_NODE_JOIN_TOKEN_FILE: tokenFile, BROD_NODE_NAME: 'e2e-docker', BROD_NODE_BUILDER: BUILDER,
+    ...(process.env.BROD_NODE_DOCKER_SOCKET ? { BROD_NODE_DOCKER_SOCKET: process.env.BROD_NODE_DOCKER_SOCKET } : {}) };
+  // sudo resets the environment (and PATH), so the node's variables go through env(1).
+  const p = asRoot
+    ? spawn('sudo', ['-n', 'env', ...Object.entries(env).map(([k, v]) => `${k}=${v}`), nodeBin, 'run'], { stdio: ['ignore', 'pipe', 'pipe'] })
+    : spawn(nodeBin, ['run'], { stdio: ['ignore', 'pipe', 'pipe'], env });
   p.log = '';
   p.stdout.on('data', d => (p.log += d)); p.stderr.on('data', d => (p.log += d));
   return p;
@@ -260,9 +266,12 @@ try {
   check('any published port is on 127.0.0.1 only', published.every(ip => ip === '127.0.0.1'), JSON.stringify(hc.PortBindings));
   if (linux && !existsSync('/.dockerenv')) {
     const reach = parse(await alice.go(url + `/probe?target=169.254.169.254:80&target=${inspected.NetworkSettings.Networks[Object.keys(inspected.NetworkSettings.Networks)[0]].Gateway}:${PORT}&target=1.1.1.1:443`));
-    if (/No network rules/.test(log1.join('\n'))) skip('the container cannot reach the metadata service or the node', log1.find(l => /No network rules/.test(l)));
+    if (/No network rules/.test(log1.join('\n')) && asRoot) check('the node installed its network rules', false, log1.find(l => /No network rules/.test(l)));
+    else if (/No network rules/.test(log1.join('\n'))) skip('the container cannot reach the metadata service or the node', log1.find(l => /No network rules/.test(l)));
     else check('the container cannot reach 169.254.169.254 or Brod on the node, but reaches the internet',
       !Object.entries(reach.reached ?? {}).some(([t, ok]) => ok && !t.startsWith('1.1.1.1')), JSON.stringify(reach.reached));
+  } else if (asRoot) {
+    check('the network isolation check runs (E2E_NODE_SUDO=1 needs a Linux host, not a container)', false, process.platform);
   } else {
     skip('the container cannot reach 169.254.169.254 or Brod\'s internal listener',
       `network rules need a Linux node with iptables and root; this is ${process.platform} (Docker Desktop runs containers in a VM). The deploy log says: ${log1.find(l => /No network rules/.test(l)) ?? 'nothing'}`);
@@ -346,6 +355,8 @@ try {
   console.log(`\n${passed} passed, ${failed} failed, ${skipped} skipped`);
   if (code !== 0) console.error(`\n--- server log ---\n${log.slice(-6000)}\n--- node log ---\n${node?.log.slice(-4000) ?? ''}`);
   cleanup();
+  // A node run as root leaves files only root can remove.
+  if (asRoot) { try { execFileSync('sudo', ['-n', 'rm', '-rf', state]); } catch { /* removed below or left in tmp */ } }
   rmSync(state, { recursive: true, force: true });
 }
 process.exit(code);
