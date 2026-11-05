@@ -115,7 +115,8 @@ The order matters:
    - `/mcp`: the MCP endpoint (`mcp.rs`). POST only. Stateless Streamable HTTP with JSON responses.
    - `/stripe/webhook`: hosted mode only (`billing.rs`).
    - `/v1/*`: the REST API (`api.rs`).
-   - `/healthz`.
+   - `/healthz` (liveness, touches nothing) and `/readyz` (readiness: the database, runtime and registry,
+     `health.rs`).
    - Everything else: first `connect.rs::serve` (OAuth metadata, `/oauth/*`, the connections page), then
      `auth.rs::serve` (sign-in, invitations, confirmations, workspace home and admin pages). Errors become an HTML page
      unless the request asked for JSON.

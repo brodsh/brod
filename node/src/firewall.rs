@@ -7,7 +7,9 @@
 //!
 //! The rules go into Docker's DOCKER-USER chain (forwarded traffic) and INPUT (traffic to the node's own addresses).
 //! They need iptables and root; without them the node logs a warning and runs the container without the rules, and
-//! the deployment says so. On macOS and Windows (Docker Desktop) there are no such rules: a development setup only.
+//! the deployment says so, unless Brod requires the rules (`require_network_rules` in the container's spec, which a
+//! hosted Brod always sets): then the container is not made and the deployment fails. On macOS and Windows (Docker
+//! Desktop) there are no such rules: a development setup only.
 
 /// Addresses a container may not reach.
 pub const BLOCKED: [&str; 5] = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10"];

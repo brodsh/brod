@@ -165,7 +165,8 @@ A self-hosted server has no plans or billing.
 | Route | |
 | --- | --- |
 | `POST /mcp` | The MCP endpoint for agents. See [mcp.md](mcp.md). |
-| `GET /healthz` | `{ "service": "brod", "ok": true, "mcp": "...", "api": "..." }` |
+| `GET /healthz` | Liveness: `{ "service": "brod", "ok": true, "mcp": "...", "api": "..." }`. Touches nothing. |
+| `GET /readyz` | Readiness: `200 { "service": "brod", "ok": true, "checks": { "database": "ok", "runtime": "ok", "registry": "off" } }`, or `503` with `"ok": false` and the check that `"failed"`. Checks Brod's database, the server-app runtime (when set) and the image registry (when set), each within 3 s. |
 | `GET /.well-known/oauth-protected-resource`, `GET /.well-known/oauth-protected-resource/mcp` | OAuth resource metadata for MCP clients |
 | `GET /.well-known/oauth-authorization-server` | OAuth server metadata |
 | `POST /oauth/register` | Dynamic client registration |

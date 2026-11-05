@@ -11,7 +11,7 @@
 #
 # Optional environment:
 #   BROD_BACKUP_CMD   backup command to run instead of the built-in pg_dump
-#   BROD_HEALTH_URL   public URL to check after the stack is up (e.g. https://brod.sh/healthz)
+#   BROD_HEALTH_URL   public URL to check after the stack is up (e.g. https://brod.sh/readyz)
 #   BROD_FORCE=1      deploy even if compose/Caddy files changed upstream, or downgrade
 #
 # A rollback switches the images back; it never restores the database.

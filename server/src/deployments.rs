@@ -609,6 +609,8 @@ async fn steps(st: &State, d: &Deployment, log: &mut Log) -> Step<()> {
         "image": image, "env": env, "port": spec.port, "cpu": spec.cpu, "memory_mb": spec.memory_mb,
         "network": network_of(&app_id), "trusted": st.cfg.containers == Containers::Trusted,
         "labels": { "brod.app": app_id, "brod.deployment": d.id, "brod.version": n.to_string() },
+        // Hosted: tenants' containers must not reach private networks, the metadata service or the node.
+        "require_network_rules": require_network_rules(&st.cfg),
     });
     if database {
         // The node gives it brod-db.internal, which reaches the app's database through the tunnel (databases.rs).
@@ -642,6 +644,11 @@ async fn steps(st: &State, d: &Deployment, log: &mut Log) -> Step<()> {
     for w in made["warnings"].as_array().into_iter().flatten() {
         log.line(format!("warning: {}", w.as_str().unwrap_or(""))).await;
     }
+    // A node from before require_network_rules makes the container anyway and only warns: never start it.
+    if let Some(w) = missing_network_rules(&st.cfg, &made) {
+        let _ = node_call(st, &node, Method::DELETE, &format!("/v1/containers/{name}"), None, 60).await;
+        return Err(fail(Problem::new(502, "network_rules_failed", format!("{w} This server requires them; nothing was started."))));
+    }
     node_call(st, &node, Method::POST, &format!("/v1/containers/{name}/start"), None, 60).await.map_err(&fail)?;
     log.line(format!("started; waiting for {} to answer below 500 (up to {HEALTH_SECS} s)", spec.health)).await;
     let h = node_call(
@@ -672,6 +679,19 @@ async fn steps(st: &State, d: &Deployment, log: &mut Log) -> Step<()> {
     let served = serve(st, d).await.map_err(&fail)?;
     log.line(served).await;
     Ok(())
+}
+
+/// Whether nodes must put their network rules in place before making a container: always in hosted mode.
+fn require_network_rules(cfg: &crate::config::Config) -> bool {
+    cfg.mode == crate::config::Mode::Hosted
+}
+
+/// The node's warning that a container has no network rules, when this server requires them.
+fn missing_network_rules(cfg: &crate::config::Config, made: &Value) -> Option<String> {
+    if !require_network_rules(cfg) {
+        return None;
+    }
+    made["warnings"].as_array()?.iter().filter_map(|w| w.as_str()).find(|w| w.starts_with("No network rules")).map(String::from)
 }
 
 /// One migration per app at a time, whichever deployment runs it.
@@ -1558,6 +1578,20 @@ mod tests {
         assert_eq!(image_refs(&spec), vec!["sha256:config", "sha256:manifest"]);
         assert_eq!(image_refs(&Spec { digest: Some(String::new()), ..spec.clone() }), vec!["sha256:config"]);
         assert!(image_refs(&Spec::default()).is_empty());
+    }
+
+    #[test]
+    fn hosted_mode_requires_network_rules() {
+        let made = json!({ "warnings": ["No network rules: the node does not run as root, so it cannot change iptables."] });
+        let mut cfg = crate::config::Config::for_tests();
+        cfg.mode = crate::config::Mode::SelfHosted;
+        assert!(!require_network_rules(&cfg));
+        assert_eq!(missing_network_rules(&cfg, &made), None, "self-hosted: a warning in the log, nothing more");
+        cfg.mode = crate::config::Mode::Hosted;
+        assert!(require_network_rules(&cfg));
+        assert!(missing_network_rules(&cfg, &made).is_some_and(|w| w.contains("root")));
+        assert_eq!(missing_network_rules(&cfg, &json!({ "warnings": [] })), None);
+        assert_eq!(missing_network_rules(&cfg, &json!({ "warnings": ["something else"] })), None);
     }
 
     #[test]

@@ -28,6 +28,7 @@ pub mod git;
 pub mod git_export;
 pub mod git_import;
 pub mod git_mirror;
+pub mod health;
 pub mod home;
 pub mod http;
 pub mod identity;

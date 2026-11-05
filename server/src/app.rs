@@ -118,6 +118,11 @@ async fn api_host(st: State, mut req: Req) -> Response {
             }
         }
         p if p.starts_with("/v1/") => crate::api::serve(&st, req).await,
+        // Readiness, with the database, the runtime and the registry checked (health.rs). /healthz below is liveness.
+        "/readyz" => {
+            let (ok, body) = crate::health::ready(&st).await;
+            Ok(json_response(&body, if ok { 200 } else { 503 }, &[("cache-control", "no-store".into())]))
+        }
         "/healthz" => Ok(json(
             json!({ "service": "brod", "ok": true, "mcp": format!("{}/mcp", req.origin()), "api": format!("{}/v1", req.origin()) }),
         )),
