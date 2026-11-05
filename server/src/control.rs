@@ -335,16 +335,25 @@ pub fn oauth_scope(asked: &str) -> &'static str {
 
 pub fn list_tokens(conn: &Connection, c: &Caller) -> Result<Vec<Value>> {
     require_role(c, "builder", "see agent connections")?;
-    conn.rows_json(
+    let mut list = conn.rows_json(
         "SELECT t.id, t.name, u.email AS made_by, t.scope, CASE WHEN t.client_id IS NULL THEN 'token' ELSE 'oauth' END AS kind,
          t.created_at, t.last_used_at, t.expires_at, t.refresh_expires_at, t.revoked_at
          FROM tokens t JOIN users u ON u.id = t.user_id WHERE t.workspace_id = ? ORDER BY t.created_at",
         [&c.workspace.id],
-    )
+    )?;
+    // Connections to apps' own MCP endpoints (app_mcp.rs), kind "app", with the app and the address they work at.
+    list.extend(crate::app_mcp::list(conn, &c.workspace.id)?);
+    Ok(list)
 }
 
 pub fn revoke_token(conn: &Connection, c: &Caller, id: &str) -> Result<()> {
     require_role(c, "builder", "revoke agent connections")?;
+    if id.starts_with("atk_") {
+        if !crate::app_mcp::revoke(conn, c, id)? {
+            return Err(Problem::new(404, "not_found", "No active connection of yours with that id."));
+        }
+        return event(conn, &c.workspace.id, &c.actor, None, "token_revoked", id);
+    }
     // Builders revoke their own connections; admins revoke any.
     let n = conn.run(
         "UPDATE tokens SET revoked_at = ? WHERE id = ? AND workspace_id = ? AND revoked_at IS NULL AND (? OR user_id = ?)",
@@ -402,6 +411,10 @@ fn staging_of(cfg: &Config, c: &Caller, app: &AppRow) -> Value {
 
 pub fn described(conn: &Connection, cfg: &Config, c: &Caller, app: &AppRow) -> Result<Map<String, Value>> {
     let mut m = describe(cfg, c, app, people::list_grants(conn, app)?);
+    // Its MCP endpoint, which MCP clients sign in to with Brod (app_mcp.rs).
+    if let Some(v) = crate::app_mcp::view(conn, cfg, app, &c.workspace.slug)? {
+        m.insert("mcp".into(), v);
+    }
     if let Some(id) = &app.space_id {
         let name: Option<String> = conn.first("SELECT name FROM spaces WHERE id = ?", [id], |r| r.get(0))?;
         if let Some(name) = name {
@@ -920,6 +933,14 @@ pub(crate) async fn deploy_files(st: &State, c: &Caller, o: DeployTarget, files:
     let settings = crate::settings::from_bundle(&files)?;
     let network = crate::network::from_bundle(&files)?;
     let declared_open = crate::open_paths::from_bundle(&files)?;
+    let mcp = crate::app_mcp::from_bundle(&files)?;
+    if mcp.is_some() && server.is_none() {
+        return Err(Problem::new(
+            400,
+            "bad_mcp",
+            "\"mcp\" in brod.json names a path of the app's server code, and this bundle has none: add a _worker.js, or deploy a container.",
+        ));
+    }
     if let Some(s) = &server {
         runtime::check_server(st, s, &files).await?;
     }
@@ -1005,7 +1026,7 @@ pub(crate) async fn deploy_files(st: &State, c: &Caller, o: DeployTarget, files:
                     }
                 }
                 x.run(
-                    "INSERT INTO versions (app_id, n, note, actor, file_count, bytes, created_at, server, scan, settings, network, based_on, open_paths) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO versions (app_id, n, note, actor, file_count, bytes, created_at, server, scan, settings, network, based_on, open_paths, mcp) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     params![
                         app.id,
                         n,
@@ -1019,7 +1040,8 @@ pub(crate) async fn deploy_files(st: &State, c: &Caller, o: DeployTarget, files:
                         settings,
                         network,
                         base,
-                        declared_open
+                        declared_open,
+                        mcp
                     ],
                 )?;
                 versions::insert_manifest(x, &manifest)?;
@@ -2203,6 +2225,7 @@ pub async fn delete_app(st: &State, c: &Caller, slug: &str) -> Result<Value> {
                     "DELETE FROM editing WHERE app_id = ?",
                     "DELETE FROM grants WHERE app_id = ?",
                     "DELETE FROM domains WHERE app_id = ?",
+                    "DELETE FROM app_tokens WHERE app_id = ?",
                     "DELETE FROM apps WHERE id = ?",
                 ] {
                     x.run(sql, [&app.id])?;

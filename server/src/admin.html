@@ -253,6 +253,8 @@ textarea{resize:vertical;min-height:4.5em}
 .panel th.right,.panel td.right{padding-left:14px}
 .bars{display:flex;flex-direction:column;gap:3px}
 .brow{position:relative;display:flex;justify-content:space-between;gap:12px;padding:5px 8px;border-radius:6px;font-size:.88rem;min-width:0}
+.brow.pick{cursor:pointer}.brow.pick:hover,.brow.pick:focus-visible{outline:1px solid var(--line)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:8px 0}.chip{font:inherit;font-size:.82rem;padding:3px 10px;border-radius:999px;border:1px solid var(--line);background:none;color:inherit;cursor:pointer}
 .brow>i{position:absolute;inset:0 auto 0 0;background:color-mix(in srgb,var(--s1) 16%,transparent);border-radius:6px}
 .brow>span{position:relative;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .brow>em{position:relative;font-style:normal;font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap}
@@ -1342,6 +1344,14 @@ async function billing() {
 // #analytics (every app) or #analytics/<app>. The range is remembered in this browser.
 const RANGES = [[1, '24 hours'], [7, '7 days'], [30, '30 days'], [90, '90 days'], [180, '6 months'], [365, '1 year'], [730, '2 years']];
 let anDays = Number(store('brod-analytics-days')) || 30;
+// Which traffic analytics shows (people by default), and the drill-down filters, for this page view only.
+let anTraffic = store('brod-analytics-traffic') || 'human';
+let anFilters = {};
+const TRAFFIC = [['human', 'People'], ['suspicious', 'Suspicious'], ['bot', 'Bots'], ['all', 'All']];
+const FILTER_NAMES = { country: 'Country', path: 'Page', referrer: 'Referrer', browser: 'Browser', os: 'OS', device: 'Device', visitor: 'Visitor', status: 'Status' };
+const REASONS = { ua: 'Says it is a bot', no_ua: 'No user agent', no_lang: 'No Accept-Language', no_accept: 'No Accept header', 'http1.0': 'HTTP/1.0',
+  probe: 'Asked for a scanner path', scanner: 'Address probed many paths', burst: 'Too many pages a minute', '4xx': 'Mostly errors', blocked: 'Blocked by the shield' };
+const filterBy = (k) => (v) => { anFilters = { ...anFilters, [k]: v === '' ? '(none)' : v }; render(); };
 const fmtN = (n) => n == null ? '—' : n >= 10000 ? new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n) : Math.round(n).toLocaleString();
 const pct = (x) => x == null ? '—' : (x * 100 >= 10 || x === 0 ? Math.round(x * 100) : (x * 100).toFixed(1)) + '%';
 function dur(ms) {
@@ -1434,12 +1444,14 @@ function lineChart(series, keys, hourly, opts = {}) {
   return h('div', { class: 'stack' }, box, table);
 }
 /** A ranked list with a bar behind each row, sized against the largest. */
-function barList(rows, { label = LABELS.plain, value = 'views', second = 'visitors', head = ['', 'Views'], fmt = fmtN, fmt2 = fmtN, limit = 10 } = {}) {
+function barList(rows, { label = LABELS.plain, value = 'views', second = 'visitors', head = ['', 'Views'], fmt = fmtN, fmt2 = fmtN, limit = 10, pick = null } = {}) {
   if (!rows?.length) return h('p', { class: 'muted small' }, 'Nothing in this period yet.');
   const max = Math.max(1, ...rows.map(r => r[value] || 0));
   const list = h('div', { class: 'bars' });
   const draw = (k) => list.replaceChildren(h('div', { class: 'bhead' }, h('span', {}, head[0]), h('span', {}, head[1])),
-    ...rows.slice(0, k).map(r => h('div', { class: 'brow', title: `${label(r.key)}: ${fmt(r[value])}${second && r[second] != null ? ` · ${fmt2(r[second])} ${second.replace(/_/g, ' ')}` : ''}` },
+    ...rows.slice(0, k).map(r => h('div', { class: pick ? 'brow pick' : 'brow', role: pick ? 'button' : null, tabindex: pick ? '0' : null,
+      onclick: pick ? () => pick(r.key) : null, onkeydown: pick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(r.key); } } : null,
+      title: `${label(r.key)}: ${fmt(r[value])}${second && r[second] != null ? ` · ${fmt2(r[second])} ${second.replace(/_/g, ' ')}` : ''}` },
       h('i', { style: `width:${Math.max(1.5, (100 * (r[value] || 0)) / max).toFixed(1)}%`, 'aria-hidden': 'true' }),
       h('span', {}, label(r.key)),
       h('em', {}, second && r[second] != null ? [fmt2(r[second]), ' · '] : null, h('b', {}, fmt(r[value]))))));
@@ -1493,10 +1505,35 @@ function vitalCard(v) {
       v.needs_improvement ? h('i', { class: 'n', style: `width:${(100 * v.needs_improvement) / total}%` }) : null,
       v.poor ? h('i', { class: 'p', style: `width:${(100 * v.poor) / total}%` }) : null) : null);
 }
+// The visitors with the most views in the period; one opens its own trail.
+function visitorTable(rows) {
+  if (!rows?.length) return h('p', { class: 'muted small' }, 'Nothing in this period yet.');
+  return h('div', { class: 'scroll' }, h('table', {},
+    h('thead', {}, h('tr', {}, ['Visitor', 'Class', 'Country', 'Browser', 'Views', 'Last'].map(x => h('th', { scope: 'col' }, x)))),
+    h('tbody', {}, rows.map(r => h('tr', {},
+      h('td', {}, h('button', { class: 'link mono small', type: 'button', title: 'Show only this visitor', onclick: () => filterBy('visitor')(r.visitor) }, r.visitor.slice(0, 10))),
+      h('td', { title: (r.reason || '').split(',').filter(Boolean).map(k => REASONS[k] || k).join(', ') || null }, r.traffic),
+      h('td', {}, r.country ? LABELS.country(r.country) : '—'),
+      h('td', {}, [r.browser, r.os].filter(Boolean).join(' · ') || '—'),
+      h('td', { class: 'right num' }, fmtN(r.views)),
+      h('td', { class: 'muted small nowrap' }, ago(r.last)))))));
+}
 async function analytics() {
   const app = R.slug || '';
   const tz = -new Date().getTimezoneOffset();
-  const a = await api(`/analytics?days=${anDays}&tz=${tz}${app ? '&app=' + enc(app) : ''}`);
+  const fq = Object.entries(anFilters).map(([k, v]) => `&${k}=${enc(v)}`).join('');
+  const a = await api(`/analytics?days=${anDays}&tz=${tz}${app ? '&app=' + enc(app) : ''}&traffic=${enc(anTraffic)}${fq}`);
+  const tc = a.traffic?.classes || {};
+  const trafficSeg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Traffic' }, TRAFFIC.map(([k, label]) => {
+    const n = k === 'all' ? Object.values(tc).reduce((x, c) => x + c.visitors, 0) : tc[k]?.visitors;
+    return h('button', { type: 'button', class: k === anTraffic ? 'on' : '', 'aria-pressed': String(k === anTraffic),
+      title: k === 'human' ? 'Browsers that look like people: what analytics shows by default' : k === 'suspicious' ? 'Odd headers, bursts or mostly errors, and no sign of a browser running the page' : k === 'bot' ? 'Says it is a bot, or probes for vulnerable paths' : 'Every class together',
+      onclick: () => { anTraffic = k; store('brod-analytics-traffic', k); render(); } }, label, n != null ? h('small', { class: 'muted' }, ` ${fmtN(n)}`) : null);
+  }));
+  const chips = Object.keys(anFilters).length ? h('div', { class: 'chips', 'aria-label': 'Filters' },
+    Object.entries(anFilters).map(([k, v]) => h('button', { type: 'button', class: 'chip', title: 'Remove this filter',
+      onclick: () => { const f = { ...anFilters }; delete f[k]; anFilters = f; render(); } }, `${FILTER_NAMES[k] || k}: ${k === 'country' && v !== '(none)' ? LABELS.country(v) : v} ×`)),
+    h('button', { class: 'link small', type: 'button', onclick: () => { anFilters = {}; render(); } }, 'Clear filters')) : null;
   const t = a.totals, p = a.previous, hourly = a.bucket === 'hour';
   const appSel = h('select', { 'aria-label': 'App', onchange: (e) => go('analytics', e.target.value || undefined) },
     h('option', { value: '' }, 'All apps'), a.apps.map(x => h('option', { value: x.slug, selected: x.slug === app }, x.name)));
@@ -1516,9 +1553,10 @@ async function analytics() {
   return [
     head('Analytics', a.app ? `${a.app.name}: who visits, where they come from, what they do, and how fast it is.` : `Every app in ${B.name}: who visits, where they come from, what they do, and how fast it is.`,
       h('span', { class: 'livedot', title: 'Visitors who opened a page in the last 5 minutes' }, h('i', { 'aria-hidden': 'true' }), `${a.live_visitors} ${a.live_visitors === 1 ? 'visitor' : 'visitors'} right now`)),
-    h('div', { class: 'anbar' }, appSel, ranges,
+    h('div', { class: 'anbar' }, appSel, ranges, trafficSeg,
       h('button', { class: 'link small', type: 'button', onclick: () => render() }, 'Refresh'),
       a.app ? h('button', { class: 'link small', type: 'button', onclick: () => go('app', a.app.slug) }, 'Open the app’s page') : null),
+    chips,
     h('section', { class: 'kpis', 'aria-label': `Totals for the last ${period}` },
       kpi(fmtN(t.visitors), 'visitors', delta(t.visitors, p.visitors)),
       kpi(fmtN(t.views), 'page views', delta(t.views, p.views)),
@@ -1533,25 +1571,30 @@ async function analytics() {
       lineChart(series, [{ key: 'views', label: 'Page views' }, { key: 'visitors', label: 'Visitors' }], hourly)),
     h('div', { class: 'panels' },
       panel('Pages', [
-        ['Top pages', () => barList(a.pages, { head: ['Page', 'Visitors · Views'] })],
+        ['Top pages', () => barList(a.pages, { pick: filterBy('path'), head: ['Page', 'Visitors · Views'] })],
         ['Entry pages', () => barList(a.entry_pages, { value: 'sessions', second: null, head: ['Where visits start', 'Visits'] })],
         ['Exit pages', () => barList(a.exit_pages, { value: 'sessions', second: null, head: ['Where visits end', 'Visits'] })],
-        ['Not found', () => barList(a.not_found, { head: ['Missing page (404)', 'Visitors · Views'] })],
+        ['Not found', () => barList(a.not_found, { pick: filterBy('path'), head: ['Missing page (404)', 'Visitors · Views'] })],
       ]),
       panel('Sources', [
-        ['Referrers', () => barList(a.referrers, { label: LABELS.referrer, head: ['Site', 'Visitors · Views'] })],
+        ['Referrers', () => barList(a.referrers, { pick: filterBy('referrer'), label: LABELS.referrer, head: ['Site', 'Visitors · Views'] })],
         ['Campaign source', () => barList(a.utm_sources, { label: LABELS.utm, head: ['utm_source / ref', 'Visitors · Views'] })],
         ['Medium', () => barList(a.utm_mediums, { label: LABELS.utm, head: ['utm_medium', 'Visitors · Views'] })],
         ['Campaign', () => barList(a.utm_campaigns, { label: LABELS.utm, head: ['utm_campaign', 'Visitors · Views'] })],
       ]),
+      panel('Traffic', [
+        ['Visitors', () => visitorTable(a.visitors)],
+        ['Why not people', () => barList(a.reasons, { label: (k) => REASONS[k] || k, head: ['Signal', 'Visitors · Views'] })],
+        ['Status', () => barList(a.statuses, { pick: filterBy('status'), head: ['Status', 'Visitors · Views'] })],
+      ]),
       panel('Locations', [
-        ['Countries', () => barList(a.countries, { label: LABELS.country, head: ['Country', 'Visitors · Views'] })],
+        ['Countries', () => barList(a.countries, { pick: filterBy('country'), label: LABELS.country, head: ['Country', 'Visitors · Views'] })],
         ['Languages', () => barList(a.languages, { label: LABELS.lang, head: ['Language', 'Visitors · Views'] })],
       ]),
       panel('Devices', [
-        ['Device', () => barList(a.devices, { head: ['Device', 'Visitors · Views'] })],
-        ['Browser', () => barList(a.browsers, { head: ['Browser', 'Visitors · Views'] })],
-        ['OS', () => barList(a.os, { head: ['Operating system', 'Visitors · Views'] })],
+        ['Device', () => barList(a.devices, { pick: filterBy('device'), head: ['Device', 'Visitors · Views'] })],
+        ['Browser', () => barList(a.browsers, { pick: filterBy('browser'), head: ['Browser', 'Visitors · Views'] })],
+        ['OS', () => barList(a.os, { pick: filterBy('os'), head: ['Operating system', 'Visitors · Views'] })],
         ['Screen', () => barList(a.screens, { head: ['Screen', 'Visitors · Reports'] })],
         ['Resolution', () => barList(a.resolutions, { head: ['Resolution', 'Visitors · Reports'] })],
       ]),

@@ -147,10 +147,11 @@ pub fn taken_down_page() -> Response {
     notice(410, "This app has been taken down", "This app is no longer available.", "")
 }
 
-// ---------- calls per connection ----------
+// ---------- calls per connection, and requests per address ----------
 
-/// Fixed one-minute windows for REST and MCP calls, kept in memory and keyed by who is calling (the person and the
-/// connection they use). A restart forgets them, which is harmless for a window this short.
+/// Fixed one-minute windows kept in memory and keyed by who is calling: for REST and MCP calls the person and the
+/// connection they use, for requests to apps the visitor's address (shield.rs). A restart forgets them, which is
+/// harmless for a window this short.
 #[derive(Default)]
 pub struct CallLimits(Mutex<HashMap<String, (i64, u32)>>);
 
@@ -162,6 +163,18 @@ impl CallLimits {
     }
 
     fn check_at(&self, key: &str, at: i64, per_minute: i64) -> Result<()> {
+        if i64::from(self.count(key, at)) > per_minute {
+            return Err(Problem::new(
+                429,
+                "rate_limited",
+                "Too many calls from this connection in the last minute. Wait a moment and try again.",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Count one more call by `key` at `at` and return how many it made in that minute, this one included.
+    pub fn count(&self, key: &str, at: i64) -> u32 {
         let window = at / 60_000;
         let mut calls = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         if calls.len() > 10_000 {
@@ -171,15 +184,8 @@ impl CallLimits {
         if entry.0 != window {
             *entry = (window, 0);
         }
-        entry.1 += 1;
-        if i64::from(entry.1) > per_minute {
-            return Err(Problem::new(
-                429,
-                "rate_limited",
-                "Too many calls from this connection in the last minute. Wait a moment and try again.",
-            ));
-        }
-        Ok(())
+        entry.1 = entry.1.saturating_add(1);
+        entry.1
     }
 }
 

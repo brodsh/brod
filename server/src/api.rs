@@ -247,6 +247,14 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
                 let b = req.json_object().await?;
                 let name = body_str(&b, "name");
                 let (scope, expires_at) = (control::token_scope(b.get("scope"))?, control::token_expiry(b.get("expires_in_days"))?);
+                // "app": a token for that app's MCP endpoint only (app_mcp.rs), its staging one with "staging": true.
+                if let Some(app) = b.get("app").filter(|v| !v.is_null()).map(crate::model::js_string) {
+                    let staging = crate::model::truthy(b.get("staging"));
+                    return Ok(created(
+                        db(Box::new(move |conn, cfg, c| crate::app_mcp::create_pat(conn, cfg, c, &app, staging, &name, expires_at)))
+                            .await?,
+                    ));
+                }
                 return Ok(created(db(Box::new(move |conn, _, c| control::create_token(conn, c, &name, &scope, expires_at))).await?));
             }
             if m == Method::DELETE && s(1).is_some() {
@@ -395,9 +403,8 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
             if m == Method::GET {
                 crate::usage::flush(st).await?;
                 crate::analytics::flush(st).await?;
-                let num = |k: &str| req.param(k).and_then(|d| d.parse::<i64>().ok());
-                let (days, tz, app) = (num("days"), num("tz"), req.param("app"));
-                return Ok(json(db(Box::new(move |conn, cfg, c| crate::analytics::report(conn, cfg, c, app.as_deref(), days, tz))).await?));
+                let q = crate::analytics::Query::from_params(|k| req.param(k))?;
+                return Ok(json(db(Box::new(move |conn, cfg, c| crate::analytics::report(conn, cfg, c, &q))).await?));
             }
         }
         Some("deploys") => {

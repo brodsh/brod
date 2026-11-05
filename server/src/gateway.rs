@@ -41,7 +41,7 @@ fn sign_in_url(cfg: &Config, app: &AppRow, workspace_slug: &str, domain: Option<
     let suffix = if staging { STAGING_SUFFIX } else { "" };
     format!("{}/auth/app?app={}{suffix}.{workspace_slug}{host}&return={}", cfg.api_origin, app.slug, encode_uri_component(ret))
 }
-fn app_return(r: Option<String>) -> String {
+pub(crate) fn app_return(r: Option<String>) -> String {
     match r {
         Some(r) if r.starts_with('/') && !r.starts_with("//") && !r.starts_with("/\\") => r,
         _ => "/".into(),
@@ -91,6 +91,56 @@ struct Visit {
     domain: Option<String>,
     /// Opened at the app's staging address: `app.live_version` then holds the staging version.
     staging: bool,
+    /// The served version's MCP endpoint (app_mcp.rs), when it declares one.
+    mcp: Option<String>,
+    /// For a request to that endpoint with a bearer token: what the token turned out to be.
+    token: Option<TokenAuth>,
+}
+
+/// A bearer token on an app's MCP endpoint, checked (app_mcp.rs).
+enum TokenAuth {
+    /// A token for exactly this endpoint, and whether its person may open the app now, decided as for their browser.
+    Person(User, Decision),
+    Invalid(&'static str),
+}
+
+/// The answer to a request on an app's MCP endpoint that has no usable credentials (RFC 6750 section 3, RFC 9728
+/// section 5.1): where to learn how to sign in, and for a refused token, why.
+fn challenge(status: u16, metadata: &str, error: Option<(&str, &str)>) -> Response {
+    let (www, body) = match error {
+        Some((code, why)) => (
+            format!("Bearer error=\"{code}\", error_description=\"{why}\", resource_metadata=\"{metadata}\""),
+            json!({ "error": code, "error_description": why }),
+        ),
+        None => (
+            format!("Bearer resource_metadata=\"{metadata}\""),
+            json!({ "error": "unauthorized", "error_description": "This is an MCP endpoint: sign in through your MCP client, which Brod signs in with OAuth." }),
+        ),
+    };
+    json_response(
+        &body,
+        status,
+        &[
+            ("www-authenticate", www),
+            ("cache-control", "no-store".into()),
+            ("access-control-allow-origin", "*".into()),
+            ("access-control-expose-headers", "www-authenticate".into()),
+        ],
+    )
+}
+
+/// CORS for the MCP endpoint's metadata and preflight, for MCP clients that run in a browser.
+fn mcp_cors(mut r: Response) -> Response {
+    crate::http::header_pairs(
+        &mut r,
+        &[
+            ("access-control-allow-origin", "*".into()),
+            ("access-control-allow-methods", "GET, POST, DELETE, OPTIONS".into()),
+            ("access-control-allow-headers", "authorization, content-type, mcp-protocol-version, mcp-session-id, last-event-id".into()),
+            ("access-control-expose-headers", "www-authenticate, mcp-session-id".into()),
+        ],
+    );
+    r
 }
 
 /// The cookie a correct password earns: bound to the app and to its current password, so setting a new one ends it.
@@ -144,14 +194,14 @@ pub enum Where {
 
 /// Who may open an app's staging address: the people who can change the app (its owner, workspace admins and builders)
 /// and anyone granted its top role. Nobody gets in anonymously or with the app's password, whatever its access mode.
-fn admit_staging(app: &AppRow, d: &mut Decision, visitor: Option<&SessionUser>) {
-    let Some(v) = visitor else {
+pub fn admit_staging(app: &AppRow, d: &mut Decision, visitor: Option<&User>) {
+    let Some(user) = visitor else {
         *d = Decision { allowed: false, sign_in_needed: true, role: None, groups: vec![], member: None };
         return;
     };
     let top = app.role_list().into_iter().next();
     d.sign_in_needed = false;
-    if app.owner_id == v.user.id || matches!(d.member.as_deref(), Some("admin" | "builder")) {
+    if app.owner_id == user.id || matches!(d.member.as_deref(), Some("admin" | "builder")) {
         // The people who can change the app try it as its owner would.
         d.allowed = true;
         d.role = top;
@@ -161,21 +211,35 @@ fn admit_staging(app: &AppRow, d: &mut Decision, visitor: Option<&SessionUser>) 
 }
 
 /// Serve an app. `domain` is the custom domain (host and port, as the request named it) it was opened at, if any.
-/// Every request that reaches an app is counted for its analytics, with its status, size and server time.
+/// Every request that reaches an app is counted for its analytics, with its status, size, server time and class
+/// (traffic.rs), after the shield (shield.rs) has had its say.
 pub async fn serve_app(st: &State, req: Req, at: Where, domain: Option<String>) -> Result<Response> {
     let mut hit = crate::analytics::Hit::new(&req);
-    let res = serve(st, req, at, domain, &mut hit).await;
+    let mut guard = crate::shield::Guard::new(st, &req).await;
+    let res = match guard.refuse().await {
+        Some(refused) => Ok(refused),
+        None => serve(st, req, at, domain, &mut hit, &mut guard).await,
+    };
     let (status, bytes) = match &res {
         Ok(r) => {
             (r.status().as_u16(), r.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse().ok()).unwrap_or(0))
         }
         Err(e) => (e.status, 0),
     };
+    guard.done(st, status);
+    hit.traffic = guard.verdict;
     st.analytics.finish(hit, status, bytes);
     res
 }
 
-async fn serve(st: &State, mut req: Req, at: Where, domain: Option<String>, hit: &mut crate::analytics::Hit) -> Result<Response> {
+async fn serve(
+    st: &State,
+    mut req: Req,
+    at: Where,
+    domain: Option<String>,
+    hit: &mut crate::analytics::Hit,
+    guard: &mut crate::shield::Guard,
+) -> Result<Response> {
     let origin = match (&domain, &at) {
         (Some(d), _) => host_origin(&st.cfg, d),
         (None, Where::Slug { workspace, slug, staging: true }) => staging_url(&st.cfg, workspace, slug),
@@ -184,12 +248,13 @@ async fn serve(st: &State, mut req: Req, at: Where, domain: Option<String>, hit:
     };
     let token = cookie(req.header("cookie"), &origin, APP_COOKIE);
     let staging = matches!(at, Where::Slug { staging: true, .. });
+    let (raw_path, bearer) = (req.path.clone(), crate::control::Credentials::of(&req).bearer());
     let visit = st
         .db
         .call(move |c| {
             let version = if staging { "staging_version" } else { "live_version" };
             let sql = format!(
-                "SELECT a.*, v.server, v.network, v.open_paths AS declared_open, w.slug AS wslug, v.runtime AS vruntime,
+                "SELECT a.*, v.server, v.network, v.open_paths AS declared_open, w.slug AS wslug, v.runtime AS vruntime, v.mcp AS vmcp,
                    (SELECT d.node_id || ' ' || d.container_ref FROM deployments d WHERE d.app_id = a.id AND d.version = v.n AND d.state = 'serving'
                     ORDER BY d.created_at DESC LIMIT 1) AS serving
                  FROM apps a JOIN workspaces w ON w.id = a.workspace_id
@@ -208,30 +273,42 @@ async fn serve(st: &State, mut req: Req, at: Where, domain: Option<String>, hit:
                     (r.get::<_, Option<String>>("vruntime")?.as_deref() == Some("container")).then(|| {
                         r.get::<_, Option<String>>("serving").ok().flatten().and_then(|s| s.split_once(' ').map(|(n, c)| (n.to_string(), c.to_string())))
                     }),
+                    r.get::<_, Option<String>>("vmcp")?,
                 ))
             };
             let row = match &at {
                 Where::Slug { workspace, slug, .. } => c.first(&format!("{sql}w.slug = ? AND a.slug = ?"), [workspace, slug], map)?,
                 Where::Id(id) => c.first(&format!("{sql}a.id = ?"), [id], map)?,
             };
-            let Some((mut app, server, workspace_slug, network, open, container)) = row else { return Ok(None) };
+            let Some((mut app, server, workspace_slug, network, open, container, mcp)) = row else { return Ok(None) };
             // Taken down by the Brod team, or in a suspended workspace: nothing of the app is served, its /_brod/ pages included.
             if crate::abuse::hold_of(c, &app)?.is_some() {
                 return Ok(Some(None));
             }
             if staging {
                 // From here on the staging version is the one served, and staging is never public or shared by password.
-                app.live_version = app.staging_version;
-                if app.access == "public" || app.access == "password" || app.access == "signed_in" {
-                    app.access = "people".into();
-                }
+                crate::app_mcp::served_on_staging(&mut app);
             }
             let visitor = people::session_user(c, &token, Some(&app.id))?;
             let mut decision = people::decide(c, &app, visitor.as_ref().map(|v| &v.user))?;
             if staging {
-                admit_staging(&app, &mut decision, visitor.as_ref());
+                admit_staging(&app, &mut decision, visitor.as_ref().map(|v| &v.user));
             }
-            Ok(Some(Some(Visit { app, server, container, network, open, visitor, decision, workspace_slug, origin, domain, staging })))
+            // A bearer token on the MCP endpoint: checked against exactly this address, then the person behind it is
+            // decided on as their browser would be.
+            let token = match (&mcp, &bearer) {
+                (Some(path), Some(t)) if crate::app_mcp::matches(path, &raw_path) => {
+                    Some(match crate::app_mcp::check(c, t, &app.id, &format!("{origin}{path}"))? {
+                        crate::app_mcp::Bearer::Person(user) => {
+                            let d = crate::app_mcp::decide(c, &app, staging, &user)?;
+                            TokenAuth::Person(user, d)
+                        }
+                        crate::app_mcp::Bearer::Invalid(why) => TokenAuth::Invalid(why),
+                    })
+                }
+                _ => None,
+            };
+            Ok(Some(Some(Visit { app, server, container, network, open, visitor, decision, workspace_slug, origin, domain, staging, mcp, token })))
         })
         .await?;
     let Some(v) = visit else {
@@ -239,14 +316,69 @@ async fn serve(st: &State, mut req: Req, at: Where, domain: Option<String>, hit:
     };
     let Some(mut v) = v else { return Ok(crate::abuse::taken_down_page()) };
     let password_needed = admit(&st.cfg, &req, &mut v);
+    // The MCP endpoint's protected-resource metadata (RFC 9728), for anyone: it is how a client learns to sign in.
+    if let Some(path) = &v.mcp {
+        const WELL_KNOWN: &str = "/.well-known/oauth-protected-resource";
+        if req.path == WELL_KNOWN || req.path.strip_prefix(WELL_KNOWN) == Some(path.as_str()) {
+            return Ok(mcp_cors(match req.method {
+                Method::GET | Method::HEAD => json_response(&crate::app_mcp::metadata(&st.cfg, &v.origin, path), 200, &[]),
+                Method::OPTIONS => crate::http::empty(204),
+                _ => notice(405, "Not supported", "This address only answers GET.", ""),
+            }));
+        }
+    }
     if req.path.starts_with("/_brod/") {
         return special(st, &mut req, v).await;
     }
-    let Visit { app, server, container, network, open, visitor, decision, workspace_slug, origin, domain, staging } = v;
+    let Visit { app, server, container, network, open, visitor, mut decision, workspace_slug, origin, domain, staging, mcp, token } = v;
     // Requests to the staging address stay out of the app's analytics.
     if !staging {
         hit.app = Some((app.workspace_id.clone(), app.id.clone()));
     }
+    // Who the app is told the request is from: the signed-in visitor, or on the MCP endpoint the person whose token it is.
+    let mut person: Option<User> = visitor.as_ref().map(|v| v.user.clone());
+    // The MCP endpoint (app_mcp.rs): a browser that may open the app gets in as anywhere else; an MCP client needs a
+    // token for exactly this address whose person may still open the app; anyone else is told how to sign in, never
+    // sent to the sign-in page.
+    let on_mcp = mcp.as_deref().filter(|p| crate::app_mcp::matches(p, &req.path));
+    if let Some(path) = on_mcp {
+        let metadata = crate::app_mcp::metadata_url(&origin, path);
+        match token {
+            Some(TokenAuth::Invalid(why)) => return Ok(challenge(401, &metadata, Some(("invalid_token", why)))),
+            Some(TokenAuth::Person(user, d)) => {
+                if !d.allowed {
+                    // The token is fine but its person may no longer open the app (RFC 6750: insufficient_scope, 403).
+                    let (ws, app_id, detail) =
+                        (app.workspace_id.clone(), app.id.clone(), format!("{} called {} with an app token", user.email, req.path));
+                    let email = user.email.clone();
+                    st.db.call(move |c| event(c, &ws, &email, Some(&app_id), "refused", &detail)).await?;
+                    return Ok(challenge(
+                        403,
+                        &metadata,
+                        Some(("insufficient_scope", "The person this token was issued to can no longer open this app.")),
+                    ));
+                }
+                // The app never sees a Brod token.
+                req.headers.remove(axum::http::header::AUTHORIZATION);
+                decision = d;
+                person = Some(user);
+            }
+            None if visitor.is_some() && decision.allowed => {}
+            None if req.method == Method::OPTIONS => return Ok(mcp_cors(crate::http::empty(204))),
+            None => return Ok(challenge(401, &metadata, None)),
+        }
+    }
+    // The same salted, per-app, per-day hash usage.rs counts visits by. Someone signed in, an MCP client calling with its
+    // person's app token, or a browser that ran the insights script or passed the shield's check today is a person.
+    let who = crate::usage::visitor_hash(&st.cfg, &req, &app.id, person.as_ref().map(|u| u.id.as_str()));
+    let verified = if person.is_some() {
+        Some("signed_in")
+    } else if st.traffic.is_verified(&who, crate::util::now()) {
+        Some("js")
+    } else {
+        None
+    };
+    guard.settle(verified);
     let server: Option<ServerInfo> = match server {
         Some(s) => Some(serde_json::from_str(&s)?),
         None => None,
@@ -260,7 +392,7 @@ async fn serve(st: &State, mut req: Req, at: Where, domain: Option<String>, hit:
     }
     // An open path: anyone, without signing in, and always anonymously (open_paths.rs). Takedowns and suspensions were
     // handled above; a paused app stays paused.
-    if let Some(path) = crate::open_paths::match_request(&open, &req.path, req.method.as_str()) {
+    if let Some(path) = crate::open_paths::match_request(&open, &req.path, req.method.as_str()).filter(|_| on_mcp.is_none()) {
         if app.status == "paused" {
             return Ok(notice(503, "Paused", "The owner has paused this app.", ""));
         }
@@ -272,6 +404,10 @@ async fn serve(st: &State, mut req: Req, at: Where, domain: Option<String>, hit:
         };
         crate::network::protect(&st.cfg, &mut res, &network);
         return Ok(res);
+    }
+    // An MCP client calling with its person's token can't run a challenge page, and needs none.
+    if let Some(check) = guard.challenge(st, &req, person.is_some()) {
+        return Ok(check);
     }
     if !decision.allowed {
         let ret = if req.query.is_empty() { req.path.clone() } else { format!("{}?{}", req.path, req.query) };
@@ -300,16 +436,19 @@ async fn serve(st: &State, mut req: Req, at: Where, domain: Option<String>, hit:
         ));
     };
 
-    // Trying a version on staging is not a visit.
-    if !staging && crate::usage::is_page_view(&req) && !hit.bot {
-        let who = crate::usage::visitor_hash(&st.cfg, &req, &app.id, visitor.as_ref().map(|v| v.user.id.as_str()));
-        st.visits.record(&app.id, who.clone());
+    // Trying a version on staging is not a visit. Every class of page view is kept for analytics (which shows people
+    // by default), and so are probes for vulnerable paths; a bot that says it is one is never a visit.
+    let page_view = crate::usage::is_page_view(&req);
+    if !staging && (page_view || guard.facts.probe) {
+        if page_view && !hit.bot {
+            st.visits.record(&app.id, who.clone());
+        }
         let path = decode_uri_component(&req.path).unwrap_or_else(|| req.path.clone());
-        hit.view = Some(crate::analytics::page_view(&st.cfg, &req, &app.workspace_id, &app.id, who, visitor.is_some(), &path));
+        hit.view = Some(crate::analytics::page_view(&st.cfg, &req, &app.workspace_id, &app.id, who, person.is_some(), &path));
     }
 
     let identity = match server.is_some() || container.is_some() {
-        true => visitor.as_ref().map(|v| identity_for(&st.cfg, &app, &workspace_slug, &v.user, &decision)),
+        true => person.as_ref().map(|u| identity_for(&st.cfg, &app, &workspace_slug, u, &decision)),
         false => None,
     };
     let mut res = match container {
@@ -342,14 +481,13 @@ pub async fn serve_version(
     }
 
     if let Some(server) = server {
-        // A file that exists in the bundle is served as is; every other request goes to the server code.
+        // A file that exists in the bundle is served as is, a folder by its index.html; every other request goes to the server code.
+        let file = if path.is_empty() || path.ends_with('/') { format!("{path}index.html") } else { path.clone() };
         if is_get
-            && !path.is_empty()
-            && !path.ends_with('/')
-            && !runtime::is_server_path(&path)
-            && let Some(obj) = crate::versions::open_file(st, &app.id, version, &path).await?
+            && !runtime::is_server_path(&file)
+            && let Some(obj) = crate::versions::open_file(st, &app.id, version, &file).await?
         {
-            return file_response(st, &req, app, obj, &path).await;
+            return file_response(st, &req, app, obj, &file).await;
         }
         return runtime::dispatch(st, req, app, origin, version, &server, identity).await;
     }
@@ -458,6 +596,11 @@ async fn special(st: &State, req: &mut Req, v: Visit) -> Result<Response> {
         ""
     };
     let Visit { app, visitor, decision, workspace_slug, origin, domain, staging, .. } = v;
+    // The answer to the shield's proof-of-work check (shield.rs).
+    if req.path == "/_brod/challenge" {
+        let who = crate::usage::visitor_hash(&st.cfg, req, &app.id, visitor.as_ref().map(|v| v.user.id.as_str()));
+        return crate::shield::answer(st, req, &who).await;
+    }
     // What the browser stopped, or would have stopped, under the app's Content-Security-Policy (network.rs). Browsers
     // may send these without the visitor's cookies, so they are taken from anyone: they are only ever shown to the app's
     // own builders, and an app keeps a bounded number of hosts on record.
@@ -515,6 +658,10 @@ async fn special(st: &State, req: &mut Req, v: Visit) -> Result<Response> {
             let Ok(body) = req.bytes(16 * 1024, "The insights").await else { return Ok(crate::http::empty(204)) };
             let who = crate::usage::visitor_hash(&st.cfg, req, &app.id, visitor.as_ref().map(|v| v.user.id.as_str()));
             let (views, events) = crate::analytics::ingest(&st.cfg, req, &body, &app.workspace_id, &app.id, &who, visitor.is_some());
+            // Only a browser that ran the script reports anything: from now on today, this visitor is a person.
+            if !views.is_empty() || !events.is_empty() {
+                st.traffic.verify(&who, crate::util::now());
+            }
             for v in views {
                 st.visits.record(&app.id, who.clone());
                 st.analytics.view(v);
