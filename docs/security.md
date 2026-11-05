@@ -58,6 +58,14 @@ as that app's role. Postgres then checks the role's password. Each role owns onl
 databases, and `CONNECT` on every app database is revoked from everyone else, so even a leaked password works only
 for its own database and only through its own app's node.
 
+**One tenant's container on another tenant's machine.** A node is either an instance node, joined by the operator
+for the whole server, or belongs to one workspace: the one named by the join token it joined with, or the one the
+operator later gave it to. The scheduler (`scheduler.rs`) only considers nodes the app's workspace may use: the nodes
+it owns, and instance nodes when `BROD_SHARED_NODES` is on (the self-hosted default; off hosted). Another workspace's
+node is never a candidate and is never named in an error, even when it is the only one free. Joining again never moves
+a node to another owner, and the operator cannot give a node to a workspace while another workspace's deployment
+still holds capacity on it (evacuate it first). Only an operator mints join tokens and changes owners.
+
 **Forged identities.** Apps learn who a visitor is from the `x-brod-*` headers, which the gateway sets after stripping
 any a visitor sent, and from an Ed25519-signed JWT (`x-brod-identity`, `/_brod/me`) that names one app as its
 audience and lasts five minutes. Anything can verify it against `/.well-known/jwks.json`; only the holder of

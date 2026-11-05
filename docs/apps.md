@@ -809,7 +809,9 @@ last 5 others; older ones are deleted from the registry each night and cannot be
 hosted; see [configuration.md](configuration.md)); with it off, or without a registry, a deploy is refused with
 `containers_unavailable`. `docker-compose.yml` runs the registry (`registry:2`, no published port: only Brod talks to
 it, with short-lived tokens scoped to one app's repository `apps/<app id>`) and a node with Docker access. Nodes get
-images from Brod over their own connection, never from the registry. The nightly clean-up deletes manifests; to free
+images from Brod over their own connection, never from the registry. An app only runs on nodes its workspace may
+use: nodes joined with a join token for that workspace, and instance nodes (joined for the whole server) when
+`BROD_SHARED_NODES` is on, as it is self-hosted by default ([security.md](security.md)). The nightly clean-up deletes manifests; to free
 their disk space run
 `docker compose exec registry registry garbage-collect --delete-untagged /etc/docker/registry/config.yml`
 from time to time. A node builds with `docker buildx` (a `docker-container` builder, 15 minutes at most) and reads:
