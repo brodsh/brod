@@ -271,7 +271,14 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, archive: Vec<u8>) -
             let node = crate::scheduler::choose(
                 conn,
                 &connected,
-                &crate::scheduler::Need { cpu: spec2.cpu, memory_mb: spec2.memory_mb, arch: None, prefer },
+                &crate::scheduler::Need {
+                    cpu: spec2.cpu,
+                    memory_mb: spec2.memory_mb,
+                    arch: None,
+                    prefer,
+                    workspace: app.workspace_id.clone(),
+                    shared: cfg.shared_nodes,
+                },
             )?;
             let staging = control::deploy_to_staging(&c2, &app, created, &o2);
             let note = js_slice(js_trim(o2.note.as_deref().unwrap_or("")), 200);
@@ -356,7 +363,16 @@ fn live_node(conn: &Connection, app_id: &str) -> Result<Option<String>> {
 }
 
 /// Start a deployment of an existing container version, reusing its image (rollback, or redeploying a version).
-pub fn redeploy(conn: &Connection, connected: &[String], app: &AppRow, n: i64, environment: &str, actor: &str) -> Result<Deployment> {
+/// `shared`: whether instance nodes may take it (Config::shared_nodes).
+pub fn redeploy(
+    conn: &Connection,
+    connected: &[String],
+    shared: bool,
+    app: &AppRow,
+    n: i64,
+    environment: &str,
+    actor: &str,
+) -> Result<Deployment> {
     let spec: Option<String> = conn
         .first("SELECT spec FROM versions WHERE app_id = ? AND n = ? AND runtime = 'container'", params![app.id, n], |r| r.get(0))?
         .flatten();
@@ -373,7 +389,14 @@ pub fn redeploy(conn: &Connection, connected: &[String], app: &AppRow, n: i64, e
     let node = crate::scheduler::choose(
         conn,
         connected,
-        &crate::scheduler::Need { cpu: spec.cpu, memory_mb: spec.memory_mb, arch, prefer: live_node(conn, &app.id)? },
+        &crate::scheduler::Need {
+            cpu: spec.cpu,
+            memory_mb: spec.memory_mb,
+            arch,
+            prefer: live_node(conn, &app.id)?,
+            workspace: app.workspace_id.clone(),
+            shared,
+        },
     )?;
     let id = random_id("dep_", 10);
     conn.run(
@@ -1208,7 +1231,7 @@ pub async fn rollback_container(st: &State, c: &Caller, slug: &str, n: i64) -> R
             if app.live_version == Some(n) {
                 return Err(Problem::new(400, "already_live", format!("v{n} is already live.")));
             }
-            let d = redeploy(conn, &connected, &app, n, "live", &c2.actor)?;
+            let d = redeploy(conn, &connected, cfg.shared_nodes, &app, n, "live", &c2.actor)?;
             event(
                 conn,
                 &c2.workspace.id,

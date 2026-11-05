@@ -9,10 +9,14 @@
 //   POST /_node/heartbeat  every 10 s, signed with the node's key: version, capabilities, resource usage
 // Every endpoint but join checks the node's key. The operator's API is under /v1/admin/nodes (ADMIN_SECRET or a
 // signed-in operator, see operator.rs; every change goes to the server-wide audit log):
-//   POST   /v1/admin/nodes/join-tokens            a join token, good once for 15 minutes
+//   POST   /v1/admin/nodes/join-tokens            a join token, good once for 15 minutes; {workspace} makes the node
+//                                                 that joins with it that workspace's (default: an instance node)
 //   GET    /v1/admin/nodes/join-tokens            unused, unexpired join tokens; DELETE .../join-tokens/<id> revokes one
 //   GET    /v1/admin/nodes, /v1/admin/nodes/<id>  nodes with their status, connection, capabilities, resources and load
-//   PATCH  /v1/admin/nodes/<id>                   {name}
+//   PATCH  /v1/admin/nodes/<id>                   {name}, {workspace}: give the node to a workspace (slug or id), or
+//                                                 null to make it an instance node again
+// Ownership (migrations/0030_node_owners.sql, scheduler.rs): a workspace's workloads only land on nodes it owns, and on
+// instance nodes when BROD_SHARED_NODES is on. Only an operator changes who owns a node.
 //   POST   /v1/admin/nodes/<id>/drain|disable|enable
 //   POST   /v1/admin/nodes/<id>/evacuate          drain, and start its serving deployments again on other nodes
 //   DELETE /v1/admin/nodes/<id>                   refused while connected, unless disabled first
@@ -335,6 +339,13 @@ async fn join(st: &State, req: &mut Req) -> Result<Response> {
         .call(move |c| {
             tx(c, |c| {
                 let t = now();
+                let owner: Option<String> = c
+                    .first(
+                        "SELECT workspace_id FROM node_join_tokens WHERE hash = ? AND used_at IS NULL AND expires_at > ?",
+                        params![hash, t],
+                        |r| r.get::<_, Option<String>>(0),
+                    )?
+                    .flatten();
                 let used = c.run(
                     "UPDATE node_join_tokens SET used_at = ? WHERE hash = ? AND used_at IS NULL AND expires_at > ?",
                     params![t, hash, t],
@@ -342,13 +353,26 @@ async fn join(st: &State, req: &mut Req) -> Result<Response> {
                 if used != 1 {
                     return Err(unauthorized("This join token is unknown, already used or expired. Ask the operator for a new one."));
                 }
-                if c.exists("SELECT 1 FROM nodes WHERE id = ?", [&id])? {
-                    c.run("UPDATE nodes SET name = ? WHERE id = ?", params![name, id])?;
-                } else {
-                    c.run(
-                        "INSERT INTO nodes (id, public_key, name, status, capabilities, created_at) VALUES (?,?,?,?,'{}',?)",
-                        params![id, key_text, name, Status::Joining.name(), t],
-                    )?;
+                let known: Option<Option<String>> =
+                    c.first("SELECT workspace_id FROM nodes WHERE id = ?", [&id], |r| r.get::<_, Option<String>>(0))?;
+                match known {
+                    // Joining again never moves a node to another owner: only the operator does that.
+                    Some(was) if was != owner => {
+                        return Err(Problem::new(
+                            409,
+                            "node_owned_elsewhere",
+                            "This node is already joined for someone else. Join it with a token for the same owner, or ask the operator to move it.",
+                        ));
+                    }
+                    Some(_) => {
+                        c.run("UPDATE nodes SET name = ? WHERE id = ?", params![name, id])?;
+                    }
+                    None => {
+                        c.run(
+                            "INSERT INTO nodes (id, public_key, name, status, capabilities, created_at, workspace_id) VALUES (?,?,?,?,'{}',?,?)",
+                            params![id, key_text, name, Status::Joining.name(), t, owner],
+                        )?;
+                    }
                 }
                 view(c, &id, false)
             })
@@ -523,7 +547,9 @@ pub async fn sweep(st: &State) -> Result<Vec<String>> {
 /// A node as the admin API shows it.
 fn view(c: &Connection, id: &str, connected: bool) -> Result<Value> {
     let rows = c.rows_json(
-        "SELECT id, name, status, public_key, capabilities, resources, version, address, last_seen_at, created_at FROM nodes WHERE id = ?",
+        "SELECT n.id, n.name, n.status, n.public_key, n.capabilities, n.resources, n.version, n.address, n.last_seen_at, n.created_at,
+           n.workspace_id, w.slug AS workspace
+         FROM nodes n LEFT JOIN workspaces w ON w.id = n.workspace_id WHERE n.id = ?",
         [id],
     )?;
     let Some(Value::Object(mut v)) = rows.into_iter().next() else {
@@ -553,11 +579,17 @@ fn view(c: &Connection, id: &str, connected: bool) -> Result<Value> {
 /// The join tokens not used and not expired, newest first: a prefix of the hash names one (the token itself is gone).
 fn join_tokens(c: &Connection) -> Result<Vec<Value>> {
     c.all(
-        "SELECT hash, created_by, expires_at FROM node_join_tokens WHERE used_at IS NULL AND expires_at > ? ORDER BY expires_at DESC",
+        "SELECT t.hash, t.created_by, t.expires_at, w.slug FROM node_join_tokens t LEFT JOIN workspaces w ON w.id = t.workspace_id
+         WHERE t.used_at IS NULL AND t.expires_at > ? ORDER BY t.expires_at DESC",
         [now()],
         |r| {
             let hash: String = r.get(0)?;
-            Ok(json!({ "id": &hash[..16], "created_by": r.get::<_, String>(1)?, "expires_at": r.get::<_, i64>(2)? }))
+            Ok(json!({
+                "id": &hash[..16],
+                "created_by": r.get::<_, String>(1)?,
+                "expires_at": r.get::<_, i64>(2)?,
+                "workspace": r.get::<_, Option<String>>(3)?,
+            }))
         },
     )
 }
@@ -571,15 +603,73 @@ fn node_name(v: &Value) -> Result<String> {
     Ok(n.to_string())
 }
 
-/// Mint a join token: kept only as its SHA-256, good once for JOIN_TOKEN_MS. The token and when it expires.
-pub fn mint(c: &Connection, created_by: &str) -> Result<(String, i64)> {
+/// Mint a join token: kept only as its SHA-256, good once for JOIN_TOKEN_MS. The node that joins with it belongs to
+/// `workspace`, or is an instance node for None. The token and when it expires.
+pub fn mint(c: &Connection, created_by: &str, workspace: Option<&str>) -> Result<(String, i64)> {
     let token = format!("bnj_{}", hex::encode(random_bytes(32)));
     let expires_at = now() + JOIN_TOKEN_MS;
     c.run(
-        "INSERT INTO node_join_tokens (hash, created_by, expires_at) VALUES (?,?,?)",
-        params![sha256_hex(&token), created_by, expires_at],
+        "INSERT INTO node_join_tokens (hash, created_by, expires_at, workspace_id) VALUES (?,?,?,?)",
+        params![sha256_hex(&token), created_by, expires_at, workspace],
     )?;
     Ok((token, expires_at))
+}
+
+/// A request body that may be empty: {} then.
+async fn optional_json(req: &mut Req) -> Result<Value> {
+    let raw = req.bytes(16 * 1024, "The request body").await?;
+    if raw.iter().all(u8::is_ascii_whitespace) {
+        return Ok(json!({}));
+    }
+    match serde_json::from_slice(&raw) {
+        Ok(v @ Value::Object(_)) => Ok(v),
+        Ok(_) => Err(Problem::new(400, "bad_body", "The body must be a JSON object.")),
+        Err(e) => Err(Problem::new(400, "bad_body", format!("The body is not JSON: {e}"))),
+    }
+}
+
+/// The owner a body's "workspace" names: None when the body does not say, Some(None) for null (an instance node),
+/// Some(Some(id)) for a workspace's slug or id.
+fn owner(c: &Connection, v: &Value) -> Result<Option<Option<String>>> {
+    match v.get("workspace") {
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(None)),
+        Some(Value::String(w)) => {
+            let w = w.trim();
+            let id: Option<String> = c.first("SELECT id FROM workspaces WHERE id = ? OR slug = ?", params![w, w], |r| r.get(0))?;
+            id.map(|id| Some(Some(id))).ok_or_else(|| Problem::new(404, "no_workspace", format!("There is no workspace {w}.")))
+        }
+        Some(_) => Err(Problem::new(400, "bad_workspace", "workspace must be a workspace's slug or id, or null for an instance node.")),
+    }
+}
+
+/// Give node `id` to `to` (None: make it an instance node). Refused while deployments of another workspace hold
+/// capacity on it, so moving a node never leaves one tenant's container on another tenant's machine: evacuate first.
+fn set_owner(c: &Connection, id: &str, to: Option<&str>) -> Result<()> {
+    if let Some(ws) = to {
+        let reserving = crate::scheduler::RESERVING;
+        let others: i64 = c
+            .first(
+                &format!(
+                    "SELECT COUNT(*) FROM deployments d JOIN apps a ON a.id = d.app_id
+                     WHERE d.node_id = ? AND d.state IN {reserving} AND a.workspace_id <> ?"
+                ),
+                params![id, ws],
+                |r| r.get(0),
+            )?
+            .unwrap_or(0);
+        if others > 0 {
+            return Err(Problem::new(
+                409,
+                "node_in_use",
+                format!(
+                    "{others} deployments of other workspaces still run on this node. Evacuate it first, then give it to the workspace."
+                ),
+            ));
+        }
+    }
+    c.run("UPDATE nodes SET workspace_id = ? WHERE id = ?", params![to, id])?;
+    Ok(())
 }
 
 /// /v1/admin/nodes/*, with the admin secret: join tokens, the node list, drain, disable, enable, delete, and a request
@@ -593,17 +683,23 @@ pub async fn admin(st: &State, req: &mut Req, seg: &[String]) -> Result<Response
     let st2 = st.clone();
     match (m, a.as_deref(), b.as_deref(), extra) {
         (Method::POST, Some("join-tokens"), None, false) => {
+            let body = optional_json(req).await?;
             let o = op.clone();
-            let (token, expires_at) = st
+            let (token, expires_at, ws) = st
                 .db
                 .call(move |c| {
-                    let r = mint(c, &o.actor)?;
-                    audit(c, &o, "node_join_token", "a node join token was made")?;
-                    Ok(r)
+                    let ws = owner(c, &body)?.flatten();
+                    let r = mint(c, &o.actor, ws.as_deref())?;
+                    let detail = match &ws {
+                        Some(w) => format!("a node join token was made for workspace {w}"),
+                        None => "a node join token was made".to_string(),
+                    };
+                    audit(c, &o, "node_join_token", &detail)?;
+                    Ok((r.0, r.1, ws))
                 })
                 .await?;
             let command = format!("brod-node join {origin} {token}");
-            Ok(json_response(&json!({ "token": token, "expires_at": expires_at, "command": command }), 201, &[]))
+            Ok(json_response(&json!({ "token": token, "expires_at": expires_at, "command": command, "workspace_id": ws }), 201, &[]))
         }
         (Method::GET, None, None, false) => {
             let nodes = st
@@ -633,18 +729,31 @@ pub async fn admin(st: &State, req: &mut Req, seg: &[String]) -> Result<Response
             Ok(json_ok(json!({ "ok": true })))
         }
         (Method::PATCH, Some(id), None, false) => {
-            let body: Value = serde_json::from_slice(&req.bytes(16 * 1024, "The request body").await?)
-                .map_err(|e| Problem::new(400, "bad_body", format!("The body is not JSON: {e}")))?;
-            let name = node_name(&body)?;
+            let body = optional_json(req).await?;
+            if body.get("name").is_none() && body.get("workspace").is_none() {
+                return Err(Problem::new(400, "bad_body", "Give the node a new name, a workspace, or both."));
+            }
+            let name = if body.get("name").is_some() { Some(node_name(&body)?) } else { None };
             let (id, o, connected) = (id.to_string(), op.clone(), st.nodes.connected(id));
             let node = st
                 .db
                 .call(move |c| {
                     tx(c, |c| {
-                        if c.run("UPDATE nodes SET name = ? WHERE id = ?", params![name, id])? == 0 {
+                        if find(c, &id)?.is_none() {
                             return Err(Problem::new(404, "not_found", format!("There is no node {id}.")));
                         }
-                        audit(c, &o, "node_renamed", &format!("{id} is now called {name}"))?;
+                        if let Some(name) = &name {
+                            c.run("UPDATE nodes SET name = ? WHERE id = ?", params![name, id])?;
+                            audit(c, &o, "node_renamed", &format!("{id} is now called {name}"))?;
+                        }
+                        if let Some(to) = owner(c, &body)? {
+                            set_owner(c, &id, to.as_deref())?;
+                            let detail = match &to {
+                                Some(w) => format!("{id} now belongs to workspace {w}"),
+                                None => format!("{id} is now an instance node"),
+                            };
+                            audit(c, &o, "node_owner", &detail)?;
+                        }
                         view(c, &id, connected)
                     })
                 })
@@ -730,7 +839,8 @@ pub async fn write_local_join_token(st: &State) {
     let Some(path) = std::env::var("BROD_NODE_JOIN_TOKEN_FILE").ok().map(|p| p.trim().to_string()).filter(|p| !p.is_empty()) else {
         return;
     };
-    let token = st.db.call(|c| if c.exists("SELECT 1 FROM nodes", ())? { Ok(None) } else { mint(c, "local").map(|(t, _)| Some(t)) }).await;
+    let token =
+        st.db.call(|c| if c.exists("SELECT 1 FROM nodes", ())? { Ok(None) } else { mint(c, "local", None).map(|(t, _)| Some(t)) }).await;
     let text = match token {
         Ok(t) => t.unwrap_or_default(),
         Err(e) => return tracing::warn!("could not make a join token for the local node: {}", e.message),
@@ -767,6 +877,7 @@ fn audit(c: &Connection, op: &crate::operator::Operator, action: &str, detail: &
 async fn evacuate(st: &State, op: &crate::operator::Operator, id: &str) -> Result<Response> {
     let (i, o) = (id.to_string(), op.clone());
     let connected: Vec<String> = st.nodes.connected_ids();
+    let shared = st.cfg.shared_nodes;
     let started = st
         .db
         .call(move |c| {
@@ -788,7 +899,7 @@ async fn evacuate(st: &State, op: &crate::operator::Operator, id: &str) -> Resul
                 let Some(app) = c.first("SELECT * FROM apps WHERE id = ?", [&app_id], crate::model::AppRow::from_row)? else {
                     continue;
                 };
-                match crate::deployments::redeploy(c, &connected, &app, version, &env, &o.actor) {
+                match crate::deployments::redeploy(c, &connected, shared, &app, version, &env, &o.actor) {
                     Ok(d) => moved.push((d.id.clone(), json!({ "app": app.slug, "environment": env, "version": version, "deployment": d.id, "node": d.node_id }))),
                     Err(e) => stuck.push(json!({ "app": app.slug, "environment": env, "version": version, "error": e.message })),
                 }

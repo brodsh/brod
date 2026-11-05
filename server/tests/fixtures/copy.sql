@@ -33,8 +33,8 @@ INSERT INTO app_logs (app_id, at, version, method, path, status, outcome, logs, 
 INSERT INTO app_logs (app_id, at, version, method, path, status, outcome, logs, exceptions) VALUES ('app_1', 2, NULL, 'POST', '/x', NULL, 'exception', '[]', '["boom"]');
 INSERT INTO stripe_events VALUES ('evt_1', 'customer.subscription.updated', 1);
 INSERT INTO visits VALUES ('app_1', '2026-10-09', 12, 3), ('app_1', '2026-10-10', 1, 1);
-INSERT INTO nodes VALUES ('node_1', 'pk1', 'local', 'online', '{"arch":"amd64"}', '{"memory_total":1}', '0.1.0', '10.0.0.2', 1, 1);
-INSERT INTO node_join_tokens VALUES ('hash_1', 'admin', 2, 1);
+INSERT INTO nodes VALUES ('node_1', 'pk1', 'local', 'online', '{"arch":"amd64"}', '{"memory_total":1}', '0.1.0', '10.0.0.2', 1, 1, 'ws_1');
+INSERT INTO node_join_tokens VALUES ('hash_1', 'admin', 2, 1, 'ws_1');
 INSERT INTO visit_visitors VALUES ('app_1', '2026-10-10', 'hash1');
 INSERT INTO page_views VALUES ('ws_1', 'app_1', 1760000000000, 'hash1', '/', 'google.com', 'news', 'email', 'launch', 'NP', 'ne', 'Firefox', 'Linux', 'Desktop', 1, 200, 12, 'suspicious', 'no_lang');
 INSERT INTO app_events VALUES ('ws_1', 'app_1', 1760000000000, 'hash1', '/', 'vital', 'LCP', 1234.5, '');

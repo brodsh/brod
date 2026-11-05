@@ -139,6 +139,9 @@ try {
   check('brod-node join works once with it, then the token is refused', cli.ok && !again.ok && /already used/.test(again.out), `${cli.out} | ${again.out}`);
   const id2 = nodeId(join(state, 'node2'));
   check('a joined node that never connected is joining', (await nodeView(id2))?.status === 'joining');
+  check('a node joined with a plain operator token is an instance node', (await nodeView(id2))?.workspace_id === null, JSON.stringify(await nodeView(id2)));
+  const noWs = await adminJson('/join-tokens', { method: 'POST', body: JSON.stringify({ workspace: 'no-such-workspace' }), headers: { 'content-type': 'application/json' } });
+  check('a join token for an unknown workspace is refused', noWs.status === 404 && noWs.json?.error?.code === 'no_workspace', JSON.stringify(noWs));
   const { privateKey: forger } = generateKeyPairSync('ed25519');
   r = await heartbeat(id, forger);
   check('a heartbeat signed with another key is refused', r.status === 401, `${r.status}`);

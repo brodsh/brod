@@ -76,6 +76,7 @@ This page is generated from `.env.example` by `node scripts/config-docs.mjs`. Ed
 | Variable | Example or default | What it does |
 | --- | --- | --- |
 | `BROD_CONTAINERS` | `trusted` | Container apps: a source folder with a Dockerfile, built and run on a node (docs/apps.md, Container apps). They need a node with Docker and the registry below. Who may deploy them: "trusted" (every workspace; an image may even run as root), "on" (every workspace, never as root) or "off". Default: trusted self-hosted, off hosted. |
+| `BROD_SHARED_NODES` | `true` | Whether instance nodes (nodes the operator joined for the whole server, owned by no workspace) take every workspace's container apps. A node joined with a workspace's join token only ever runs that workspace's apps. Default: true self-hosted, false hosted, where each workspace runs only on its own nodes. |
 | `BROD_REGISTRY_URL` | `http://registry:5000` | The image registry (registry:2 with token auth) only Brod talks to. Unset: no container apps. Compose sets this. |
 | `REGISTRY_SIGNING_KEY` |  | Signs the registry's tokens: an ECDSA P-256 key, PKCS#8 in base64. Generated into &lt;BROD_DATA_DIR&gt;/secrets.env if not set, hosted too. |
 | `BROD_REGISTRY_CERT_FILE` |  | Where Brod writes the certificate of that key, for the registry's REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE. Default: &lt;BROD_DATA_DIR&gt;/registry-token.crt. Compose sets this. |

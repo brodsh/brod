@@ -86,6 +86,10 @@ pub struct Config {
     pub dev_allow_loopback_git: bool,
     /// BROD_CONTAINERS: who may deploy container apps (deployments.rs). Default trusted self-hosted, off hosted.
     pub containers: Containers,
+    /// BROD_SHARED_NODES: whether instance nodes (nodes no workspace owns) take every workspace's workloads
+    /// (scheduler.rs). Default on self-hosted, where one operator's nodes serve the whole server; off hosted, where a
+    /// workload only lands on a node its workspace owns.
+    pub shared_nodes: bool,
     /// BROD_REGISTRY_URL and the key Brod signs registry tokens with (registry.rs). None: no registry, so no containers.
     pub registry: Option<RegistryConfig>,
     /// BROD_APPS_DATABASE_URL: apps-postgres, where apps' managed databases live (databases.rs). None: none.
@@ -511,6 +515,7 @@ impl Config {
             warnings,
             auto_migrate: on_off("BROD_AUTO_MIGRATE", true)?,
             marketplace: on_off("BROD_MARKETPLACE", hosted)?,
+            shared_nodes: on_off("BROD_SHARED_NODES", !hosted)?,
             abuse_checks: on_off("BROD_ABUSE_CHECKS", hosted)?,
             admin_email,
             smtp_url,

@@ -206,7 +206,7 @@ fn status_transitions() {
 async fn join_tokens_work_once_and_expire() {
     let st = state();
     let base = listen(&st).await;
-    let (token, expires_at) = st.db.call(|c| mint(c, "test")).await.unwrap();
+    let (token, expires_at) = st.db.call(|c| mint(c, "test", None)).await.unwrap();
     assert!(expires_at > now() + JOIN_TOKEN_MS - 5_000);
     let stored = st.db.call(|c| c.all("SELECT hash FROM node_join_tokens", (), |r| r.get::<_, String>(0))).await.unwrap();
     assert_eq!(stored, vec![sha256_hex(&token)], "only the hash is kept");
@@ -226,7 +226,7 @@ async fn join_tokens_work_once_and_expire() {
     assert_eq!(join_with(&base, &TestNode::new(), &token, "again").await.status(), 401, "a token works once");
 
     // Joining again with the same key and a new token renames the node and keeps its status.
-    let (t2, _) = st.db.call(|c| mint(c, "test")).await.unwrap();
+    let (t2, _) = st.db.call(|c| mint(c, "test", None)).await.unwrap();
     let v: Value = join_with(&base, &node, &t2, "renamed").await.json().await.unwrap();
     assert_eq!((v["node"]["id"].as_str(), v["node"]["name"].as_str()), (Some(node.id.as_str()), Some("renamed")));
     let n = st.db.call(|c| c.count("SELECT COUNT(*) FROM nodes", ())).await.unwrap();
@@ -249,7 +249,7 @@ async fn tunnel_streams_multiplexes_and_holds_back() {
     let st = state();
     let base = listen(&st).await;
     let node = TestNode::new();
-    let (token, _) = st.db.call(|c| mint(c, "test")).await.unwrap();
+    let (token, _) = st.db.call(|c| mint(c, "test", None)).await.unwrap();
     assert_eq!(join_with(&base, &node, &token, "n1").await.status(), 201);
     let gate: Gate = Arc::new(tokio::sync::Notify::new());
     let c = challenge(&base).await;
@@ -350,7 +350,7 @@ async fn connect_needs_a_fresh_challenge_and_the_nodes_signature() {
     let st = state();
     let base = listen(&st).await;
     let node = TestNode::new();
-    let (token, _) = st.db.call(|c| mint(c, "test")).await.unwrap();
+    let (token, _) = st.db.call(|c| mint(c, "test", None)).await.unwrap();
     join_with(&base, &node, &token, "n").await;
 
     let forger = TestNode::new();
@@ -386,7 +386,7 @@ async fn heartbeats_are_signed_fresh_and_used_once() {
     let st = state();
     let base = listen(&st).await;
     let node = TestNode::new();
-    let (token, _) = st.db.call(|c| mint(c, "test")).await.unwrap();
+    let (token, _) = st.db.call(|c| mint(c, "test", None)).await.unwrap();
     join_with(&base, &node, &token, "n").await;
     let body =
         r#"{"version":"0.1.0","capabilities":{"arch":"x86_64","engine":"docker","cpus":4},"usage":{"memory_used":1,"memory_total":2}}"#;
@@ -500,4 +500,72 @@ async fn admin_api_needs_the_secret_and_drains() {
     assert_eq!(v["node"]["status"], "offline");
     let r = client.get(format!("{base}/v1/admin/nodes/node_nope")).bearer_auth("test-admin-secret").send().await.unwrap();
     assert_eq!(r.status(), 404);
+}
+
+/// A node joined with a workspace's token belongs to that workspace; joining again never moves it to another owner;
+/// the operator gives it to another workspace only once no other workspace's deployment holds capacity on it.
+#[tokio::test]
+async fn nodes_belong_to_the_workspace_their_token_names() {
+    let st = state();
+    let base = listen(&st).await;
+    st.db
+        .call(|c| {
+            c.run("INSERT INTO workspaces (id, slug, name, created_at) VALUES ('ws_a', 'acme', 'Acme', 1)", ())?;
+            c.run("INSERT INTO workspaces (id, slug, name, created_at) VALUES ('ws_b', 'beta', 'Beta', 1)", ())?;
+            c.run("INSERT INTO users (id, email, name, created_at) VALUES ('usr_a', 'a@a.test', 'A', 1)", ())?;
+            c.run("INSERT INTO apps (id, workspace_id, owner_id, slug, name, created_at) VALUES ('app_a','ws_a','usr_a','a','A',1)", ())
+        })
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+    let admin = |m: reqwest::Method, p: &str, body: Value| {
+        client.request(m, format!("{base}/v1/admin/nodes{p}")).bearer_auth("test-admin-secret").json(&body).send()
+    };
+    let r = admin(reqwest::Method::POST, "/join-tokens", json!({ "workspace": "nope" })).await.unwrap();
+    assert_eq!(r.status(), 404, "an unknown workspace");
+    let v: Value = admin(reqwest::Method::POST, "/join-tokens", json!({ "workspace": "acme" })).await.unwrap().json().await.unwrap();
+    assert_eq!(v["workspace_id"], "ws_a");
+    let token = v["token"].as_str().unwrap().to_string();
+    let listed: Value = admin(reqwest::Method::GET, "/join-tokens", json!({})).await.unwrap().json().await.unwrap();
+    assert_eq!(listed["tokens"][0]["workspace"], "acme");
+
+    let node = TestNode::new();
+    let v: Value = join_with(&base, &node, &token, "acme-1").await.json().await.unwrap();
+    assert_eq!((v["node"]["workspace_id"].as_str(), v["node"]["workspace"].as_str()), (Some("ws_a"), Some("acme")));
+
+    // Joining again with an instance token (or another workspace's) does not move the node.
+    let (t2, _) = st.db.call(|c| mint(c, "test", None)).await.unwrap();
+    assert_eq!(join_with(&base, &node, &t2, "taken").await.status(), 409);
+    let (t3, _) = st.db.call(|c| mint(c, "test", Some("ws_b"))).await.unwrap();
+    assert_eq!(join_with(&base, &node, &t3, "taken").await.status(), 409);
+    let (t4, _) = st.db.call(|c| mint(c, "test", Some("ws_a"))).await.unwrap();
+    assert_eq!(join_with(&base, &node, &t4, "acme-1b").await.status(), 201, "the same owner may join it again");
+
+    // Acme's deployment holds capacity there: the node cannot go to Beta until it is evacuated.
+    let id = node.id.clone();
+    st.db
+        .call(move |c| {
+            c.run(
+                "INSERT INTO deployments (id, app_id, version, environment, node_id, state, cpu, memory_mb, created_at, updated_at) VALUES ('d1','app_a',1,'live',?,'serving',0.5,256,1,1)",
+                [&id],
+            )
+        })
+        .await
+        .unwrap();
+    let p = format!("/{}", node.id);
+    let r = admin(reqwest::Method::PATCH, &p, json!({ "workspace": "beta" })).await.unwrap();
+    assert_eq!(r.status(), 409);
+    let v: Value = admin(reqwest::Method::PATCH, &p, json!({ "name": "renamed" })).await.unwrap().json().await.unwrap();
+    assert_eq!((v["node"]["name"].as_str(), v["node"]["workspace"].as_str()), (Some("renamed"), Some("acme")), "a rename keeps the owner");
+    assert_eq!(admin(reqwest::Method::PATCH, &p, json!({})).await.unwrap().status(), 400);
+    assert_eq!(admin(reqwest::Method::PATCH, &p, json!({ "workspace": 7 })).await.unwrap().status(), 400);
+
+    st.db.call(|c| c.run("UPDATE deployments SET state = 'stopped' WHERE id = 'd1'", ())).await.unwrap();
+    let v: Value = admin(reqwest::Method::PATCH, &p, json!({ "workspace": "ws_b" })).await.unwrap().json().await.unwrap();
+    assert_eq!(v["node"]["workspace"], "beta");
+    let v: Value = admin(reqwest::Method::PATCH, &p, json!({ "workspace": null })).await.unwrap().json().await.unwrap();
+    assert!(v["node"]["workspace_id"].is_null(), "back to an instance node");
+    let audit =
+        st.db.call(|c| c.all("SELECT action FROM events WHERE action = 'node_owner'", (), |r| r.get::<_, String>(0))).await.unwrap();
+    assert_eq!(audit.len(), 2);
 }

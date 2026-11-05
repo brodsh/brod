@@ -311,30 +311,38 @@ async function nodes() {
       if (name == null || !name.trim()) return;
       await api(`/nodes/${enc(n.id)}`, { method: 'PATCH', body: { name: name.trim() } });
     }, 'Renamed'));
+    out.push(b('Owner', async () => {
+      const ws = prompt('The workspace (slug) this node belongs to. Leave empty for an instance node.', n.workspace || '');
+      if (ws == null) return;
+      await api(`/nodes/${enc(n.id)}`, { method: 'PATCH', body: { workspace: ws.trim() || null } });
+    }, 'Owner changed'));
     return out;
   };
   return h('section', null,
     h('div', { class: 'head' }, h('div', null, h('h1', null, 'Nodes'),
-      h('p', { class: 'muted' }, 'Machines that run container apps. Draining keeps what runs but takes nothing new; evacuate moves what runs to other nodes; disabling closes the connection.'))),
+      h('p', { class: 'muted' }, 'Machines that run container apps. A node a workspace owns only runs that workspace\'s apps; an instance node runs every workspace\'s when BROD_SHARED_NODES is on. Draining keeps what runs but takes nothing new; evacuate moves what runs to other nodes; disabling closes the connection.'))),
     r.nodes.length ? h('div', { class: 'scroll' }, h('table', null,
-      h('thead', null, h('tr', null, ...['Node', 'Status', 'Load', 'Last seen', ''].map(x => h('th', null, x)))),
+      h('thead', null, h('tr', null, ...['Node', 'Owner', 'Status', 'Load', 'Last seen', ''].map(x => h('th', null, x)))),
       h('tbody', null, r.nodes.map(n => h('tr', null,
         h('td', null, h('b', null, n.name), h('div', { class: 'muted mono' }, n.id), n.address ? h('div', { class: 'muted' }, n.address) : null),
+        h('td', null, n.workspace ? h('span', { class: 'mono' }, n.workspace) : h('span', { class: 'muted' }, 'instance')),
         h('td', null, h('span', { class: 'pill' }, n.status), ' ', h('span', { class: 'muted' }, n.connected ? 'connected' : 'not connected')),
         h('td', { class: 'muted' }, nodeLoad(n), n.version ? h('div', null, `brod-node ${n.version}`) : null),
         h('td', { class: 'nowrap' }, n.last_seen_at ? when(n.last_seen_at) : 'never'),
         h('td', { class: 'acts' }, ...actions(n))))))) : h('p', { class: 'empty' }, 'No nodes yet.'),
     h('h2', null, 'Add a node'),
-    h('p', { class: 'muted' }, 'Make a join token, then run the command on the new machine within 15 minutes. It works once.'),
+    h('p', { class: 'muted' }, 'Make a join token, then run the command on the new machine within 15 minutes. It works once. Name a workspace to make the node that workspace\'s own; leave it empty for an instance node.'),
+    h('input', { id: 'join-ws', placeholder: 'workspace slug (optional)' }),
     joinCommand ? h('pre', { class: 'snippet' }, joinCommand) : null,
     h('button', { class: 'btn', type: 'button', onclick: act(async () => {
-      const x = await api('/nodes/join-tokens', { method: 'POST' });
+      const ws = (document.getElementById('join-ws')?.value || '').trim();
+      const x = await api('/nodes/join-tokens', { method: 'POST', body: ws ? { workspace: ws } : {} });
       joinCommand = x.command;
       try { await navigator.clipboard.writeText(x.command); } catch {}
     }, 'Join command made (copied)') }, 'Make a join command'),
     t.tokens.length ? h('div', null, h('h2', null, 'Unused join tokens'),
       h('ul', { class: 'list' }, t.tokens.map(k => h('li', null,
-        h('div', null, h('span', { class: 'mono' }, k.id + '…'), h('div', { class: 'muted' }, `by ${k.created_by || 'admin'}, expires ${when(k.expires_at)}`)),
+        h('div', null, h('span', { class: 'mono' }, k.id + '…'), h('div', { class: 'muted' }, `by ${k.created_by || 'admin'}${k.workspace ? `, for ${k.workspace}` : ''}, expires ${when(k.expires_at)}`)),
         h('button', { class: 'link danger', type: 'button', onclick: act(() => api(`/nodes/join-tokens/${enc(k.id)}`, { method: 'DELETE' }), 'Revoked') }, 'Revoke'))))) : null);
 }
 
