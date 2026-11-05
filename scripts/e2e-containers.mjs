@@ -251,6 +251,8 @@ try {
   // Brod may answer 413 and close before the whole body is sent: a reset after that counts as refused too.
   const tooBig = await alice.go(url + '/echo', { method: 'POST', body: 'x'.repeat(33 << 20) }).catch(e => ({ status: e.code === 'ECONNRESET' || e.code === 'EPIPE' ? 413 : 0, body: e.message }));
   check('a body over 32 MB is refused (413)', tooBig.status === 413, `${tooBig.status} ${tooBig.body?.slice(0, 200)}`);
+  const after = await alice.go(url + '/');
+  check('and the container keeps serving after the body was broken off', after.status === 200 && after.body.includes('hello from v1'), `${after.status} ${after.body.slice(0, 200)}`);
 
   // ---------- hardening ----------
 
@@ -269,7 +271,7 @@ try {
     if (/No network rules/.test(log1.join('\n')) && asRoot) check('the node installed its network rules', false, log1.find(l => /No network rules/.test(l)));
     else if (/No network rules/.test(log1.join('\n'))) skip('the container cannot reach the metadata service or the node', log1.find(l => /No network rules/.test(l)));
     else check('the container cannot reach 169.254.169.254 or Brod on the node, but reaches the internet',
-      !Object.entries(reach.reached ?? {}).some(([t, ok]) => ok && !t.startsWith('1.1.1.1')), JSON.stringify(reach.reached));
+      Object.keys(reach.reached ?? {}).length === 3 && !Object.entries(reach.reached).some(([t, ok]) => ok && !t.startsWith('1.1.1.1')), JSON.stringify(reach));
   } else if (asRoot) {
     check('the network isolation check runs (E2E_NODE_SUDO=1 needs a Linux host, not a container)', false, process.platform);
   } else {

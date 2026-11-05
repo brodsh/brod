@@ -43,7 +43,9 @@ createServer(async (req, res) => {
     });
   }
   if (req.method === 'POST' && url.pathname === '/echo') {
-    let n = 0; for await (const c of req) n += c.length;
+    // A client may break the body off (Brod does, past its limit): that ends this request, not the server.
+    let n = 0;
+    try { for await (const c of req) n += c.length; } catch { return res.destroy(); }
     return json(res, 200, { bytes: n });
   }
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
