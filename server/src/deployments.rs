@@ -1318,6 +1318,9 @@ pub async fn dispatch(
         Err(_) => return Ok(notice(504, "This app is slow", "The app took too long to answer.", "")),
     };
     if res.headers().contains_key("x-brod-node-error") {
+        let body = crate::http::read_capped(Body::new(res.into_body()), 4096, "the node's answer").await.unwrap_or_default();
+        let why = serde_json::from_slice::<Value>(&body).ok().and_then(|v| v["error"]["message"].as_str().map(String::from));
+        tracing::warn!(app = %app.slug, "the node could not reach the app's container: {}", why.as_deref().unwrap_or("no reason given"));
         return Ok(notice(502, "This app failed", "The app's container did not answer. Its owner can see why in the app's logs.", ""));
     }
     let status = res.status().as_u16();

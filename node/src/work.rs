@@ -863,7 +863,10 @@ async fn proxy(node: &Node, name: &str, req: Request<Incoming>) -> Response<Body
         Ok(res) => res.map(|b| b.map_err(|e| -> BoxError { Box::new(e) }).boxed()),
         Err(e) => {
             lock(&node.work.addresses).remove(name);
-            node_error(fail(502, "container_unreachable", format!("The app's container did not answer: {e}")))
+            // hyper's own message is terse ("client error (SendRequest)"); its source says what happened.
+            let why = std::error::Error::source(&e).map(|s| format!("{e}: {s}")).unwrap_or_else(|| e.to_string());
+            log!("a request to {name} at {a} failed: {why}");
+            node_error(fail(502, "container_unreachable", format!("The app's container did not answer: {why}")))
         }
     }
 }
