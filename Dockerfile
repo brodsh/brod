@@ -39,7 +39,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 
 # pg_dump and pg_restore for backups of apps' databases (backups.rs), from the same image and major version as
 # docker-compose.yml's apps-postgres, with the libraries they load that the distroless base lacks.
-FROM postgres:17-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826 AS pgclient
+FROM postgres:18-bookworm@sha256:5c4783a8cc3f0074912164f94dfa1be4e043438f0f707cf968d7af9a0d31a2c8 AS pgclient
 RUN set -eu; \
     mkdir -p /pgclient/usr/local/lib/brod-pg/bin; \
     for t in pg_dump pg_restore; do cp "/usr/lib/postgresql/17/bin/$t" /pgclient/usr/local/lib/brod-pg/bin/; done; \
