@@ -27,16 +27,17 @@ say so in an issue: it helps decide the order.
 
 ## Running Brod
 
-- Structured logs (`tracing`) with a JSON option.
 - Clean-up of old versions, which count toward storage until someone deletes them.
 - Re-checking custom domains' DNS records after they are verified, and wildcard certificates with DNS-01.
-- An operator page for reports, takedowns and suspensions (today: the `/v1/admin` API).
+- Nodes owned by an agency and shared by its client workspaces. A node belongs to the whole instance today, or (once
+  workspace-scoped nodes land) to one workspace.
 
 ## Building apps
 
-- Python and container apps. Server code is JavaScript and WebAssembly today.
-- Scheduled jobs, background queues, sending email from an app, WebSockets.
-- Deploying from a GitHub repository.
+- Scheduled jobs, background queues and sending email from an app. WebSockets, which the gateway does not pass
+  through today (to server apps or containers).
+- Deploying a repository straight to live. Pushes to a mirrored repository are imported into staging today
+  ([git mirror and sync](apps.md#git-mirror-and-sync)), and `import_app` imports any git repository.
 - MCP tools for the marketplace.
 
 ## Hosted service only
