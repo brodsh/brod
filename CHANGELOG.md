@@ -31,7 +31,7 @@ Container apps on nodes, managed Postgres for apps, admin mode, and git-backed a
   `brod-db.internal` through the tunnel, with migrations and backups.
 - Open paths: apps declare paths that skip sign-in; a person approves them. MCP `set_open_paths` and
   `get_auth_integration`.
-- `@brod/auth`, the identity SDK for JavaScript.
+- `@brodsh/auth`, the identity SDK for JavaScript.
 - Admin mode: operators, instance settings, workspace limits and overrides, an audit log and the operator console
   (including node management).
 - Git-backed app versions: files are stored once by content hash (`blobs/<sha256>`) and each version is a manifest.

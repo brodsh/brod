@@ -132,5 +132,5 @@ Brod is one codebase. [brod.sh](https://brod.sh) runs the same image with `BROD_
   [code of conduct](CODE_OF_CONDUCT.md). Report vulnerabilities privately ([SECURITY.md](SECURITY.md)).
 - License: [AGPL-3.0-only](LICENSE). You can run Brod inside your company and change it freely. If you offer a
   modified Brod to others as a network service, you must offer them its source.
-  The identity SDK in [`sdk/js`](sdk/js) (`@brod/auth`) is [MIT](sdk/js/LICENSE), so apps can import it under any
+  The identity SDK in [`sdk/js`](sdk/js) (`@brodsh/auth`) is [MIT](sdk/js/LICENSE), so apps can import it under any
   licence.

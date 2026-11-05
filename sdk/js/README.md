@@ -1,4 +1,4 @@
-# @brod/auth
+# @brodsh/auth
 
 Read the person [Brod](https://github.com/brodsh/brod) signed in, in your app's server code.
 
@@ -7,7 +7,7 @@ request as `x-brod-identity`, a JWT signed with Brod's Ed25519 key. This package
 audience, expiry) and gives you the person:
 
 ```ts
-import { currentUser } from '@brod/auth';
+import { currentUser } from '@brodsh/auth';
 
 const user = await currentUser(request);
 // { id, email, name, workspace: { id, slug }, role, groups, app, claims } or null
@@ -28,7 +28,7 @@ dependency, [`jose`](https://github.com/panva/jose).
 ## Install
 
 ```sh
-npm install @brod/auth
+npm install @brodsh/auth
 ```
 
 Brod gives every app what verification needs in its environment, so there is nothing to configure:
@@ -43,11 +43,11 @@ Without `BROD_IDENTITY_JWKS` the keys are fetched from `<BROD_ISSUER>/.well-know
 
 ## Next.js App Router
 
-Server components, route handlers and server actions read the current request's headers with `@brod/auth/next`:
+Server components, route handlers and server actions read the current request's headers with `@brodsh/auth/next`:
 
 ```tsx
 // app/page.tsx
-import { currentUserFromHeaders } from '@brod/auth/next';
+import { currentUserFromHeaders } from '@brodsh/auth/next';
 
 export default async function Page() {
   const user = await currentUserFromHeaders();
@@ -57,8 +57,8 @@ export default async function Page() {
 
 ```ts
 // app/api/notes/route.ts
-import { BrodAuthError } from '@brod/auth';
-import { requireUserFromHeaders } from '@brod/auth/next';
+import { BrodAuthError } from '@brodsh/auth';
+import { requireUserFromHeaders } from '@brodsh/auth/next';
 
 export async function GET() {
   try {
@@ -71,7 +71,7 @@ export async function GET() {
 }
 ```
 
-A route handler can also pass its `Request`: `await currentUser(request)` from `@brod/auth`.
+A route handler can also pass its `Request`: `await currentUser(request)` from `@brodsh/auth`.
 
 Middleware gets the request itself. Brod has already decided who may open the app, so use middleware for checks of
 your own, such as a role:
@@ -79,7 +79,7 @@ your own, such as a role:
 ```ts
 // middleware.ts (proxy.ts, with the function named proxy, in Next.js 16)
 import { NextResponse, type NextRequest } from 'next/server';
-import { currentUser } from '@brod/auth';
+import { currentUser } from '@brodsh/auth';
 
 export async function middleware(request: NextRequest) {
   const user = await currentUser(request).catch(() => null); // an invalid token counts as nobody here
@@ -92,7 +92,7 @@ export async function middleware(request: NextRequest) {
 export const config = { matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'] };
 ```
 
-`@brod/auth` uses only Web APIs, so this runs on the edge runtime as well as on Node. Middleware reads
+`@brodsh/auth` uses only Web APIs, so this runs on the edge runtime as well as on Node. Middleware reads
 `process.env` at request time when you run `next start` (a container on Brod); in other hosts, pass the values as
 options.
 
@@ -103,7 +103,7 @@ options.
 
 ```js
 import http from 'node:http';
-import { currentUser } from '@brod/auth';
+import { currentUser } from '@brodsh/auth';
 
 http.createServer(async (req, res) => {
   try {
@@ -117,7 +117,7 @@ http.createServer(async (req, res) => {
 
 ```js
 import express from 'express';
-import { requireUser } from '@brod/auth';
+import { requireUser } from '@brodsh/auth';
 
 const app = express();
 
@@ -135,14 +135,14 @@ app.get('/api/me', (req, res) => res.json(req.user));
 app.listen(process.env.PORT ?? 3000);
 ```
 
-CommonJS works too: `const { currentUser } = require('@brod/auth')`.
+CommonJS works too: `const { currentUser } = require('@brodsh/auth')`.
 
 ## Workers (workerd)
 
 A Brod server app (`_worker.js`) has no `process.env`: pass the Worker's `env`.
 
 ```js
-import { currentUser } from '@brod/auth';
+import { currentUser } from '@brodsh/auth';
 
 export default {
   async fetch(request, env) {
@@ -167,7 +167,7 @@ there is none:
 
 ```ts
 // lib/user.ts
-import { requireUser } from '@brod/auth';
+import { requireUser } from '@brodsh/auth';
 
 /** Your row for the signed-in person, or null when this app has none for them. */
 export async function appUser(request: Request) {
@@ -183,7 +183,7 @@ export async function appUser(request: Request) {
 
 ```ts
 // app/api/ledger/route.ts
-import { BrodAuthError } from '@brod/auth';
+import { BrodAuthError } from '@brodsh/auth';
 import { appUser } from '@/lib/user';
 
 export async function GET(request: Request) {

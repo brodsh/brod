@@ -90,14 +90,14 @@ const { payload } = await jwtVerify(token, jwks, {
 });
 ```
 
-#### In JavaScript: `@brod/auth`
+#### In JavaScript: `@brodsh/auth`
 
-[`@brod/auth`](../sdk/js/README.md) does all of this in one call, in Node, Next.js (server components, route handlers,
+[`@brodsh/auth`](../sdk/js/README.md) does all of this in one call, in Node, Next.js (server components, route handlers,
 middleware) and Workers. It reads `BROD_ISSUER`, `BROD_APP_ID` and `BROD_IDENTITY_JWKS` from the environment, accepts
 only `EdDSA`, allows 30 seconds of clock skew, and fetches and caches the JWKS when there is no inline copy:
 
 ```js
-import { currentUser } from '@brod/auth';
+import { currentUser } from '@brodsh/auth';
 
 const user = await currentUser(request); // a Request, Headers, or a Node / Express request
 // null: anonymous (an open path, or a public app with nobody signed in)
@@ -105,7 +105,7 @@ const user = await currentUser(request); // a Request, Headers, or a Node / Expr
 // A token that does not verify throws a BrodAuthError with status 401.
 ```
 
-In Next.js, `currentUserFromHeaders()` from `@brod/auth/next` reads the current request in server components and
+In Next.js, `currentUserFromHeaders()` from `@brodsh/auth/next` reads the current request in server components and
 route handlers. On workerd, pass the Worker's env: `currentUser(request, { env })`. The
 [README](../sdk/js/README.md) has examples for each, and the 403 pattern for an app that keeps its own users table.
 
@@ -230,7 +230,7 @@ These three were checked against a token signed the way Brod signs (PyJWT 2.15, 
 a valid token verifies, a missing one is anonymous, and another app's audience is refused.
 
 Agents can ask the `get_auth_integration` tool for this contract and ready-made snippets for Next.js, Node, Python,
-Go, Rust and workerd. The Next.js, Node and workerd ones use `@brod/auth`, with the plain `jose` code beside them.
+Go, Rust and workerd. The Next.js, Node and workerd ones use `@brodsh/auth`, with the plain `jose` code beside them.
 
 The signing key is `IDENTITY_SIGNING_KEY`. A self-hosted server generates one on first start; a hosted server refuses
 to start without one. Changing it invalidates tokens already handed out, which matters little at five minutes.
