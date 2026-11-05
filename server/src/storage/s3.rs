@@ -3,7 +3,7 @@
 // Requests are signed with AWS Signature Version 4, written out here rather than pulling in an SDK.
 use axum::body::Body;
 use bytes::Bytes;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use reqwest::Method;
 use sha2::{Digest, Sha256};
 use std::time::Duration;
