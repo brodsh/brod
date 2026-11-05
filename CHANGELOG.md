@@ -16,6 +16,12 @@ generated from conventional commits.
 - The shield (`BROD_SHIELD`, on by default): a per-address request limit for apps, blocking addresses that scan for
   vulnerable paths, and a self-hosted proof-of-work check for suspicious or very busy clients. Configurable in the
   admin console or with `BROD_SHIELD_*`.
+- App MCP: an app declares `"mcp": "/api/mcp"` in `brod.json`; MCP clients sign in with Brod (OAuth, tokens bound to
+  that app's address) and the app reads the caller with `currentUser()`.
+
+### Upgrading
+
+- Migrations 0028 and 0029 run at start.
 
 ## 0.2.1 (2026-11-02)
 

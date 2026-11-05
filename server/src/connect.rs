@@ -7,6 +7,11 @@
 // and the access token is an ordinary connection token: it shows on the connections page and is revoked the same way.
 // The access token lives an hour; the client renews it with a refresh token, which rotates on every use (OAuth 2.1).
 // Scope "brod:read" makes a read-only connection; "brod" (or none) one that can deploy and manage.
+//
+// The same server signs people in to an app's own MCP endpoint (app_mcp.rs): the client sends resource=<the endpoint's
+// address> (RFC 8707) to /oauth/authorize and /oauth/token. The person must be able to open the app; the consent page
+// names the app and its workspace instead of offering one; and the tokens are bound to that address alone, kept in
+// app_tokens, so they never work on Brod's own /mcp or API. Without a resource, or with Brod's own, nothing changes.
 use std::collections::HashMap;
 
 use crate::db::{Connection, params};
@@ -207,10 +212,12 @@ struct Authz {
     challenge: String,
     /// "manage" or "read".
     scope: &'static str,
+    /// The app MCP endpoint the client asked for with `resource`; None for Brod's own.
+    app: Option<crate::app_mcp::Target>,
 }
 
 /// A bad client or redirect address gets a page; anything else goes back to the client.
-fn authorize_request(conn: &Connection, q: &HashMap<String, String>) -> Result<std::result::Result<Authz, Response>> {
+fn authorize_request(conn: &Connection, cfg: &Config, q: &HashMap<String, String>) -> Result<std::result::Result<Authz, Response>> {
     let get = |k: &str| q.get(k).cloned().unwrap_or_default();
     let Some(c) = client(conn, q.get("client_id").map(String::as_str))? else {
         return Ok(Err(notice(
@@ -243,7 +250,25 @@ fn authorize_request(conn: &Connection, q: &HashMap<String, String>) -> Result<s
         )));
     }
     let scope = control::oauth_scope(&get("scope"));
-    Ok(Ok(Authz { client_id: c.id, client_name: c.name, redirect_uri, state, challenge, scope }))
+    let resource = get("resource");
+    let app = if resource.is_empty() || crate::app_mcp::is_brod_resource(cfg, &resource) {
+        None
+    } else {
+        match crate::app_mcp::resolve(conn, cfg, &resource)? {
+            Some(t) => Some(t),
+            None => {
+                return Ok(Err(back(
+                    &redirect_uri,
+                    &[
+                        ("error", "invalid_target"),
+                        ("error_description", "Brod signs in to its own MCP server and to apps' MCP endpoints; the resource is neither."),
+                        ("state", &state),
+                    ],
+                )));
+            }
+        }
+    };
+    Ok(Ok(Authz { client_id: c.id, client_name: c.name, redirect_uri, state, challenge, scope, app }))
 }
 
 fn back(redirect_uri: &str, params: &[(&str, &str)]) -> Response {
@@ -309,6 +334,60 @@ fn consent_page(a: &Authz, email: &str, workspaces: &[Value]) -> Response {
     )
 }
 
+/// The consent page for an app's MCP endpoint: no workspace to pick and no rights to choose, since the client can do
+/// in the app exactly what the person can.
+fn app_consent_page(a: &Authz, t: &crate::app_mcp::Target, email: &str) -> Response {
+    let where_to = match parts(&a.redirect_uri) {
+        Some(Parts { authority: Some(au), .. }) => host_of(au).to_string(),
+        Some(p) => format!("{}:", p.scheme),
+        None => String::new(),
+    };
+    let hidden: String = [
+        ("client_id", a.client_id.as_str()),
+        ("redirect_uri", &a.redirect_uri),
+        ("state", &a.state),
+        ("code_challenge", &a.challenge),
+        ("code_challenge_method", "S256"),
+        ("response_type", "code"),
+        ("resource", &t.resource),
+    ]
+    .iter()
+    .map(|(k, v)| format!("<input type=\"hidden\" name=\"{k}\" value=\"{}\">", esc(v)))
+    .collect();
+    let (name, app, ws) = (esc(&a.client_name), esc(t.app.display_name()), esc(&t.workspace_name));
+    let staging = if t.staging { " (its staging version)" } else { "" };
+    page(
+        200,
+        &format!("Connect {}", t.app.display_name()),
+        &format!(
+            "<h1>Connect {name} to {app}</h1>
+<p><b>{name}</b> wants to use <b>{app}</b>{staging} in <b>{ws}</b> as you (<b>{}</b>). It can do there what you can, and nothing else in Brod.</p>
+<form method=\"post\" action=\"/oauth/authorize\">{hidden}
+<p class=\"muted\">You will be sent back to {}. It stops working if you lose access to {app}.</p>
+<div class=\"actions\"><button name=\"decision\" value=\"allow\">Allow</button><button name=\"decision\" value=\"deny\" class=\"secondary\">Cancel</button></div></form>",
+            esc(email),
+            esc(&where_to)
+        ),
+        None,
+        &[],
+    )
+}
+
+/// Somebody who may not open the app cannot connect a client to it. Said plainly: they reached this page from a client
+/// they configured with the app's address, so the address tells them nothing new.
+fn cannot_open(t: &crate::app_mcp::Target) -> Response {
+    notice(
+        403,
+        "No access",
+        &format!(
+            "You cannot open {} in {}, so you cannot connect an agent to it. Ask its owner to share it with you.",
+            t.app.display_name(),
+            t.workspace_name
+        ),
+        "",
+    )
+}
+
 async fn authorize(st: &State, req: &mut Req) -> Result<Response> {
     let post = req.method == Method::POST;
     let cfg = st.cfg.clone();
@@ -326,16 +405,44 @@ async fn authorize(st: &State, req: &mut Req) -> Result<Response> {
         Done(Response),
         SignIn,
         Consent(Authz, String, Vec<Value>),
+        AppConsent(Authz, String),
         Code(Authz, String),
     }
     let out = st
         .db
         .call(move |c| {
-            let a = match authorize_request(c, &q)? {
+            let a = match authorize_request(c, &cfg, &q)? {
                 Ok(a) => a,
                 Err(r) => return Ok(Out::Done(r)),
             };
             let Some((user, _)) = control::person(c, &cfg, cookie.as_deref())? else { return Ok(Out::SignIn) };
+            if let Some(t) = &a.app {
+                if !crate::app_mcp::decide(c, &t.app, t.staging, &user)?.allowed {
+                    return Ok(Out::Done(cannot_open(t)));
+                }
+                if !post {
+                    return Ok(Out::AppConsent(a, user.email));
+                }
+                if q.get("decision").map(String::as_str) != Some("allow") {
+                    return Ok(Out::Done(back(&a.redirect_uri, &[("error", "access_denied"), ("state", &a.state)])));
+                }
+                let code = random_id("", 24);
+                c.run(
+                    "INSERT INTO oauth_codes (hash, client_id, user_id, workspace_id, redirect_uri, challenge, expires_at, scope, resource) VALUES (?,?,?,?,?,?,?,?,?)",
+                    params![
+                        sha256_hex(&code),
+                        a.client_id,
+                        user.id,
+                        t.app.workspace_id,
+                        a.redirect_uri,
+                        a.challenge,
+                        now() + limits::OAUTH_CODE_TTL_MS,
+                        "manage",
+                        t.resource
+                    ],
+                )?;
+                return Ok(Out::Code(a, code));
+            }
             let workspaces: Vec<Value> =
                 people::my_workspaces(c, &cfg, &user)?.into_iter().filter(|w| builds(w["role"].as_str().unwrap_or(""))).collect();
             if !post {
@@ -374,6 +481,10 @@ async fn authorize(st: &State, req: &mut Req) -> Result<Response> {
         Out::Done(r) => r,
         Out::SignIn => redirect(&format!("/auth/signin?return={}", encode_uri_component(&here)), &[]),
         Out::Consent(a, email, workspaces) => consent_page(&a, &email, &workspaces),
+        Out::AppConsent(a, email) => match &a.app {
+            Some(t) => app_consent_page(&a, t, &email),
+            None => consent_page(&a, &email, &[]),
+        },
         Out::Code(a, code) => back(&a.redirect_uri, &[("code", &code), ("state", &a.state), ("iss", &st.cfg.api_origin)]),
     })
 }
@@ -389,8 +500,22 @@ async fn token(st: &State, req: &mut Req) -> Result<Response> {
     };
     let get = |k: &str| b.get(k).cloned().unwrap_or_default();
     let issued = |t: Value| cors(json_response(&t, 200, &[("cache-control", "no-store".into())]));
+    // RFC 8707: a resource the token request names must be the one the grant is for.
+    let resource = get("resource");
+    let brod_resource = resource.is_empty() || crate::app_mcp::is_brod_resource(&st.cfg, &resource);
     if get("grant_type") == "refresh_token" {
         let (client_id, refresh, scope) = (get("client_id"), get("refresh_token"), b.get("scope").cloned());
+        if refresh.starts_with(crate::app_mcp::REFRESH_PREFIX) {
+            let cfg = st.cfg.clone();
+            let out = st.db.call(move |c| crate::app_mcp::refresh(c, &cfg, &client_id, &refresh, Some(&resource))).await?;
+            return Ok(match out {
+                Ok(t) => issued(t),
+                Err((code, why)) => oauth_error(code, &why, 400),
+            });
+        }
+        if !brod_resource {
+            return Ok(oauth_error("invalid_target", "This refresh token is for Brod's own MCP server, not that resource.", 400));
+        }
         let out = st.db.call(move |c| control::refresh_oauth_token(c, &client_id, &refresh, scope.as_deref())).await?;
         return Ok(match out {
             Ok(t) => issued(t),
@@ -401,29 +526,53 @@ async fn token(st: &State, req: &mut Req) -> Result<Response> {
         return Ok(oauth_error("unsupported_grant_type", "Use authorization_code, or refresh_token to renew.", 400));
     }
     let (code, client_id, redirect_uri, verifier) = (get("code"), get("client_id"), get("redirect_uri"), get("code_verifier"));
+    let cfg = st.cfg.clone();
     let out = st
         .db
         .call(move |c| {
+            let grant = |why: &str| Ok(Err(("invalid_grant", why.to_string())));
             let row = c.first(
-                "UPDATE oauth_codes SET used_at = ? WHERE hash = ? AND used_at IS NULL AND expires_at > ? RETURNING client_id, user_id, workspace_id, redirect_uri, challenge, scope",
+                "UPDATE oauth_codes SET used_at = ? WHERE hash = ? AND used_at IS NULL AND expires_at > ? RETURNING client_id, user_id, workspace_id, redirect_uri, challenge, scope, resource",
                 params![now(), sha256_hex(&code), now()],
                 |r| {
                     Ok((
                         (r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?),
                         (r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?),
+                        r.get::<_, Option<String>>(6)?,
                     ))
                 },
             )?;
-            let Some(((cid, uid, wid), (ruri, challenge, scope))) = row else {
-                return Ok(Err("This code has expired or was already used. Sign in again."));
+            let Some(((cid, uid, wid), (ruri, challenge, scope), bound)) = row else {
+                return grant("This code has expired or was already used. Sign in again.");
             };
             if cid != client_id || ruri != redirect_uri {
-                return Ok(Err("The code was issued to another client or redirect address."));
+                return grant("The code was issued to another client or redirect address.");
             }
             let verifier_ok = (43..=128).contains(&verifier.len())
                 && verifier.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'~' | b'-'));
             if !verifier_ok || b64url(&Sha256::digest(verifier.as_bytes())) != challenge {
-                return Ok(Err("The code_verifier does not match."));
+                return grant("The code_verifier does not match.");
+            }
+            let name = client(c, Some(&cid))?.map(|x| x.name).unwrap_or_else(|| "MCP client".into());
+            // A sign-in to an app's MCP endpoint: a token for that address, if the person may still open the app.
+            if let Some(bound) = bound {
+                if !resource.is_empty() && crate::app_mcp::canonical_string(&cfg, &resource).as_deref() != Some(bound.as_str()) {
+                    return Ok(Err(("invalid_target", "The code was issued for another resource.".to_string())));
+                }
+                let Some(t) = crate::app_mcp::resolve(c, &cfg, &bound)? else {
+                    return grant("The app no longer has an MCP endpoint at this address.");
+                };
+                let user = c.first("SELECT id, email, name, email_verified_at FROM users WHERE id = ?", [&uid], |r| {
+                    Ok(User { id: r.get(0)?, email: r.get(1)?, name: r.get(2)?, email_verified_at: r.get(3)? })
+                })?;
+                let Some(user) = user else { return grant("The person who signed in no longer exists.") };
+                if !crate::app_mcp::decide(c, &t.app, t.staging, &user)?.allowed {
+                    return grant("The person who signed in can no longer open the app.");
+                }
+                return Ok(Ok(crate::app_mcp::issue(c, &t, &user, &cid, &name)?));
+            }
+            if !brod_resource {
+                return Ok(Err(("invalid_target", "The code was issued for Brod's own MCP server, not that resource.".to_string())));
             }
             let who = c.first(
                 "SELECT u.id AS uid, u.email, u.name AS uname, u.email_verified_at, m.role AS mrole, w.* FROM users u JOIN members m ON m.user_id = u.id
@@ -438,15 +587,14 @@ async fn token(st: &State, req: &mut Req) -> Result<Response> {
                 },
             )?;
             let Some((user, role, workspace)) = who.filter(|(_, role, _)| builds(role)) else {
-                return Ok(Err("The person who signed in is no longer a builder in that workspace."));
+                return grant("The person who signed in is no longer a builder in that workspace.");
             };
             let caller = Caller { actor: user.email.clone(), workspace, user, role, agent: false, read_only: false };
-            let name = client(c, Some(&cid))?.map(|x| x.name).unwrap_or_else(|| "MCP client".into());
             Ok(Ok(control::create_oauth_token(c, &caller, &cid, &name, &scope)?))
         })
         .await?;
     Ok(match out {
-        Err(why) => oauth_error("invalid_grant", why, 400),
+        Err((code, why)) => oauth_error(code, &why, 400),
         Ok(t) => issued(t),
     })
 }
@@ -515,11 +663,13 @@ async fn connections_page(st: &State, req: &mut Req, slug: String) -> Result<Res
     let day = |v: &Value| v.as_i64().map(|ms| iso(ms)[..10].to_string()).unwrap_or_else(|| "never".into());
     let at = now();
     let lapsed = |v: &Value| v.as_i64().is_some_and(|ms| ms <= at);
+    // A sign-in renews itself with a refresh token; a token made here or with the API just expires.
+    let signed_in = |t: &Value| t["kind"] == "oauth" || !t["refresh_expires_at"].is_null();
     let rows: String = list
         .iter()
         .filter(|t| t["revoked_at"].is_null())
         // A page token past its expiry, or a sign-in whose refresh token lapsed, can never work again.
-        .filter(|t| !lapsed(if t["kind"] == "oauth" { &t["refresh_expires_at"] } else { &t["expires_at"] }))
+        .filter(|t| !lapsed(if signed_in(t) { &t["refresh_expires_at"] } else { &t["expires_at"] }))
         .map(|t| {
             let by = t["made_by"].as_str().unwrap_or("");
             let button = if caller.role == "admin" || by == caller.user.email {
@@ -530,8 +680,14 @@ async fn connections_page(st: &State, req: &mut Req, slug: String) -> Result<Res
             } else {
                 String::new()
             };
-            let rights = if t["scope"] == "read" { "read-only" } else { "deploy and manage" };
-            let life = if t["kind"] == "oauth" {
+            let rights = if t["kind"] == "app" {
+                format!("MCP of the app {}", esc(t["app"].as_str().unwrap_or("")))
+            } else if t["scope"] == "read" {
+                "read-only".into()
+            } else {
+                "deploy and manage".into()
+            };
+            let life = if signed_in(t) {
                 format!("signed in, renews while in use until {}", day(&t["refresh_expires_at"]))
             } else if t["expires_at"].is_null() {
                 "never expires".into()

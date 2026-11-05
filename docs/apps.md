@@ -641,8 +641,8 @@ the app may only talk to its own address. The list is checked at deploy (`400 ba
 
 ## Open paths
 
-Some routes must answer callers who cannot sign in: a payment provider's webhook, an MCP endpoint with its own tokens,
-a health check. An app lists them as `open_paths` in its `brod.json` (`server/src/open_paths.rs`):
+Some routes must answer callers who cannot sign in: a payment provider's webhook, a health check. (For an MCP server
+of the app's own, declare it as [app MCP](#app-mcp) instead: callers then sign in, and the app knows who they are.) An app lists them as `open_paths` in its `brod.json` (`server/src/open_paths.rs`):
 
 ```json
 {
@@ -682,6 +682,71 @@ a health check. An app lists them as `open_paths` in its `brod.json` (`server/sr
   adding them asks for a confirmation when an agent does it.
 - `get_status` shows `open_paths`: what is approved, what the live and staging versions declare, what is open and what
   waits for a confirmation.
+
+## App MCP
+
+An app can be an MCP server that agents use as the signed-in person: a client is given only its address, and Brod
+does the sign-in. The app writes no OAuth, keeps no tokens and puts no secret in the URL (`server/src/app_mcp.rs`).
+
+**Declare the path** in `brod.json`. One path per app; it covers its sub-paths too (`/api/mcp/messages`):
+
+```json
+{ "mcp": "/api/mcp" }
+```
+
+The path follows the open-path rules (no `/`, `*`, `..`, `%` or `/_brod`), without the trailing `/*`. It needs server
+code (`_worker.js` or a container): a static bundle that declares it is refused with `400 bad_mcp`. The declaration
+travels with the version, like open paths and settings, so a rollback brings it back and a version without it turns
+the endpoint off. `get_status` (and every deploy result) shows `mcp.url`, the address to give a client, and
+`mcp.staging_url` when the staging version declares one.
+
+Declaring it needs no person to confirm, unlike [open paths](#open-paths): it lets in nobody who could not open the
+app already, and each request reaches the app as the person who signed in, with the app's usual role for them.
+
+**Handle the path** like any other route. The person arrives the usual way, so `currentUser()` from `@brodsh/auth` (or
+the `x-brod-identity` token) tells the handler who is calling:
+
+```js
+// app/api/mcp/route.ts (Next.js), or the same in _worker.js
+import { currentUser } from '@brodsh/auth/next';
+
+export async function POST(request) {
+  const user = await currentUser(request);
+  if (!user) return new Response('Unauthorized', { status: 401 });
+  return handleMcp(await request.json(), user); // your JSON-RPC handler; user.role is their role in this app
+}
+```
+
+**Connect a client.** Add the address as a remote (HTTP) MCP server, for example
+`claude mcp add --transport http notes https://notes.acme.brod.example/api/mcp`, or paste it into Claude's custom
+connector. What happens:
+
+1. The client calls the address without a token. The gateway answers `401` with
+   `WWW-Authenticate: Bearer resource_metadata="https://<app host>/.well-known/oauth-protected-resource/api/mcp"`. It
+   never redirects this path to the sign-in page.
+2. That metadata (RFC 9728), served on the app's host without sign-in, names the address as the resource and Brod as
+   the authorization server.
+3. The client registers itself with Brod (RFC 7591) and sends the person to `/oauth/authorize` with
+   `resource=https://<app host>/api/mcp` (RFC 8707) and PKCE. The consent page says
+   "<client> wants to use <app> in <workspace> as you". Somebody who cannot open the app gets `403` instead.
+4. The token endpoint issues an access token (an hour) and a rotating refresh token, both bound to that address.
+5. On each call the gateway checks the token is for exactly this address, then checks that the person may still open
+   the app (the same check as a browser visit), removes the `Authorization` header and forwards the request with the
+   person's identity.
+
+**What a token is good for.** Only the address it was issued for. Each host the app is served at is its own
+resource: the live address, the staging address (which only the app's builders and top role can open, as in the
+browser) and each custom domain. A token for Brod's own `/mcp`, for another app or for another address of this app
+gets `401` with `error="invalid_token"`; an app token is refused by Brod's own `/mcp` and API. When the person loses
+access to the app (unshared, removed from the workspace or group, the app made private), their next call gets `403`
+with `error="insufficient_scope"` and the refresh token stops renewing. A browser that is signed in to the app and
+may open it reaches the path as before.
+
+**Tokens for automation.** A builder can make a token for one app's endpoint, for a script with no browser:
+`POST /v1/tokens` with `{ "name": "nightly sync", "app": "notes", "expires_in_days": 30 }` (add `"staging": true` for
+the staging address). It acts as that person, is checked the same way on every request, and works nowhere else. App
+connections, sign-ins and tokens alike, show on the workspace's connections page and in `GET /v1/tokens` with
+`"kind": "app"`, and are disconnected the same way.
 
 ## Container apps
 

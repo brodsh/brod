@@ -13,8 +13,8 @@ INSERT INTO tokens VALUES ('tok_2', 'ws_1', 'usr_a', 'Claude Desktop', 'h7', 1, 
 INSERT INTO apps VALUES ('app_1', 'ws_1', 'usr_a', 'reading', 'Reading', 'Reading list', 'Hi', 'live', 'people', '["owner","editor","viewer"]', 2, 1, 3, 'sp_1', 4096, 8192, NULL, NULL, '', 3, 2, '[]', 'db_1');
 INSERT INTO apps VALUES ('app_2', 'ws_1', 'usr_a', 'draft', 'draft', '', '', 'live', 'password', '["owner"]', NULL, 2, 0, NULL, 0, 0, 'pbkdf2$100000$c2FsdA$aGFzaA', 1700000002000, 'Phishing ''kit''', NULL, NULL, '[]', NULL);
 INSERT INTO grants VALUES ('app_1', 'user:usr_B', 'viewer', 1), ('app_1', 'domain:acme.test', 'editor', 2);
-INSERT INTO versions VALUES ('app_1', 1, 'First version', 'ana@acme.test', 2, 120, 1, NULL, '[]', NULL, NULL, NULL, NULL, NULL, 'auto', NULL);
-INSERT INTO versions VALUES ('app_1', 2, 'Update', 'Claude (ana@acme.test)', 3, 4096, 2, '{"main":"_worker.js","modules":["_worker.js"]}', '["a password field"]', 3, '[{"key":"name","label":"Name","type":"text","default":"Reading"}]', '["api.stripe.com"]', 1, NULL, 'auto', NULL);
+INSERT INTO versions VALUES ('app_1', 1, 'First version', 'ana@acme.test', 2, 120, 1, NULL, '[]', NULL, NULL, NULL, NULL, NULL, 'auto', NULL, NULL);
+INSERT INTO versions VALUES ('app_1', 2, 'Update', 'Claude (ana@acme.test)', 3, 4096, 2, '{"main":"_worker.js","modules":["_worker.js"]}', '["a password field"]', 3, '[{"key":"name","label":"Name","type":"text","default":"Reading"}]', '["api.stripe.com"]', 1, NULL, 'auto', NULL, '/api/mcp');
 INSERT INTO secrets VALUES ('app_1', 'STRIPE_KEY', 'iv.ct', 1, 'ana@acme.test');
 INSERT INTO app_settings VALUES ('app_1', 'name', '"Our reading"', NULL, 0, 1, 'ana@acme.test'), ('app_1', 'logo', '"k3y"', 'image/png', 2048, 2, 'ana@acme.test');
 INSERT INTO network_reports VALUES ('app_1', 'evil.test', 'browser', 2, 3, 0, 1, 2), ('app_1', 'api.other.test', 'server', NULL, 1, 1, 1, 1);
@@ -42,7 +42,8 @@ INSERT INTO request_stats VALUES ('app_1', 1759997200000, 'ws_1', 3, 4096, 2, 0,
 INSERT INTO spaces VALUES ('sp_1', 'ws_1', 'Front desk', '', 1), ('sp_2', 'ws_1', 'back office', 'note', 2);
 INSERT INTO space_members VALUES ('sp_1', 'usr_B', 'editor', 1);
 INSERT INTO oauth_clients VALUES ('cli_1', 'Claude', '["http://127.0.0.1/cb"]', 1);
-INSERT INTO oauth_codes VALUES ('h7', 'cli_1', 'usr_a', 'ws_1', 'http://127.0.0.1/cb', 'chal', 2, NULL, 'read');
+INSERT INTO oauth_codes VALUES ('h7', 'cli_1', 'usr_a', 'ws_1', 'http://127.0.0.1/cb', 'chal', 2, NULL, 'read', 'https://reading.acme.brod.test/api/mcp');
+INSERT INTO app_tokens VALUES ('atk_1', 'app_1', 'usr_a', 'https://reading.acme.brod.test/api/mcp', 'Claude', 'cli_1', 'h10', 1, 2, 3, 'h11', NULL, 4, NULL);
 INSERT INTO domains VALUES ('dom_1', 'reading.example.com', 'ws_1', 'app_1', 'tok1', 5, 'alice@acme.test', 4), ('dom_2', 'apps.example.com', 'ws_1', NULL, 'tok2', NULL, 'alice@acme.test', 5);
 INSERT INTO listings VALUES ('lst_1', 'ws_1', 'app_1', 'reading-list', 'Reading list', 'Track what to read', 'Long text', 0, 'usd', 'listed', 1, 1, 2, 1);
 INSERT INTO releases VALUES ('lst_1', 1, 2, 'First release', '["owner","editor","viewer"]', '["STRIPE_KEY"]', NULL, 3, 4096, 'ana@acme.test', 1, NULL, '["api.stripe.com"]');
