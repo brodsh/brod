@@ -19,7 +19,9 @@
 //             -> serving    the app's live (or staging) pointer moves to the version: visitors get it from now on
 // The deployment it replaced drains for 30 s, then its container stops (draining -> stopped). Stopped containers of an
 // app's last 2 versions are kept for 24 h, the rest removed. A failure at any step ends in failed with the reason in
-// error and the log kept; what is live stays as it was. A rollback to a container version, and publishing staging,
+// error and the log kept; what is live stays as it was. When Brod restarts, deployments in progress resume
+// (`recover`): from scheduled, rebuilding from the kept context or reusing the pushed image, once their node is
+// back; one cut off while migrating fails instead, as the migration may be half applied. A rollback to a container version, and publishing staging,
 // reuse the image by its digest: nothing is rebuilt.
 //
 // Every step's lines, the build output among them, go to the deployment's log and to the app's logs (get_logs); while
@@ -443,6 +445,21 @@ impl Log {
 
 /// Run a deployment to serving, or to failed.
 pub async fn run(st: State, id: String) {
+    run_from(st, id, Start::New).await
+}
+
+/// How a deployment's background work begins.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Start {
+    New,
+    /// Brod restarted during the deployment and `recover` set it back to scheduled. `migrated`: it had got past the
+    /// migration step (starting or healthy), so the migration does not run again.
+    Resumed {
+        migrated: bool,
+    },
+}
+
+async fn run_from(st: State, id: String, start: Start) {
     let d = match st
         .db
         .call({
@@ -467,7 +484,14 @@ pub async fn run(st: State, id: String) {
         pending: vec![],
         flushed: Instant::now(),
     };
-    let result = steps(&st, &d, &mut log).await;
+    let result = match start {
+        Start::New => Ok(()),
+        Start::Resumed { .. } => resume_on_node(&st, &d, &mut log).await,
+    };
+    let result = match result {
+        Ok(()) => steps(&st, &d, start, &mut log).await,
+        Err(e) => Err(e),
+    };
     let context = st.cfg.data_dir.join("builds").join(format!("{}.tar", d.id));
     let _ = tokio::fs::remove_file(&context).await;
     if let Err((code, p)) = result {
@@ -552,7 +576,7 @@ fn node_failed(m: &str) -> Problem {
     Problem::new(502, "node_failed", format!("The node failed: {m}"))
 }
 
-async fn steps(st: &State, d: &Deployment, log: &mut Log) -> Step<()> {
+async fn steps(st: &State, d: &Deployment, start: Start, log: &mut Log) -> Step<()> {
     let node = d.node_id.clone().ok_or_else(|| ("deployment_failed", Problem::internal("no node")))?;
     let registry =
         st.registry.clone().ok_or_else(|| ("deployment_failed", unavailable(st).unwrap_or_else(|| Problem::internal("no registry"))))?;
@@ -614,7 +638,10 @@ async fn steps(st: &State, d: &Deployment, log: &mut Log) -> Step<()> {
         // The node gives it brod-db.internal, which reaches the app's database through the tunnel (databases.rs).
         body["database"] = json!(app_id);
     }
-    match spec.migrate.as_deref().filter(|_| fresh) {
+    // The migration runs with a newly built image: built by this run, or by this deployment before Brod restarted
+    // when the migration had not run yet.
+    let run_migration = fresh || (d.built && start == Start::Resumed { migrated: false });
+    match spec.migrate.as_deref().filter(|_| run_migration) {
         Some(command) => {
             if !move_to(st, d, "pulling", "migrating").await.map_err(&fail)? {
                 return Ok(());
@@ -1335,22 +1362,160 @@ pub async fn dispatch(
 
 // ---------- the reconciler ----------
 
-/// Brod restarted: what was in progress cannot continue (its build context and step are gone).
+/// What happens to a deployment Brod restarted during.
+#[derive(Clone, Debug, PartialEq)]
+enum Recovery {
+    Resume { migrated: bool },
+    Fail(&'static str),
+}
+
+/// Decide from where the deployment was and what it has. Nothing has moved the app's pointer before `healthy ->
+/// serving` (one transaction in `serve`), so a failed deployment leaves the live version as it was.
+fn recovery(state: &str, has_image: bool, has_context: bool) -> Recovery {
+    match state {
+        // Past the migration: the image is in the registry and the migration (if any) succeeded. Start the container
+        // again.
+        "starting" | "healthy" => Recovery::Resume { migrated: true },
+        // A migration was cut off part way: running it again could apply it twice. A person has to look.
+        "migrating" => Recovery::Fail(
+            "Brod restarted while the migration ran, so it may have been applied only partly. Check the app's database, then deploy again.",
+        ),
+        // The image is in the registry: copy it to the node and go on (a newly built one is migrated first).
+        "scheduled" | "building" | "pulling" if has_image => Recovery::Resume { migrated: false },
+        // Not built yet: build again from the kept source.
+        "scheduled" | "building" if has_context => Recovery::Resume { migrated: false },
+        _ => Recovery::Fail("Brod restarted during this deployment and its source was not kept. Deploy again."),
+    }
+}
+
+/// How long a resumed deployment waits for its node to connect again after Brod restarted.
+const RECONNECT_SECS: u64 = 120;
+
+/// Brod restarted: deployments in progress resume where they can, and fail cleanly where they cannot (`recovery`).
+/// A resumed one goes back to `scheduled` and runs again from there, reusing its built image; whatever it had left on
+/// its node (a build, a container) is removed first. Build contexts of deployments that do not resume are deleted.
 pub async fn recover(st: &State) -> Result<()> {
-    st.db
-        .call(|c| {
-            let states = IN_PROGRESS.map(|s| format!("'{s}'")).join(",");
-            c.run(
-                &format!(
-                    "UPDATE deployments SET state = 'failed', error_code = 'deployment_failed', error = 'Brod restarted during this deployment. Deploy again.', updated_at = ?, stopped_at = ? WHERE state IN ({states})"
-                ),
-                params![now(), now()],
-            )?;
-            Ok(())
-        })
-        .await?;
-    let _ = tokio::fs::remove_dir_all(st.cfg.data_dir.join("builds")).await;
+    let builds = st.cfg.data_dir.join("builds");
+    let dir = builds.clone();
+    let plan = st.db.call(move |c| plan_recovery(c, &dir)).await?;
+    let keep: std::collections::HashSet<String> =
+        plan.iter().filter(|(_, r)| matches!(r, Recovery::Resume { .. })).map(|(d, _)| format!("{}.tar", d.id)).collect();
+    if let Ok(mut entries) = tokio::fs::read_dir(&builds).await {
+        while let Ok(Some(e)) = entries.next_entry().await {
+            if !keep.contains(e.file_name().to_string_lossy().as_ref()) {
+                let _ = tokio::fs::remove_file(e.path()).await;
+            }
+        }
+    }
+    for (d, r) in plan {
+        let st = st.clone();
+        match r {
+            Recovery::Resume { migrated } => {
+                tracing::info!(deployment = %d.id, "resuming a deployment Brod restarted during ({})", d.state);
+                tokio::spawn(async move { run_from(st, d.id, Start::Resumed { migrated }).await });
+            }
+            Recovery::Fail(why) => {
+                tracing::warn!(deployment = %d.id, "a deployment Brod restarted during failed: {why}");
+                tokio::spawn(async move { clean_up_on_node(&st, &d).await });
+            }
+        }
+    }
     Ok(())
+}
+
+/// Sort the deployments in progress, in the database: resumed ones go back to `scheduled` (their log says why),
+/// the others fail with the reason.
+fn plan_recovery(c: &Connection, builds: &std::path::Path) -> Result<Vec<(Deployment, Recovery)>> {
+    let states = IN_PROGRESS.map(|s| format!("'{s}'")).join(",");
+    let ds = c.all(&format!("SELECT * FROM deployments WHERE state IN ({states}) ORDER BY created_at"), (), Deployment::from_row)?;
+    let mut plan = vec![];
+    for d in ds {
+        let spec: Option<String> =
+            c.first("SELECT spec FROM versions WHERE app_id = ? AND n = ?", params![d.app_id, d.version], |r| r.get(0))?.flatten();
+        let spec = Spec::parse(spec.as_deref());
+        let has_image = spec.digest.is_some() && spec.image_id.is_some() && !spec.pruned;
+        let has_context = builds.join(format!("{}.tar", d.id)).is_file();
+        let r = if d.node_id.is_none() {
+            Recovery::Fail("Brod restarted during this deployment. Deploy again.")
+        } else {
+            recovery(&d.state, has_image, has_context)
+        };
+        let note = match &r {
+            Recovery::Resume { .. } => format!("Brod restarted during this deployment ({}): resuming it", d.state),
+            Recovery::Fail(why) => format!("failed: {why}"),
+        };
+        let log = format!("{}{note}\n", d.log);
+        let changed = match &r {
+            Recovery::Resume { .. } => c.run(
+                "UPDATE deployments SET state = 'scheduled', log = ?, updated_at = ? WHERE id = ? AND state = ?",
+                params![log, now(), d.id, d.state],
+            )?,
+            Recovery::Fail(why) => c.run(
+                "UPDATE deployments SET state = 'failed', error_code = 'deployment_failed', error = ?, log = ?, updated_at = ?, stopped_at = ? WHERE id = ? AND state = ?",
+                params![why, log, now(), now(), d.id, d.state],
+            )?,
+        };
+        if changed > 0 {
+            plan.push((d, r));
+        }
+    }
+    Ok(plan)
+}
+
+/// Wait until the deployment's node is connected again (nodes reconnect on their own after Brod restarted).
+async fn wait_for_node(st: &State, node: &str) -> bool {
+    let until = Instant::now() + Duration::from_secs(RECONNECT_SECS);
+    while !st.nodes.connected(node) {
+        if Instant::now() > until {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    true
+}
+
+/// Before a resumed deployment runs again: its node must be back, and what it left there goes (a build under its
+/// id, a container under its name), so the run starts clean.
+async fn resume_on_node(st: &State, d: &Deployment, log: &mut Log) -> Step<()> {
+    let node = d.node_id.clone().ok_or_else(|| ("deployment_failed", Problem::internal("no node")))?;
+    if !wait_for_node(st, &node).await {
+        return Err((
+            "deployment_failed",
+            Problem::new(
+                503,
+                "node_unreachable",
+                format!("Brod restarted and node {node} has not connected again within {RECONNECT_SECS} s. Deploy again."),
+            ),
+        ));
+    }
+    log.line(format!("node {node} is connected again; removing what the interrupted run left there")).await;
+    let _ = node_call(st, &node, Method::DELETE, &format!("/v1/builds/{}", d.id), None, 30).await;
+    // The node answers ok when there is no such container.
+    if let Err(e) = node_call(st, &node, Method::DELETE, &format!("/v1/containers/{}", container_of(&d.id)), None, 60).await {
+        return Err((
+            "deployment_failed",
+            Problem::new(502, "deployment_failed", format!("Could not remove the earlier container: {}", e.message)),
+        ));
+    }
+    let id = d.id.clone();
+    st.db
+        .call(move |c| c.run("UPDATE deployments SET container_ref = NULL WHERE id = ?", [&id]))
+        .await
+        .map_err(failed("deployment_failed"))?;
+    Ok(())
+}
+
+/// A deployment that failed because Brod restarted: once its node is back, its build and container go.
+async fn clean_up_on_node(st: &State, d: &Deployment) {
+    let Some(node) = d.node_id.clone() else { return };
+    if !wait_for_node(st, &node).await {
+        return;
+    }
+    let _ = node_call(st, &node, Method::DELETE, &format!("/v1/builds/{}", d.id), None, 30).await;
+    if node_call(st, &node, Method::DELETE, &format!("/v1/containers/{}", container_of(&d.id)), None, 60).await.is_ok() {
+        let id = d.id.clone();
+        let _ = st.db.call(move |c| c.run("UPDATE deployments SET removed_at = ? WHERE id = ?", params![now(), id])).await;
+    }
 }
 
 /// Keep deployments in step with the apps' pointers, every few seconds: a serving deployment whose version is no
@@ -1582,6 +1747,88 @@ mod tests {
             assert!(!allowed(from, to), "{from} -> {to}");
         }
         assert!(allowed("healthy", "stopped"), "superseded before serving");
+    }
+
+    #[test]
+    fn a_restart_resumes_what_it_safely_can() {
+        let resume = |migrated| Recovery::Resume { migrated };
+        for s in ["starting", "healthy"] {
+            assert_eq!(recovery(s, true, false), resume(true), "{s}: past the migration");
+        }
+        for s in ["scheduled", "building", "pulling"] {
+            assert_eq!(recovery(s, true, false), resume(false), "{s}: the image is in the registry");
+        }
+        for s in ["scheduled", "building"] {
+            assert_eq!(recovery(s, false, true), resume(false), "{s}: builds again from the kept source");
+            assert!(matches!(recovery(s, false, false), Recovery::Fail(_)), "{s}: nothing to go on");
+        }
+        assert!(matches!(recovery("pulling", false, true), Recovery::Fail(_)), "pulling without an image");
+        assert!(matches!(recovery("migrating", true, true), Recovery::Fail(m) if m.contains("partly")), "never migrates twice");
+    }
+
+    #[tokio::test]
+    async fn a_restart_resumes_or_fails_deployments_and_keeps_live() {
+        let dir = std::env::temp_dir().join(format!("brod-recover-{}", crate::util::random_id("", 8)));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("d_ctx.tar"), b"tar").unwrap();
+        let builds = dir.clone();
+        crate::db::test_db()
+            .call(move |c| {
+                let image = r#"{"port":8080,"health":"/","cpu":0.5,"memory_mb":256,"migrate":"./migrate","digest":"sha256:a","image_id":"sha256:b","platform":"linux/amd64"}"#;
+                c.execute_batch(
+                    "INSERT INTO users (id, email, name, created_at) VALUES ('usr_r', 'r@x.test', '', 1);
+                     INSERT INTO workspaces (id, slug, name, created_at) VALUES ('ws_r', 'rec', 'Rec', 1);
+                     INSERT INTO apps (id, workspace_id, owner_id, slug, name, access, created_at, live_version) VALUES ('app_r', 'ws_r', 'usr_r', 'r', 'R', 'people', 1, 1);
+                     INSERT INTO versions (app_id, n, note, actor, file_count, bytes, created_at, runtime) VALUES ('app_r', 1, '', 'r', 1, 1, 1, 'container');
+                     INSERT INTO versions (app_id, n, note, actor, file_count, bytes, created_at, runtime) VALUES ('app_r', 2, '', 'r', 1, 1, 2, 'container');
+                     INSERT INTO versions (app_id, n, note, actor, file_count, bytes, created_at, runtime) VALUES ('app_r', 3, '', 'r', 1, 1, 3, 'container');",
+                )?;
+                c.run("UPDATE versions SET spec = ? WHERE app_id = 'app_r' AND n IN (1, 2)", [image])?;
+                // v1 serves; v2's deployments were cut off at every step; v3 was never built.
+                let rows = [
+                    ("d_live", 1, "serving", 0),
+                    ("d_healthy", 2, "healthy", 1),
+                    ("d_pull", 2, "pulling", 1),
+                    ("d_mig", 2, "migrating", 1),
+                    ("d_ctx", 3, "building", 0),
+                    ("d_lost", 3, "scheduled", 0),
+                ];
+                for (i, (id, v, state, built)) in rows.iter().enumerate() {
+                    c.run(
+                        "INSERT INTO deployments (id, app_id, version, environment, node_id, state, built, log, created_at, updated_at) VALUES (?,'app_r',?,'live','node_1',?,?,'earlier\n',?,?)",
+                        params![id, v, state, built, i as i64, i as i64],
+                    )?;
+                }
+                let plan = plan_recovery(c, &builds)?;
+                let got: Vec<(String, Recovery)> = plan.into_iter().map(|(d, r)| (d.id, r)).collect();
+                assert_eq!(got.len(), 5, "the serving deployment is not touched: {got:?}");
+                let find = |id: &str| got.iter().find(|(d, _)| d == id).map(|(_, r)| r.clone()).unwrap();
+                assert_eq!(find("d_healthy"), Recovery::Resume { migrated: true });
+                assert_eq!(find("d_pull"), Recovery::Resume { migrated: false }, "built, not migrated yet: it migrates on resume");
+                assert_eq!(find("d_ctx"), Recovery::Resume { migrated: false });
+                assert!(matches!(find("d_mig"), Recovery::Fail(_)));
+                assert!(matches!(find("d_lost"), Recovery::Fail(_)));
+                let state = |id: &str| -> (String, Option<String>, String) {
+                    c.first("SELECT state, error, log FROM deployments WHERE id = ?", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().unwrap()
+                };
+                for id in ["d_healthy", "d_pull", "d_ctx"] {
+                    let (s, e, log) = state(id);
+                    assert_eq!((s.as_str(), e), ("scheduled", None), "{id} resumes from scheduled");
+                    assert!(log.starts_with("earlier\n") && log.contains("Brod restarted"), "{id}: {log}");
+                }
+                let (s, e, _) = state("d_mig");
+                assert!(s == "failed" && e.unwrap().contains("partly"));
+                assert_eq!(state("d_live").0, "serving");
+                let live: Option<i64> = c.first("SELECT live_version FROM apps WHERE id = 'app_r'", (), |r| r.get(0))?.flatten();
+                assert_eq!(live, Some(1), "what was live stays live");
+                // Run once more (Brod restarting again at once): the resumed ones resume again, nothing else changes.
+                let again = plan_recovery(c, &builds)?;
+                assert_eq!(again.len(), 3);
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

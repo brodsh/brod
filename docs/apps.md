@@ -705,6 +705,11 @@ for one explicitly and is refused without a Dockerfile.
   [`migrate`](#databases) command failed) or `deployment_failed` (it built but did not start or pass its health
   check), with the last 50 lines of its log. Nothing changes for visitors: the
   version that was serving keeps serving.
+- If Brod restarts during a deployment, the deployment continues when Brod is back and the node has reconnected
+  (within 2 minutes). It goes back to `scheduled` and builds again from the kept source, or reuses the image already
+  in the registry. Its log says it resumed. A deployment cut off while its `migrate` command ran fails instead,
+  because the migration may have been applied only partly; check the database, then deploy again. In both cases
+  what was live stays live until the new version is healthy.
 - The build output and the container's output go to the app's logs (`get_logs`).
 
 **Settings** come from `brod.json` at the top of the source, and `deploy_app`'s arguments of the same names override
