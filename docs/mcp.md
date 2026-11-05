@@ -215,7 +215,7 @@ the MCP specification describes.
 
 The same OAuth server signs people in to an app's own MCP endpoint ([app MCP](apps.md#app-mcp)). The app declares
 `"mcp": "/api/mcp"` in its `brod.json` and handles that path, reading the caller with `currentUser()` from
-`@brod/auth`. A client is given only `https://<app host>/api/mcp`: it gets `401` there with a pointer to the
+`@brodsh/auth`. A client is given only `https://<app host>/api/mcp`: it gets `401` there with a pointer to the
 endpoint's protected-resource metadata, registers, and signs the person in at Brod with `resource` set to that address
 (RFC 8707). The consent page names the app and its workspace; nobody who cannot open the app gets that far.
 

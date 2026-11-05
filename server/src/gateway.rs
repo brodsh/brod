@@ -41,7 +41,7 @@ fn sign_in_url(cfg: &Config, app: &AppRow, workspace_slug: &str, domain: Option<
     let suffix = if staging { STAGING_SUFFIX } else { "" };
     format!("{}/auth/app?app={}{suffix}.{workspace_slug}{host}&return={}", cfg.api_origin, app.slug, encode_uri_component(ret))
 }
-fn app_return(r: Option<String>) -> String {
+pub(crate) fn app_return(r: Option<String>) -> String {
     match r {
         Some(r) if r.starts_with('/') && !r.starts_with("//") && !r.starts_with("/\\") => r,
         _ => "/".into(),
@@ -211,21 +211,35 @@ pub fn admit_staging(app: &AppRow, d: &mut Decision, visitor: Option<&User>) {
 }
 
 /// Serve an app. `domain` is the custom domain (host and port, as the request named it) it was opened at, if any.
-/// Every request that reaches an app is counted for its analytics, with its status, size and server time.
+/// Every request that reaches an app is counted for its analytics, with its status, size, server time and class
+/// (traffic.rs), after the shield (shield.rs) has had its say.
 pub async fn serve_app(st: &State, req: Req, at: Where, domain: Option<String>) -> Result<Response> {
     let mut hit = crate::analytics::Hit::new(&req);
-    let res = serve(st, req, at, domain, &mut hit).await;
+    let mut guard = crate::shield::Guard::new(st, &req).await;
+    let res = match guard.refuse().await {
+        Some(refused) => Ok(refused),
+        None => serve(st, req, at, domain, &mut hit, &mut guard).await,
+    };
     let (status, bytes) = match &res {
         Ok(r) => {
             (r.status().as_u16(), r.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse().ok()).unwrap_or(0))
         }
         Err(e) => (e.status, 0),
     };
+    guard.done(st, status);
+    hit.traffic = guard.verdict;
     st.analytics.finish(hit, status, bytes);
     res
 }
 
-async fn serve(st: &State, mut req: Req, at: Where, domain: Option<String>, hit: &mut crate::analytics::Hit) -> Result<Response> {
+async fn serve(
+    st: &State,
+    mut req: Req,
+    at: Where,
+    domain: Option<String>,
+    hit: &mut crate::analytics::Hit,
+    guard: &mut crate::shield::Guard,
+) -> Result<Response> {
     let origin = match (&domain, &at) {
         (Some(d), _) => host_origin(&st.cfg, d),
         (None, Where::Slug { workspace, slug, staging: true }) => staging_url(&st.cfg, workspace, slug),
@@ -354,6 +368,17 @@ async fn serve(st: &State, mut req: Req, at: Where, domain: Option<String>, hit:
             None => return Ok(challenge(401, &metadata, None)),
         }
     }
+    // The same salted, per-app, per-day hash usage.rs counts visits by. Someone signed in, an MCP client calling with its
+    // person's app token, or a browser that ran the insights script or passed the shield's check today is a person.
+    let who = crate::usage::visitor_hash(&st.cfg, &req, &app.id, person.as_ref().map(|u| u.id.as_str()));
+    let verified = if person.is_some() {
+        Some("signed_in")
+    } else if st.traffic.is_verified(&who, crate::util::now()) {
+        Some("js")
+    } else {
+        None
+    };
+    guard.settle(verified);
     let server: Option<ServerInfo> = match server {
         Some(s) => Some(serde_json::from_str(&s)?),
         None => None,
@@ -379,6 +404,10 @@ async fn serve(st: &State, mut req: Req, at: Where, domain: Option<String>, hit:
         };
         crate::network::protect(&st.cfg, &mut res, &network);
         return Ok(res);
+    }
+    // An MCP client calling with its person's token can't run a challenge page, and needs none.
+    if let Some(check) = guard.challenge(st, &req, person.is_some()) {
+        return Ok(check);
     }
     if !decision.allowed {
         let ret = if req.query.is_empty() { req.path.clone() } else { format!("{}?{}", req.path, req.query) };
@@ -407,10 +436,13 @@ async fn serve(st: &State, mut req: Req, at: Where, domain: Option<String>, hit:
         ));
     };
 
-    // Trying a version on staging is not a visit.
-    if !staging && crate::usage::is_page_view(&req) && !hit.bot {
-        let who = crate::usage::visitor_hash(&st.cfg, &req, &app.id, person.as_ref().map(|u| u.id.as_str()));
-        st.visits.record(&app.id, who.clone());
+    // Trying a version on staging is not a visit. Every class of page view is kept for analytics (which shows people
+    // by default), and so are probes for vulnerable paths; a bot that says it is one is never a visit.
+    let page_view = crate::usage::is_page_view(&req);
+    if !staging && (page_view || guard.facts.probe) {
+        if page_view && !hit.bot {
+            st.visits.record(&app.id, who.clone());
+        }
         let path = decode_uri_component(&req.path).unwrap_or_else(|| req.path.clone());
         hit.view = Some(crate::analytics::page_view(&st.cfg, &req, &app.workspace_id, &app.id, who, person.is_some(), &path));
     }
@@ -564,6 +596,11 @@ async fn special(st: &State, req: &mut Req, v: Visit) -> Result<Response> {
         ""
     };
     let Visit { app, visitor, decision, workspace_slug, origin, domain, staging, .. } = v;
+    // The answer to the shield's proof-of-work check (shield.rs).
+    if req.path == "/_brod/challenge" {
+        let who = crate::usage::visitor_hash(&st.cfg, req, &app.id, visitor.as_ref().map(|v| v.user.id.as_str()));
+        return crate::shield::answer(st, req, &who).await;
+    }
     // What the browser stopped, or would have stopped, under the app's Content-Security-Policy (network.rs). Browsers
     // may send these without the visitor's cookies, so they are taken from anyone: they are only ever shown to the app's
     // own builders, and an app keeps a bounded number of hosts on record.
@@ -621,6 +658,10 @@ async fn special(st: &State, req: &mut Req, v: Visit) -> Result<Response> {
             let Ok(body) = req.bytes(16 * 1024, "The insights").await else { return Ok(crate::http::empty(204)) };
             let who = crate::usage::visitor_hash(&st.cfg, req, &app.id, visitor.as_ref().map(|v| v.user.id.as_str()));
             let (views, events) = crate::analytics::ingest(&st.cfg, req, &body, &app.workspace_id, &app.id, &who, visitor.is_some());
+            // Only a browser that ran the script reports anything: from now on today, this visitor is a person.
+            if !views.is_empty() || !events.is_empty() {
+                st.traffic.verify(&who, crate::util::now());
+            }
             for v in views {
                 st.visits.record(&app.id, who.clone());
                 st.analytics.view(v);

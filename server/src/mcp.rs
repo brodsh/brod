@@ -305,7 +305,7 @@ pub fn tools() -> Value {
         {
             "name": "get_auth_integration", "title": "Identity and access for an app's code",
             "description": concat!("How an app's code learns who is signed in and how to trust it: the identity contract (the x-brod-identity JWT, its claims, the JWKS URL and env vars), ",
-                "how access works (private by default, the gateway signs people in, open paths are anonymous, an app's own MCP endpoint is signed in by Brod), and a short verification snippet for a framework (the @brod/auth package for Next.js, Node and Workers). ",
+                "how access works (private by default, the gateway signs people in, open paths are anonymous, an app's own MCP endpoint is signed in by Brod), and a short verification snippet for a framework (the @brodsh/auth package for Next.js, Node and Workers). ",
                 "Call this before writing code that reads the user, checks roles, exposes a webhook or serves MCP. Never build a login or user table."),
             "inputSchema": {
                 "type": "object",

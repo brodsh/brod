@@ -8,12 +8,20 @@ generated from conventional commits.
 
 ### Added
 
+- Smart traffic: every visit to an app is labelled human, suspicious or bot from several signals (user agent, missing
+  headers, scanner probe paths, burst rate, 4xx share, and whether a browser ran the insights script), stored with
+  its reason (migration 0028). Analytics show people by default; `GET /v1/analytics` takes `traffic=` and drill-down
+  filters (`country`, `path`, `referrer`, `browser`, `os`, `device`, `visitor`, `status`) and lists top visitors and
+  the reasons; the dashboard has a People/Suspicious/Bots/All toggle and clickable filters.
+- The shield (`BROD_SHIELD`, on by default): a per-address request limit for apps, blocking addresses that scan for
+  vulnerable paths, and a self-hosted proof-of-work check for suspicious or very busy clients. Configurable in the
+  admin console or with `BROD_SHIELD_*`.
 - App MCP: an app declares `"mcp": "/api/mcp"` in `brod.json`; MCP clients sign in with Brod (OAuth, tokens bound to
   that app's address) and the app reads the caller with `currentUser()`.
 
 ### Upgrading
 
-- Migration 0029 runs at start.
+- Migrations 0028 and 0029 run at start.
 
 ## 0.2.1 (2026-11-02)
 
@@ -42,7 +50,7 @@ Container apps on nodes, managed Postgres for apps, admin mode, and git-backed a
   `brod-db.internal` through the tunnel, with migrations and backups.
 - Open paths: apps declare paths that skip sign-in; a person approves them. MCP `set_open_paths` and
   `get_auth_integration`.
-- `@brod/auth`, the identity SDK for JavaScript.
+- `@brodsh/auth`, the identity SDK for JavaScript.
 - Admin mode: operators, instance settings, workspace limits and overrides, an audit log and the operator console
   (including node management).
 - Git-backed app versions: files are stored once by content hash (`blobs/<sha256>`) and each version is a manifest.

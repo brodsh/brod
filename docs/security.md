@@ -101,6 +101,29 @@ open path, it never makes part of the app anonymous.
 | Deploys | 30 an hour per workspace |
 | New workspaces | 3 a day per person |
 | Abuse reports (hosted) | 10 an hour per client address |
+| Requests to apps | 1,200 a minute per client address (the shield, below; kept in memory) |
+
+**Bots and scanners on apps.** Every request to an app is classified `human`, `suspicious` or `bot` from its user
+agent, its headers (`Accept-Language`, `Accept`, HTTP/1.0), probe paths such as `/wp-login.php`, `/.env` or `/.git/`,
+its address's recent burst rate and share of 4xx answers, and whether the client proved it runs a browser
+([docs/api.md](api.md#traffic-classes)). Analytics show people only unless asked. With the shield on (`BROD_SHIELD`,
+the default), the gateway also:
+
+- refuses (403, after a short tarpit) an address that asked for `BROD_SHIELD_SCANNER_PROBES` (8) probe paths within ten
+  minutes, for `BROD_SHIELD_BLOCK_MINUTES` (60);
+- answers 429 to an address over `BROD_SHIELD_REQUESTS_PER_MINUTE` (1,200) requests a minute;
+- puts a proof-of-work check in front of page loads that are suspicious, or whose address made more than
+  `BROD_SHIELD_CHALLENGE_PER_MINUTE` (300) requests this minute. The page's script finds a SHA-256 hash with
+  `BROD_SHIELD_CHALLENGE_BITS` (16) leading zero bits (well under a second in a browser) for a token signed with
+  `IDENTITY_SECRET`, bound to the address and valid for 10 minutes; the answer earns a signed, `HttpOnly` cookie bound
+  to the address for `BROD_SHIELD_PASS_HOURS` (24). No third-party service sees the visitor. Clients without
+  JavaScript cannot pass it.
+
+Never checked or blocked: people signed in to the app, open paths (webhooks), anything but a page load, Brod's own
+`/_brod/` endpoints, bots that say what they are, and loopback and private-network addresses. Those addresses are not
+tracked either, because everyone behind a LAN or an untrusted proxy shares one; behind a proxy, set
+`BROD_TRUST_PROXY=1` so the shield sees visitors' addresses. Blocks and counters live in memory and are lost on a
+restart. Off (`BROD_SHIELD=false`, or in the admin console), traffic is still classified for analytics.
 
 **Bad uploads.** Bundles are unpacked with checks on path traversal (`..`, absolute paths), file count (2,000), file
 size (10 MB) and total size (60 MB unpacked). Files are served with a `Content-Type` from their extension and

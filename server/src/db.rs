@@ -47,6 +47,7 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
     ("0025_content_addressed_versions.sql", include_str!("../../migrations/0025_content_addressed_versions.sql")),
     ("0026_git.sql", include_str!("../../migrations/0026_git.sql")),
     ("0027_git_mirror.sql", include_str!("../../migrations/0027_git_mirror.sql")),
+    ("0028_traffic.sql", include_str!("../../migrations/0028_traffic.sql")),
     ("0029_app_mcp.sql", include_str!("../../migrations/0029_app_mcp.sql")),
 ];
 
@@ -79,6 +80,7 @@ pub const PG_MIGRATIONS: &[(&str, &str)] = &[
     ("0025_content_addressed_versions.sql", include_str!("../../migrations-pg/0025_content_addressed_versions.sql")),
     ("0026_git.sql", include_str!("../../migrations-pg/0026_git.sql")),
     ("0027_git_mirror.sql", include_str!("../../migrations-pg/0027_git_mirror.sql")),
+    ("0028_traffic.sql", include_str!("../../migrations-pg/0028_traffic.sql")),
     ("0029_app_mcp.sql", include_str!("../../migrations-pg/0029_app_mcp.sql")),
 ];
 

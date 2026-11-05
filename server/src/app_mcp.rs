@@ -14,7 +14,7 @@
 // tokens table, these live in app_tokens), not on another app, not on the app's staging address or a custom domain
 // (each is its own resource). On every request it checks that the person may still open the app, exactly as for a
 // browser, then strips Authorization and hands the app the usual identity (x-brod-identity and x-brod-user-*), so the
-// app's handler reads the person with currentUser() from @brod/auth and never sees a Brod token.
+// app's handler reads the person with currentUser() from @brodsh/auth and never sees a Brod token.
 //
 // Declaring the path needs nobody's approval, unlike open paths (open_paths.rs): it lets in only people who could
 // open the app anyway, and only as themselves. The declaration travels with the version, like open paths and settings.
@@ -464,7 +464,7 @@ pub fn view(conn: &Connection, cfg: &Config, app: &AppRow, workspace_slug: &str)
         return Ok(None);
     }
     let mut v = json!({
-        "how": "Add the url to an MCP client as a remote (HTTP) server. The client signs the person in with Brod; the app's handler reads them with currentUser() from @brod/auth.",
+        "how": "Add the url to an MCP client as a remote (HTTP) server. The client signs the person in with Brod; the app's handler reads them with currentUser() from @brodsh/auth.",
     });
     if let Some(p) = live {
         v["path"] = json!(p);

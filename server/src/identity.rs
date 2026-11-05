@@ -129,7 +129,7 @@ pub const FRAMEWORKS: [&str; 6] = ["nextjs", "node", "python", "go", "rust", "wo
 struct Snippet {
     install: &'static str,
     code: &'static str,
-    /// The same with jose alone, for code that cannot take the @brod/auth package.
+    /// The same with jose alone, for code that cannot take the @brodsh/auth package.
     fallback: Option<(&'static str, &'static str)>,
 }
 
@@ -138,12 +138,12 @@ fn snippet(framework: &str) -> Snippet {
     let plain = |install, code| Snippet { install, code, fallback: None };
     match framework {
         "nextjs" => Snippet {
-            install: "npm install @brod/auth",
+            install: "npm install @brodsh/auth",
             code: r#"// The signed-in person, from the token the Brod gateway adds to every request (x-brod-identity).
-// @brod/auth checks it against BROD_ISSUER, BROD_APP_ID and BROD_IDENTITY_JWKS from env (EdDSA only).
+// @brodsh/auth checks it against BROD_ISSUER, BROD_APP_ID and BROD_IDENTITY_JWKS from env (EdDSA only).
 
 // app/page.tsx. Server components, route handlers and server actions all use the same call.
-import { currentUserFromHeaders, requireUserFromHeaders } from '@brod/auth/next';
+import { currentUserFromHeaders, requireUserFromHeaders } from '@brodsh/auth/next';
 
 export default async function Page() {
   const user = await currentUserFromHeaders(); // null: anonymous (an open path, or a public app with nobody signed in)
@@ -151,7 +151,7 @@ export default async function Page() {
 }
 
 // app/api/me/route.ts: someone must be signed in. A missing or invalid token is a BrodAuthError with status 401.
-import { BrodAuthError } from '@brod/auth';
+import { BrodAuthError } from '@brodsh/auth';
 export async function GET() {
   try {
     const user = await requireUserFromHeaders();
@@ -162,7 +162,7 @@ export async function GET() {
   }
 }
 
-// middleware.ts (proxy.ts in Next.js 16) gets the request: currentUser(request) from '@brod/auth'.
+// middleware.ts (proxy.ts in Next.js 16) gets the request: currentUser(request) from '@brodsh/auth'.
 // Without env (outside Brod): currentUser(request, { issuer: '{ISS}', appId: '<app id>' }) fetches {JWKS_URL}."#,
             fallback: Some((
                 "npm install jose",
@@ -187,8 +187,8 @@ export async function brodUser(): Promise<JWTPayload | null> {
             )),
         },
         "node" => Snippet {
-            install: "npm install @brod/auth",
-            code: r#"import { currentUser, requireUser } from '@brod/auth';
+            install: "npm install @brodsh/auth",
+            code: r#"import { currentUser, requireUser } from '@brodsh/auth';
 
 // req: a Node http.IncomingMessage, an Express or Fastify request, a fetch Request, or Headers.
 // Checks x-brod-identity against BROD_ISSUER, BROD_APP_ID and BROD_IDENTITY_JWKS from env (EdDSA only).
@@ -314,8 +314,8 @@ pub fn brod_user(token: Option<&str>, jwks: &JwkSet) -> Result<Option<serde_json
 }"#,
         ),
         _ => Snippet {
-            install: "npm install @brod/auth, then bundle it into _worker.js (npx esbuild src/worker.js --bundle --format=esm --outfile=_worker.js), or use the x-brod-user-* headers directly (see the note below).",
-            code: r#"import { currentUser } from '@brod/auth';
+            install: "npm install @brodsh/auth, then bundle it into _worker.js (npx esbuild src/worker.js --bundle --format=esm --outfile=_worker.js), or use the x-brod-user-* headers directly (see the note below).",
+            code: r#"import { currentUser } from '@brodsh/auth';
 
 export default {
   async fetch(request, env) {
@@ -399,13 +399,13 @@ pub fn integration(cfg: &crate::config::Config, framework: Option<&str>, runtime
         "access": {
             "default": "Apps are private by default: only the owner (and workspace admins) can open them until set_access shares them.",
             "gateway": "The Brod gateway signs people in and decides access before any request reaches the app's code, then adds the identity. An app never sees a request from someone it was not shared with.",
-            "mcp": "For an MCP server inside the app, declare its path in brod.json: { \"mcp\": \"/api/mcp\" } (one path; its sub-paths count too). Brod then signs MCP clients in for it with OAuth: a client is given only the address (https://<app host>/api/mcp), gets 401 with a pointer to /.well-known/oauth-protected-resource/api/mcp, signs the person in at Brod, and sends a token bound to that one address. The gateway checks on every request that the person may still open the app, removes the token, and adds the usual identity, so the handler does const user = await currentUser(request) (@brod/auth) like any other route and answers 401 when it is null. Never issue or check tokens in the app, and never put a secret in the URL. A browser signed in to the app reaches the path as before. Declaring it needs no approval: it lets in nobody who could not open the app already.",
+            "mcp": "For an MCP server inside the app, declare its path in brod.json: { \"mcp\": \"/api/mcp\" } (one path; its sub-paths count too). Brod then signs MCP clients in for it with OAuth: a client is given only the address (https://<app host>/api/mcp), gets 401 with a pointer to /.well-known/oauth-protected-resource/api/mcp, signs the person in at Brod, and sends a token bound to that one address. The gateway checks on every request that the person may still open the app, removes the token, and adds the usual identity, so the handler does const user = await currentUser(request) (@brodsh/auth) like any other route and answers 401 when it is null. Never issue or check tokens in the app, and never put a secret in the URL. A browser signed in to the app reaches the path as before. Declaring it needs no approval: it lets in nobody who could not open the app already.",
             "open_paths": "Paths that must work without sign-in (webhooks, an MCP endpoint with its own auth) go in brod.json: { \"open_paths\": [\"/api/webhooks/*\", { \"path\": \"/api/mcp\", \"methods\": [\"POST\"] }] }. They open once a person approves them (deploy_app returns a confirm_url when an agent adds one; set_open_paths changes them).",
             "anonymous": "Requests on an open path, and to a public app from someone not signed in, carry no x-brod-identity and no x-brod-user-* headers. Treat them as untrusted and authenticate them yourself (a webhook signature, an API key).",
         },
         "workerd_note": workerd_note,
         "snippets": snippets,
-        "package": "@brod/auth (npm install @brod/auth) does all of this in one call for Node, Next.js (server components, route handlers, middleware) and Workers: currentUser(request) returns { id, email, name, workspace, role, groups, app } or null when anonymous, and throws a BrodAuthError (status 401) for a token that does not verify. The nextjs, node and workerd snippets use it; each also has without_package, the same with jose alone. Python, Go and Rust use their usual JWT library.",
+        "package": "@brodsh/auth (npm install @brodsh/auth) does all of this in one call for Node, Next.js (server components, route handlers, middleware) and Workers: currentUser(request) returns { id, email, name, workspace, role, groups, app } or null when anonymous, and throws a BrodAuthError (status 401) for a token that does not verify. The nextjs, node and workerd snippets use it; each also has without_package, the same with jose alone. Python, Go and Rust use their usual JWT library.",
     })
 }
 
@@ -498,7 +498,7 @@ mod tests {
             assert!(!code.contains("{ISS}") && !code.contains("{JWKS_URL}"), "{f}");
             if ["nextjs", "node", "workerd"].contains(&f.as_str()) {
                 // The JavaScript ones use the package, and keep the jose-only code beside it.
-                assert!(s["install"].as_str().unwrap().contains("@brod/auth") && code.contains("from '@brod/auth"), "{f}");
+                assert!(s["install"].as_str().unwrap().contains("@brodsh/auth") && code.contains("from '@brodsh/auth"), "{f}");
                 let raw = s["without_package"]["code"].as_str().unwrap();
                 assert!(raw.contains("from 'jose'") && raw.contains("'EdDSA'") && raw.contains("x-brod-identity"), "{f}");
                 assert!(!raw.contains("{ISS}") && !raw.contains("{JWKS_URL}"), "{f}");
@@ -513,6 +513,6 @@ mod tests {
         let one = integration(&cfg, Some("python"), Some("container"), None);
         assert_eq!(one["snippets"].as_object().unwrap().len(), 1);
         assert!(one["snippets"]["python"]["code"].as_str().unwrap().contains("audience=AUDIENCE"));
-        assert!(one["package"].as_str().unwrap().contains("@brod/auth"));
+        assert!(one["package"].as_str().unwrap().contains("@brodsh/auth"));
     }
 }
