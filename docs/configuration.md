@@ -29,10 +29,12 @@ This page is generated from `.env.example` by `node scripts/config-docs.mjs`. Ed
 | Variable | Example or default | What it does |
 | --- | --- | --- |
 | `ADMIN_SECRET` |  | The bearer token for the operator API (/v1/admin). Generated into &lt;BROD_DATA_DIR&gt;/secrets.env on first start if not set. |
-| `IDENTITY_SECRET` |  | Keys the identity tokens apps receive, password-app cookies and visitor counts. Generated on first start if not set. |
+| `IDENTITY_SECRET` |  | Keys password-app cookies and visitor counts. Generated on first start if not set. |
+| `IDENTITY_SIGNING_KEY` |  | Signs the identity tokens (JWTs) apps receive: an Ed25519 key, 64 hex characters (openssl rand -hex 32). Its public half is at /.well-known/jwks.json; changing it makes tokens already issued fail. Generated on first start if not set. |
 | `SECRETS_KEY` |  | Encrypts app secrets at rest; changing it makes stored app secrets unreadable. Generated on first start if not set. |
 | `BROD_RUNTIME_SECRET` |  | Shared with the runtime sidecar. Generated on first start if not set. |
 | `BROD_RUNTIME_SECRET_FILE` |  | Where Brod writes BROD_RUNTIME_SECRET for the runtime to read. Default: &lt;BROD_DATA_DIR&gt;/runtime-secret. Compose sets this. |
+| `BROD_NODE_JOIN_TOKEN_FILE` |  | Where Brod writes a one-time join token for the node next to it while no node has joined (nodes). Compose sets this. |
 
 ## Data
 
@@ -68,6 +70,20 @@ This page is generated from `.env.example` by `node scripts/config-docs.mjs`. Ed
 | `RUNTIME_STALL_MS` | `5000` | Runtime container: restart workerd when it has not answered for this many milliseconds (an app stuck in a loop). |
 | `RUNTIME_MEMORY_MB` | `1536` | Runtime container: restart workerd when it uses more memory than this, in MB. |
 | `RUNTIME_MEM_LIMIT` | `2g` | Runtime container: the hard memory ceiling Docker enforces. Keep it above RUNTIME_MEMORY_MB. |
+
+## Container apps
+
+| Variable | Example or default | What it does |
+| --- | --- | --- |
+| `BROD_CONTAINERS` | `trusted` | Container apps: a source folder with a Dockerfile, built and run on a node (docs/apps.md, Container apps). They need a node with Docker and the registry below. Who may deploy them: "trusted" (every workspace; an image may even run as root), "on" (every workspace, never as root) or "off". Default: trusted self-hosted, off hosted. |
+| `BROD_REGISTRY_URL` | `http://registry:5000` | The image registry (registry:2 with token auth) only Brod talks to. Unset: no container apps. Compose sets this. |
+| `REGISTRY_SIGNING_KEY` |  | Signs the registry's tokens: an ECDSA P-256 key, PKCS#8 in base64. Generated into &lt;BROD_DATA_DIR&gt;/secrets.env if not set, hosted too. |
+| `BROD_REGISTRY_CERT_FILE` |  | Where Brod writes the certificate of that key, for the registry's REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE. Default: &lt;BROD_DATA_DIR&gt;/registry-token.crt. Compose sets this. |
+| `BROD_CONTAINER_PREFIX` | `brod` | What the names of app containers, networks and images on nodes start with. |
+| `BROD_APPS_DATABASE_URL` | `postgres://brod_admin@%2Fvar%2Frun%2Fapps-postgresql/postgres` | Container apps' databases (request_database): the admin URL of apps-postgres, a Postgres server of its own, never Brod's database. Unset: request_database answers database_unavailable. Compose sets this (a socket, no network). |
+| `APPS_DATABASE_PASSWORD` |  | The admin password for BROD_APPS_DATABASE_URL. Generated into &lt;BROD_DATA_DIR&gt;/secrets.env if not set, hosted too. |
+| `BROD_APPS_DATABASE_PASSWORD_FILE` |  | Where Brod writes that password, for apps-postgres's POSTGRES_PASSWORD_FILE. Compose sets this. |
+| `BROD_PG_BIN_DIR` |  | The folder with pg_dump and pg_restore for backups, of the same major version as apps-postgres. Default: the PATH. Brod's image sets this. |
 | `BROD_NETWORK` | `log` | Where apps may send data: log (record undeclared hosts), enforce (refuse them) or off. |
 | `BROD_VERSION` | `latest` | The image version Compose runs. |
 
@@ -112,6 +128,25 @@ This page is generated from `.env.example` by `node scripts/config-docs.mjs`. Ed
 | `BROD_PREVIEW_URL` | `http://preview:8790` | Where Brod reaches the preview sidecar that screenshots marketplace listings (deploy/compose.preview.yml). |
 | `BROD_PREVIEW_SECRET` |  | Shared with the preview sidecar; at least 16 random characters. |
 
+## Instance settings
+
+| Variable | Example or default | What it does |
+| --- | --- | --- |
+| `BROD_LIMIT_RUNNING_APPS` | `unlimited` | The operators change these in the admin console (/admin, docs/plans/admin-mode.md); BROD_MARKETPLACE and BROD_ABUSE_CHECKS above are instance settings too. Setting one here locks it: the console shows it read-only. A number or "unlimited". Running (live) apps per workspace; paused apps do not count. A hosted workspace's plan applies instead, unless an operator overrides it. Default: unlimited. |
+| `BROD_LIMIT_MEMBERS` | `unlimited` | Members per workspace. Guests do not count. Default: unlimited. |
+| `BROD_LIMIT_STORAGE_MB` | `unlimited` | Storage per workspace in MB: bundles, files and app data. Default: unlimited. |
+| `BROD_LIMIT_ANALYTICS_DAYS` | `365` | Days of analytics a workspace keeps. Default: 365. |
+| `BROD_MAX_WORKSPACES` | `unlimited` | Workspaces on this server. Existing ones are never removed. Default: unlimited. |
+| `BROD_MAX_USERS` | `unlimited` | People with an account on this server. People who already have one can always sign in. Default: unlimited. |
+| `BROD_WORKSPACE_CREATION` | `workspace_admins` | Who may create a workspace: operators, workspace_admins or anyone_verified. Default: workspace_admins self-hosted, anyone_verified hosted. |
+| `BROD_ALLOWED_EMAIL_DOMAINS` |  | Comma-separated email domains allowed to sign up, such as acme.com. Empty: any domain. Invitations still work. |
+| `BROD_RATE_DEPLOYS_PER_HOUR` | `30` | Deploys per workspace per hour. |
+| `BROD_RATE_CALLS_PER_MINUTE` | `600` | REST and MCP calls per connection per minute. |
+| `BROD_RATE_WORKSPACES_PER_USER_DAY` | `3` | Workspaces one person may create per day. |
+| `BROD_GIT_REAL_EMAILS` | `false` | Use people's real email addresses as the author of exported git commits. Off: &lt;user id&gt;@users.noreply.&lt;apps domain&gt;. |
+| `BROD_GIT_MAX_IMPORT_MB` | `50` | Largest git bundle or repository (in MB) import_app accepts. |
+| `BROD_GIT_SYNC_POLL_MINUTES` | `10` | How often (minutes) Brod polls the remote of a git mirror with inbound sync when no webhook arrived recently. 0: never. |
+
 ## Hosted only
 
 | Variable | Example or default | What it does |
@@ -128,6 +163,7 @@ This page is generated from `.env.example` by `node scripts/config-docs.mjs`. Ed
 | --- | --- | --- |
 | `DEV_MODE` | `0` | Never on a reachable server: returns sign-in links in API responses. |
 | `DEV_FREE_STORAGE_MB` |  | With DEV_MODE: a smaller free-plan storage limit in MB, so tests can fill it. |
+| `DEV_ALLOW_LOOPBACK_GIT` | `0` | With DEV_MODE: git mirrors may use http:// and 127.0.0.1 remotes, so tests can serve a repository. |
 | `STRIPE_API_BASE` | `https://api.stripe.com` | A stand-in for Stripe's API, for tests. |
 | `BROD_TEST_DATABASE_URL` |  | A Postgres database for `cargo test` to run its database tests against. |
 | `BROD_DEV_ASSETS` | `server/src` | Debug builds only: read the admin page from this folder on every request, for editing it without a rebuild. |

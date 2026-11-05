@@ -17,7 +17,8 @@
 	@internal path /_caddy/* /_runtime/*
 	respond @internal 404
 
-	# Caddy passes the original Host and sets X-Forwarded-For, X-Forwarded-Proto and X-Forwarded-Host.
+	# Caddy passes the original Host and sets X-Forwarded-For, X-Forwarded-Proto and X-Forwarded-Host. Nodes'
+	# /_node/connect is an HTTP/1.1 Upgrade (brod-node/1), which reverse_proxy passes through and then streams both ways.
 	reverse_proxy {$BROD_UPSTREAM:brod:8080}
 }
 

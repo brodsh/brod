@@ -80,6 +80,33 @@ impl Storage {
         }
     }
 
+    /// Store a local file under `key`, streamed (backups, which may be large).
+    pub async fn put_file(&self, key: &str, path: &std::path::Path, content_type: Option<&str>) -> Result<ObjectMeta> {
+        match self {
+            Storage::Fs(s) => s.put_file(key, path, content_type).await,
+            Storage::S3(s) => s.put_file(key, path, content_type).await,
+        }
+    }
+
+    /// Write an object to a local file, streamed. False when there is no such object.
+    pub async fn save_to(&self, key: &str, path: &std::path::Path) -> Result<bool> {
+        use futures_util::StreamExt;
+        use tokio::io::AsyncWriteExt;
+        let Some(o) = self.get(key).await? else { return Ok(false) };
+        let mut f = tokio::fs::File::create(path).await?;
+        let mut stream = o.body.into_data_stream();
+        while let Some(chunk) = stream.next().await {
+            f.write_all(&chunk.map_err(crate::problem::Problem::internal)?).await?;
+        }
+        f.flush().await?;
+        Ok(true)
+    }
+
+    /// Whether objects stay on this machine (a local folder) rather than off it.
+    pub fn is_local(&self) -> bool {
+        matches!(self, Storage::Fs(_))
+    }
+
     /// Read a whole object into memory (server code modules, which are small).
     pub async fn read(&self, key: &str, cap: usize) -> Result<Option<Vec<u8>>> {
         match self.get(key).await? {

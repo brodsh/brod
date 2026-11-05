@@ -60,6 +60,35 @@ impl FsStore {
         })
     }
 
+    pub async fn put_file(&self, key: &str, path: &Path, content_type: Option<&str>) -> Result<ObjectMeta> {
+        let (data, meta) = (self.data(key)?, self.meta_file(key)?);
+        let src = path.to_path_buf();
+        let etag = tokio::task::spawn_blocking(move || -> std::io::Result<String> {
+            use std::io::Read;
+            let mut f = std::fs::File::open(src)?;
+            let mut h = Md5::new();
+            let mut buf = vec![0u8; 64 * 1024];
+            loop {
+                let n = f.read(&mut buf)?;
+                if n == 0 {
+                    return Ok(hex::encode(h.finalize()));
+                }
+                h.update(&buf[..n]);
+            }
+        })
+        .await
+        .map_err(Problem::internal)??;
+        let dir = data.parent().ok_or_else(|| Problem::internal("no parent folder"))?;
+        tokio::fs::create_dir_all(dir).await?;
+        let tmp = dir.join(format!(".tmp-{}", crate::util::random_id("", 6)));
+        let size = tokio::fs::copy(path, &tmp).await?;
+        tokio::fs::rename(&tmp, &data).await?;
+        let uploaded = crate::util::iso(crate::util::now());
+        let m = Meta { etag: etag.clone(), content_type: content_type.map(String::from), uploaded: uploaded.clone() };
+        write_atomic(&meta, serde_json::to_string(&m)?.as_bytes()).await?;
+        Ok(ObjectMeta { key: key.to_string(), size, etag, content_type: content_type.map(String::from), uploaded: Some(uploaded) })
+    }
+
     pub async fn head(&self, key: &str) -> Result<Option<ObjectMeta>> {
         let Ok(raw) = tokio::fs::read(self.meta_file(key)?).await else {
             return Ok(None);

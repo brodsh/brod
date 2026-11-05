@@ -134,7 +134,7 @@ async fn sign_in_page(st: &State, ret: Option<String>, app: Option<String>, sent
         _ => "<p>We email you a link. No password needed.</p>".into(),
     };
     let report = match &app {
-        Some(a) if st.cfg.abuse_checks => {
+        Some(a) if st.settings.last().flag("features.abuse_checks") => {
             format!("<p><small><a href=\"{}/_brod/report\">Report this app</a></small></p>", app_url(cfg, &a.wslug, &a.app.slug))
         }
         _ => String::new(),
@@ -406,8 +406,11 @@ pub async fn serve(st: &State, req: &mut Req) -> Result<Option<Response>> {
         let ret = safe_return(b.get("return"));
         let (e2, hash) = (email.clone(), sha256_hex(&token));
         let ip = crate::abuse::client_ip(&cfg, req);
+        let cfg_link = cfg.clone();
         st.db
             .call(move |c| {
+                // Say so before sending a link that could not be used.
+                crate::allowances::check_new_signin(c, &cfg_link, &e2)?;
                 if let Some(ip) = &ip {
                     crate::abuse::rate_limit(
                         c,
@@ -468,6 +471,7 @@ pub async fn serve(st: &State, req: &mut Req) -> Result<Option<Response>> {
         same_origin(&cfg, req)?;
         let b = input(req).await?;
         let hash = sha256_hex(&text(&b, "token"));
+        let cfg2 = cfg.clone();
         enum Outcome {
             Expired,
             Used,
@@ -488,6 +492,7 @@ pub async fn serve(st: &State, req: &mut Req) -> Result<Option<Response>> {
                 if c.run("UPDATE login_links SET used_at = ? WHERE hash = ? AND used_at IS NULL", params![now(), hash])? == 0 {
                     return Ok(Outcome::Used);
                 }
+                crate::allowances::check_new_signin(c, &cfg2, &email)?;
                 let user = people::verified_user(c, &email, "")?;
                 Ok(Outcome::Signed(return_to, people::create_session(c, &user.id, None, None)?))
             })
@@ -596,9 +601,11 @@ pub async fn serve(st: &State, req: &mut Req) -> Result<Option<Response>> {
             )));
         }
         let name = claims["name"].as_str().unwrap_or("").to_string();
+        let cfg2 = cfg.clone();
         let token = st
             .db
             .call(move |c| {
+                crate::allowances::check_new_signin(c, &cfg2, &email)?;
                 let user = people::verified_user(c, &email, &name)?;
                 people::create_session(c, &user.id, None, None)
             })
@@ -702,10 +709,11 @@ pub async fn serve(st: &State, req: &mut Req) -> Result<Option<Response>> {
     if p == "/auth/invite" && m == Method::POST {
         same_origin(&cfg, req)?;
         let token = text(&input(req).await?, "token");
+        let cfg2 = cfg.clone();
         let (to, session) = st
             .db
             .call(move |c| {
-                let a = people::accept_invite(c, &token)?;
+                let a = people::accept_invite(c, &cfg2, &token)?;
                 let to = match a.app_ref {
                     Some(s) => format!("/auth/app?app={s}&return=%2F"),
                     None => format!("/w/{}", a.workspace_slug),
@@ -737,6 +745,10 @@ pub async fn serve(st: &State, req: &mut Req) -> Result<Option<Response>> {
             Err(e) if !e.is_internal() => new_workspace_page(&st.cfg, &e.message),
             Err(e) => return Err(e),
         }));
+    }
+
+    if p == "/admin" && m == Method::GET {
+        return crate::admin::operator_page(st, req).await.map(Some);
     }
 
     if let Some(slug) = p.strip_prefix("/w/").and_then(|x| x.strip_suffix("/admin"))

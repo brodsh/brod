@@ -357,7 +357,7 @@ fn source(conn: &Connection, c: &Caller, app_id: &str, version: Option<i64>) -> 
 /// Copy the source version's files into the release, then record the release (and the listing, when it is new) in one
 /// transaction. If recording fails, the copied files are removed again.
 async fn publish(st: &State, c: &Caller, listing_id: &str, n: i64, src: Source, note: String, insert: Option<Listing>) -> Result<()> {
-    let files = read_tree(st, &format!("{}/{}/", src.app_id, src.version)).await?;
+    let files = crate::versions::read_files(st, &src.app_id, src.version).await?;
     let prefix = format!("{listing_id}/{n}/");
     write_tree(st, &prefix, files).await?;
     let (c2, id) = (c.clone(), listing_id.to_string());
@@ -608,6 +608,7 @@ pub async fn install(st: &State, c: &Caller, key: &str, o: Map<String, Value>) -
         name: Some(name),
         note: Some(format!("Installed {} release {n} from the marketplace", l.name)),
         base_version: None,
+        options: None,
     };
     let mut out = control::deploy(st, c, target, files).await?;
     let (c3, slug, l2, roles2) = (c.clone(), out["app"].as_str().unwrap_or("").to_string(), l.clone(), roles.clone());
@@ -717,6 +718,7 @@ pub async fn update_install(st: &State, c: &Caller, slug: &str, o: Map<String, V
         // A builder chose to deploy this release, so it goes live as it always has.
         environment: Some("production".into()),
         base_version: None,
+        options: None,
     };
     let mut out = control::deploy(st, c, target, files).await?;
     let (c3, l2) = (c.clone(), l.clone());

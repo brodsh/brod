@@ -29,26 +29,46 @@ COPY migrations migrations
 COPY migrations-pg migrations-pg
 COPY server/Cargo.toml server/Cargo.lock server/rustfmt.toml server/
 COPY server/src server/src
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/src/server/target,id=brod-target-$TARGETARCH \
     set -eu; \
     if [ "$TARGETARCH" = "$BUILDARCH" ]; then unset CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER CC_x86_64_unknown_linux_gnu CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER CC_aarch64_unknown_linux_gnu; fi; \
     cargo build --release --locked --manifest-path server/Cargo.toml --target "$(cat /triple)"; \
     cp "server/target/$(cat /triple)/release/brod" /brod; \
-    mkdir -p /data /run-brod
+    mkdir -p /data /run-brod /run-brod-node /run-brod-apps-postgres /run-brod-registry
 
-# glibc and libgcc only: no shell, no package manager.
+# pg_dump and pg_restore for backups of apps' databases (backups.rs), from the same image and major version as
+# docker-compose.yml's apps-postgres, with the libraries they load that the distroless base lacks.
+FROM postgres:17-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826 AS pgclient
+RUN set -eu; \
+    mkdir -p /pgclient/usr/local/lib/brod-pg/bin; \
+    for t in pg_dump pg_restore; do cp "/usr/lib/postgresql/17/bin/$t" /pgclient/usr/local/lib/brod-pg/bin/; done; \
+    ldd /usr/lib/postgresql/17/bin/pg_dump /usr/lib/postgresql/17/bin/pg_restore \
+      | awk '$2 == "=>" && $3 ~ /^\// { print $3 }' | sort -u \
+      | grep -Ev '/(libc|libm|libdl|libpthread|librt|libgcc_s|ld-linux[^/]*)\.so' \
+      | while read -r lib; do cp --parents -L "$lib" /pgclient; done
+
+# glibc and libgcc (and pg_dump's libraries) only: no shell, no package manager.
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
 LABEL org.opencontainers.image.title="Brod" \
       org.opencontainers.image.description="The self-hosted cloud your AI agent deploys team tools to, over MCP." \
       org.opencontainers.image.source="https://github.com/brodsh/brod" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
 COPY --from=build /brod /usr/local/bin/brod
+COPY --from=pgclient /pgclient/ /
 COPY --from=build --chown=65532:65532 /data /data
 # Where Compose mounts the volume Brod shares the runtime's secret through; owned by Brod so it can write there.
 COPY --from=build --chown=65532:65532 /run-brod /run/brod
+# And the one it writes the local node's join token to (nodes.rs).
+COPY --from=build --chown=65532:65532 /run-brod-node /run/brod-node
+# And the one it writes apps-postgres's admin password to, for that container's first start (config.rs).
+COPY --from=build --chown=65532:65532 /run-brod-apps-postgres /run/brod-apps-postgres
+# And the one it writes the registry's token certificate to (registry.rs). A new named volume copies the owner of the
+# image's directory, so without this it is root's and Brod cannot write the certificate.
+COPY --from=build --chown=65532:65532 /run-brod-registry /run/brod-registry
 ENV BROD_LISTEN=0.0.0.0:8080 \
-    BROD_DATA_DIR=/data
+    BROD_DATA_DIR=/data \
+    BROD_PG_BIN_DIR=/usr/local/lib/brod-pg/bin
 VOLUME /data
 EXPOSE 8080
 USER nonroot

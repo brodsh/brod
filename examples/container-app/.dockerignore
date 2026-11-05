@@ -1,0 +1,3 @@
+# Left out of the build context (Brod also always drops node_modules/, .git/ and .next/).
+*.log
+notes/

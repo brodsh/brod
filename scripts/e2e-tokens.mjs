@@ -64,7 +64,7 @@ const deploy = await bearer(manage.body.token, '/v1/deploys', { method: 'POST', 
 check('a manage token can still deploy', deploy.status === 201, String(deploy.status));
 const listed = await mcp(R, 'tools/list');
 const names = listed.body.result?.tools?.map(t => t.name) ?? [];
-check('a read-only agent is offered only the reading tools', names.join() === 'list_apps,get_files,get_status,get_logs,get_workspace', names.join());
+check('a read-only agent is offered only the reading tools', names.join() === 'list_apps,get_files,diff_versions,export_app,get_git_mirror,get_status,get_logs,get_deployment,get_auth_integration,get_workspace', names.join());
 const tried = await mcp(R, 'tools/call', { name: 'set_paused', arguments: { app: 'reading-list', paused: true } });
 check('a read-only agent cannot call a changing tool', tried.body.result?.isError === true && tried.body.result.content[0].text.includes('read_only'), JSON.stringify(tried.body));
 const status = await mcp(R, 'tools/call', { name: 'get_status', arguments: { app: 'reading-list' } });

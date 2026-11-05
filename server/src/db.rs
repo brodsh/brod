@@ -39,6 +39,14 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
     ("0017_token_expiry_scopes.sql", include_str!("../../migrations/0017_token_expiry_scopes.sql")),
     ("0018_version_history.sql", include_str!("../../migrations/0018_version_history.sql")),
     ("0019_files_and_editing.sql", include_str!("../../migrations/0019_files_and_editing.sql")),
+    ("0020_open_paths.sql", include_str!("../../migrations/0020_open_paths.sql")),
+    ("0021_nodes.sql", include_str!("../../migrations/0021_nodes.sql")),
+    ("0022_deployments.sql", include_str!("../../migrations/0022_deployments.sql")),
+    ("0023_databases.sql", include_str!("../../migrations/0023_databases.sql")),
+    ("0024_admin_mode.sql", include_str!("../../migrations/0024_admin_mode.sql")),
+    ("0025_content_addressed_versions.sql", include_str!("../../migrations/0025_content_addressed_versions.sql")),
+    ("0026_git.sql", include_str!("../../migrations/0026_git.sql")),
+    ("0027_git_mirror.sql", include_str!("../../migrations/0027_git_mirror.sql")),
 ];
 
 /// The same migrations written for Postgres, under the same names, so d1_migrations reads the same on both.
@@ -62,6 +70,14 @@ pub const PG_MIGRATIONS: &[(&str, &str)] = &[
     ("0017_token_expiry_scopes.sql", include_str!("../../migrations-pg/0017_token_expiry_scopes.sql")),
     ("0018_version_history.sql", include_str!("../../migrations-pg/0018_version_history.sql")),
     ("0019_files_and_editing.sql", include_str!("../../migrations-pg/0019_files_and_editing.sql")),
+    ("0020_open_paths.sql", include_str!("../../migrations-pg/0020_open_paths.sql")),
+    ("0021_nodes.sql", include_str!("../../migrations-pg/0021_nodes.sql")),
+    ("0022_deployments.sql", include_str!("../../migrations-pg/0022_deployments.sql")),
+    ("0023_databases.sql", include_str!("../../migrations-pg/0023_databases.sql")),
+    ("0024_admin_mode.sql", include_str!("../../migrations-pg/0024_admin_mode.sql")),
+    ("0025_content_addressed_versions.sql", include_str!("../../migrations-pg/0025_content_addressed_versions.sql")),
+    ("0026_git.sql", include_str!("../../migrations-pg/0026_git.sql")),
+    ("0027_git_mirror.sql", include_str!("../../migrations-pg/0027_git_mirror.sql")),
 ];
 
 /// Postgres advisory lock keys: one for every write transaction (see `tx`) and one while migrating.
@@ -1031,7 +1047,7 @@ mod tests {
         let db = test_db();
         let names = db.call(|c| c.all("SELECT name FROM d1_migrations ORDER BY id", (), |r| r.get::<_, String>(0))).await.unwrap();
         assert_eq!(names, MIGRATIONS.iter().map(|(n, _)| *n).collect::<Vec<_>>());
-        assert_eq!(names.last().map(String::as_str), Some("0019_files_and_editing.sql"));
+        assert_eq!(names.last().map(String::as_str), Some("0027_git_mirror.sql"));
         db.call(|c| migrate(c).map_err(Problem::internal)).await.unwrap();
         let path = db.call(|c| Ok(c.sqlite_path())).await.unwrap();
         let Some(path) = path else {

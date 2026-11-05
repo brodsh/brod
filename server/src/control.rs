@@ -1,23 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // The control plane. The REST API, the MCP endpoint and the confirmation pages call only these functions.
 use crate::db::{Connection, params};
-use bytes::Bytes;
 use serde_json::{Map, Value, json};
 
 use crate::abuse;
 use crate::config::Config;
 use crate::db::{Sql, event, tx};
 use crate::market::read_tree;
-use crate::model::{ACCESS, AppRow, Caller, User, Workspace, field, js_string, limits, plan, present, truthy};
+use crate::model::{ACCESS, AppRow, Caller, User, Workspace, field, js_string, limits, present, truthy};
 use crate::people::{self, require_role};
 use crate::problem::{Problem, Result};
 use crate::runtime::{self, ServerInfo};
 use crate::secrets;
 use crate::state::State;
 use crate::tar::{BundleFile, FILE_BYTES, MAX_FILES, UNPACKED_BYTES};
-use crate::util::{
-    app_url, capitalise, content_type, hash_password, iso, js_slice, js_trim, now, random_id, sha256_hex, slugify, staging_url,
-};
+use crate::util::{app_url, capitalise, hash_password, iso, js_slice, js_trim, now, random_id, sha256_hex, slugify, staging_url};
+use crate::versions;
 use base64::Engine;
 
 // ---------- who is calling ----------
@@ -424,6 +422,12 @@ pub fn described(conn: &Connection, cfg: &Config, c: &Caller, app: &AppRow) -> R
     }
     // Whether the Brod team took it down, or the phishing check flagged its live version.
     abuse::add_state(conn, app, &mut m)?;
+    // How its git mirror is doing (git_mirror.rs), for the people who can set it up.
+    if require_role(c, "builder", "see the git mirror").is_ok()
+        && let Some(s) = crate::git_mirror::summary(conn, &app.id)?
+    {
+        m.insert("git_mirror".into(), s);
+    }
     Ok(m)
 }
 
@@ -432,7 +436,7 @@ pub fn list_apps(conn: &Connection, cfg: &Config, c: &Caller) -> Result<Value> {
     let running = apps.iter().filter(|a| a.status == "live").count();
     let described: Vec<Value> = apps.iter().map(|a| described(conn, cfg, c, a).map(Value::Object)).collect::<Result<_>>()?;
     Ok(
-        json!({ "workspace": c.workspace.slug, "plan": crate::model::plan_label(&c.workspace), "running_apps": running, "app_limit": crate::model::limit_json(plan(&c.workspace).apps), "apps": described }),
+        json!({ "workspace": c.workspace.slug, "plan": crate::model::plan_label(&c.workspace), "running_apps": running, "app_limit": crate::model::limit_json(crate::allowances::effective(conn, cfg, &c.workspace)?.apps), "apps": described }),
     )
 }
 
@@ -440,26 +444,44 @@ pub fn get_status(conn: &Connection, cfg: &Config, c: &Caller, slug: &str) -> Re
     require_role(c, "builder", "see app versions")?;
     let app = get_app(conn, c, slug)?;
     let versions = conn.all(
-        "SELECT n, note, actor, file_count, bytes, created_at, server, based_on FROM versions WHERE app_id = ? ORDER BY n DESC LIMIT 50",
+        "SELECT n, note, actor, file_count, bytes, created_at, server, based_on, runtime FROM versions WHERE app_id = ? ORDER BY n DESC LIMIT 50",
         [&app.id],
         |r| {
             let n: i64 = r.get(0)?;
             let server: Option<String> = r.get(6)?;
+            let kind = if r.get::<_, String>(8)? == "container" {
+                "container"
+            } else if server.is_some() {
+                "server"
+            } else {
+                "static"
+            };
             Ok(json!({
-                "version": n, "live": Some(n) == app.live_version, "staging": Some(n) == app.staging_version, "kind": if server.is_some() { "server" } else { "static" },
+                "version": n, "live": Some(n) == app.live_version, "staging": Some(n) == app.staging_version, "kind": kind,
                 "based_on": r.get::<_, Option<i64>>(7)?, "note": r.get::<_, String>(1)?, "by": r.get::<_, String>(2)?, "files": r.get::<_, i64>(3)?, "bytes": r.get::<_, i64>(4)?, "at": iso(r.get(5)?),
             }))
         },
     )?;
     let mut m = described(conn, cfg, c, &app)?;
     m.insert("versions".into(), Value::Array(versions));
+    // Container apps: their latest deployments, with state and node (deployments.rs).
+    let deployments = crate::deployments::recent(conn, &app.id)?;
+    if deployments.as_array().is_some_and(|d| !d.is_empty()) {
+        m.insert("deployments".into(), deployments);
+    }
     // Names only: secret values are never returned.
     m.insert("secrets".into(), secrets::list(conn, &app.id)?);
+    // Its managed Postgres (databases.rs): name, size and backups, never the password.
+    if let Some(d) = crate::databases::view(conn, cfg, &app.id)? {
+        m.insert("database".into(), d);
+    }
     // What the app lets this workspace customise (its brod.json), and the values set on it.
     m.insert("settings".into(), crate::settings::for_app(conn, &app)?);
     // Where the app may send data (its brod.json), and what it reached without declaring.
     m.insert("network".into(), crate::network::for_app(conn, cfg, &app)?);
     m.insert("domains".into(), crate::domains::app_domains(conn, cfg, &app)?);
+    // Paths anyone may reach without signing in, and the ones waiting for a person to approve them.
+    m.insert("open_paths".into(), open_paths_of(conn, cfg, &app)?);
     // Who else got its files or deployed it lately: a warning to pass on, never a lock.
     m.extend(editing_notice(conn, c, &app)?);
     Ok(m)
@@ -524,6 +546,9 @@ pub fn set_secret(conn: &Connection, cfg: &Config, c: &Caller, slug: &str, name:
     let app = get_app(conn, c, slug)?;
     let clean = js_trim(name).to_string();
     secrets::check_name(&clean)?;
+    if clean == crate::databases::SECRET && crate::databases::manages_url(conn, &app.id)? {
+        return Err(crate::databases::managed_url_problem());
+    }
     tx(conn, |x| {
         match value {
             None => secrets::delete(x, &app.id, &clean)?,
@@ -657,16 +682,17 @@ fn new_slug(conn: &Connection, c: &Caller, name: &str) -> Result<String> {
     Ok(format!("{base}-{}", random_id("", 4)))
 }
 
-fn check_rate(conn: &Connection, c: &Caller) -> Result<()> {
+/// Refuse a deploy once the workspace has deployed `per_hour` times in the last hour (rate.deploys_per_hour).
+pub(crate) fn check_rate(conn: &Connection, c: &Caller, per_hour: i64) -> Result<()> {
     let n = conn.count(
         "SELECT COUNT(*) AS n FROM events WHERE workspace_id = ? AND action = 'deploy' AND at > ?",
         params![c.workspace.id, now() - 3_600_000],
     )?;
-    if n >= limits::DEPLOYS_PER_HOUR {
+    if n >= per_hour {
         return Err(Problem::new(
             429,
             "rate_limited",
-            format!("This workspace has deployed {} times in the last hour. Wait a little and try again.", limits::DEPLOYS_PER_HOUR),
+            format!("This workspace has deployed {per_hour} times in the last hour. Wait a little and try again."),
         ));
     }
     Ok(())
@@ -675,7 +701,7 @@ fn check_rate(conn: &Connection, c: &Caller) -> Result<()> {
 fn plan_full(conn: &Connection, cfg: &Config, c: &Caller, verb: &str) -> Result<()> {
     let running =
         conn.all("SELECT slug FROM apps WHERE workspace_id = ? AND status = 'live'", [&c.workspace.id], |r| r.get::<_, String>(0))?;
-    let limit = plan(&c.workspace).apps;
+    let limit = crate::allowances::effective(conn, cfg, &c.workspace)?.apps;
     if running.len() as i64 >= limit {
         return Err(Problem::new(
             402,
@@ -703,6 +729,8 @@ pub struct DeployTarget {
     pub environment: Option<String>,
     /// The version the deploy's files started from, as given; see `base`.
     pub base_version: Option<Value>,
+    /// Container settings given with the deploy ("runtime", "port", "health", "cpu", "memory_mb"; containers.rs).
+    pub options: Option<Map<String, Value>>,
 }
 
 impl DeployTarget {
@@ -714,10 +742,11 @@ impl DeployTarget {
             note: s("note"),
             environment: s("environment"),
             base_version: present(o, "base_version").cloned(),
+            options: crate::containers::options_from(o),
         }
     }
     /// "base_version": the version a deploy's files started from. Only for an existing app.
-    fn base(&self) -> Result<Option<i64>> {
+    pub(crate) fn base(&self) -> Result<Option<i64>> {
         let n = match &self.base_version {
             None | Some(Value::Null) => return Ok(None),
             Some(Value::String(v)) if v.is_empty() => return Ok(None),
@@ -738,14 +767,14 @@ impl DeployTarget {
         Ok(Some(n as i64))
     }
     /// Refuse an environment Brod does not know, before anything is uploaded.
-    fn check_environment(&self) -> Result<()> {
+    pub(crate) fn check_environment(&self) -> Result<()> {
         match self.environment.as_deref().map(|e| js_trim(e).to_lowercase()) {
             None => Ok(()),
             Some(e) if matches!(e.as_str(), "" | "staging" | "production" | "live") => Ok(()),
             Some(_) => Err(Problem::new(400, "bad_environment", "\"environment\" is \"staging\" or \"production\".")),
         }
     }
-    fn app_slug(&self) -> Option<&str> {
+    pub(crate) fn app_slug(&self) -> Option<&str> {
         self.app.as_deref().filter(|a| !a.is_empty())
     }
 }
@@ -753,7 +782,7 @@ impl DeployTarget {
 /// Whether a deploy goes to staging instead of live. An agent updating an app that already has a live version deploys
 /// to staging unless it asks for production, so the person can try the change before visitors see it. A person, and
 /// any first version, goes live unless staging is asked for.
-fn deploy_to_staging(c: &Caller, app: &AppRow, created: bool, o: &DeployTarget) -> bool {
+pub(crate) fn deploy_to_staging(c: &Caller, app: &AppRow, created: bool, o: &DeployTarget) -> bool {
     match o.environment.as_deref().map(|e| js_trim(e).to_lowercase()).as_deref() {
         Some("staging") => true,
         Some("production") | Some("live") => false,
@@ -770,7 +799,7 @@ pub fn current_version(app: &AppRow) -> Option<i64> {
  * The refusal for a deploy whose files started from an older version than the app's current one: deploying them would
  * silently undo what someone else deployed since. It names who changed what, so the agent can tell the person.
  */
-fn stale_base(conn: &Connection, app_id: &str, base: i64) -> Result<Problem> {
+pub(crate) fn stale_base(conn: &Connection, app_id: &str, base: i64) -> Result<Problem> {
     let Some(app) = conn.first("SELECT * FROM apps WHERE id = ?", [app_id], AppRow::from_row)? else {
         return Ok(Problem::new(404, "not_found", "The app was deleted during the deploy."));
     };
@@ -810,7 +839,7 @@ fn stale_base(conn: &Connection, app_id: &str, base: i64) -> Result<Problem> {
 }
 
 /// Resolve which app a deploy targets, creating it (inside the plan allowance) when it is new.
-fn target_app(conn: &Connection, cfg: &Config, c: &Caller, o: &DeployTarget) -> Result<(AppRow, bool)> {
+pub(crate) fn target_app(conn: &Connection, cfg: &Config, c: &Caller, o: &DeployTarget) -> Result<(AppRow, bool)> {
     if let Some(slug) = o.app_slug() {
         return Ok((get_app(conn, c, slug)?, false));
     }
@@ -848,13 +877,16 @@ fn target_app(conn: &Connection, cfg: &Config, c: &Caller, o: &DeployTarget) -> 
     Ok((app, true))
 }
 
-pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFile>) -> Result<Value> {
+/// The checks every deploy starts with, whatever it carries: the caller may deploy, is within the hourly limit, the app
+/// (when there is one) is not taken down, and the environment is valid.
+pub(crate) async fn preflight(st: &State, c: &Caller, o: &DeployTarget) -> Result<()> {
     {
         let (c, o) = (c.clone(), o.clone());
+        let per_hour = crate::instance::current(st).await.int("rate.deploys_per_hour");
         st.db
             .call(move |conn| {
                 require_role(&c, "builder", "deploy apps")?;
-                check_rate(conn, &c)?;
+                check_rate(conn, &c, per_hour)?;
                 abuse::check_workspace_up(conn, &c)?;
                 match o.app_slug() {
                     Some(slug) => abuse::check_up(conn, &get_app(conn, &c, slug)?),
@@ -863,31 +895,55 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFi
             })
             .await?;
     }
-    o.check_environment()?;
+    o.check_environment()
+}
+
+pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFile>) -> Result<Value> {
+    preflight(st, c, &o).await?;
+    // A Dockerfile at the top makes the bundle a container app's source (containers.rs, deployments.rs).
+    if let Some(archive) = crate::containers::archive_of(&files) {
+        return crate::deployments::deploy(st, c, o, archive).await;
+    }
+    if crate::containers::wants_container(o.options.as_ref()) {
+        return Err(Problem::new(400, "bad_container", "\"runtime\": \"container\" needs a Dockerfile at the top of the bundle."));
+    }
+    deploy_files(st, c, o, files).await
+}
+
+/// Deploy a static or server bundle: validate and scan it, store it content-addressed (versions.rs) and move the
+/// pointers. A full upload and a patch (patch.rs) both end here, so they pass the same checks.
+pub(crate) async fn deploy_files(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFile>) -> Result<Value> {
     let base = o.base()?;
     let files = normalise(files)?;
     let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
     let server = runtime::find_server(&paths)?;
     let settings = crate::settings::from_bundle(&files)?;
     let network = crate::network::from_bundle(&files)?;
+    let declared_open = crate::open_paths::from_bundle(&files)?;
     if let Some(s) = &server {
         runtime::check_server(st, s, &files).await?;
     }
     let bytes: usize = files.iter().map(|f| f.bytes.len()).sum();
     // The phishing check (BROD_ABUSE_CHECKS): a flagged version still deploys, but its app stays private or people-only
     // and the operator gets a report.
-    let checks = st.cfg.abuse_checks;
-    let (files, scan) = tokio::task::spawn_blocking(move || {
+    let checks = st.settings.last().flag("features.abuse_checks");
+    let (prepared, scan) = tokio::task::spawn_blocking(move || {
         let scan = if checks { crate::scan::scan_bundle(&files) } else { crate::scan::Scan::default() };
-        (files, scan)
+        (versions::prepare(files), scan)
     })
     .await
     .map_err(Problem::internal)?;
-    let (app, created, n) = {
-        let (c, o, cfg) = (c.clone(), o.clone(), st.cfg.clone());
+    let entries: Vec<versions::Entry> = prepared.iter().map(|(e, _)| e.clone()).collect();
+    let (app, created, n, parent) = {
+        let (c, o, cfg, entries) = (c.clone(), o.clone(), st.cfg.clone(), entries.clone());
         st.db
             .call(move |conn| {
-                crate::usage::check_storage(conn, &cfg, &c.workspace, bytes as i64)?;
+                // Storage counts each distinct content once per app, so only contents the app does not hold yet are added.
+                let adding = match o.app_slug() {
+                    Some(slug) => versions::new_bytes(conn, &get_app(conn, &c, slug)?.id, &entries)?,
+                    None => versions::new_bytes(conn, "", &entries)?,
+                };
+                crate::usage::check_storage(conn, &cfg, &c.workspace, adding)?;
                 let (app, created) = target_app(conn, &cfg, &c, &o)?;
                 // Refuse before uploading when someone else already deployed past the base; checked again when the pointer moves.
                 if let Some(b) = base
@@ -903,35 +959,33 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFi
                         |r| r.get(0),
                     )?
                     .ok_or_else(|| Problem::new(404, "not_found", "The app was deleted during the deploy."))?;
-                Ok((app, created, n))
+                // The version this one follows: the one it was based on, else whatever was current.
+                let parent = base.or_else(|| current_version(&app));
+                Ok((app, created, n, parent))
             })
             .await?
     };
     let staging = deploy_to_staging(c, &app, created, &o);
     let note = js_slice(js_trim(o.note.as_deref().unwrap_or("")), 200);
     let note = if note.is_empty() { if created { "First version".to_string() } else { "Update".to_string() } } else { note };
-    // Files are written under a new version prefix first; visitors only see them once the pointer moves.
-    let count = files.len();
-    let mut pending = files.into_iter();
-    loop {
-        let chunk: Vec<BundleFile> = pending.by_ref().take(20).collect();
-        if chunk.is_empty() {
-            break;
-        }
-        futures_util::future::try_join_all(chunk.into_iter().map(|f| {
-            let key = format!("{}/{n}/{}", app.id, f.path);
-            let ct = content_type(&f.path);
-            let store = st.store.clone();
-            async move { store.put(&key, Bytes::from(f.bytes), Some(ct)).await }
-        }))
-        .await?;
-    }
+    // Blobs are stored first (only the ones the store lacks); visitors see them only once the manifest and the pointer
+    // move, and a refused version leaves its blobs for the next garbage collection.
+    let count = entries.len();
+    versions::store_blobs(st, &prepared).await?;
+    drop(prepared);
+    let manifest = versions::Manifest {
+        app_id: app.id.clone(),
+        version: n,
+        parent,
+        author: Some(c.user.id.clone()),
+        note: note.clone(),
+        created_at: now(),
+        entries,
+    };
     let (c2, cfg) = (c.clone(), st.cfg.clone());
     let server_json = server.as_ref().map(|s| s.to_json());
     let kind = if server.is_some() { "server" } else { "static" };
-    let prefix = format!("{}/{n}/", app.id);
-    let out = st
-        .db
+    st.db
         .call(move |conn| {
             let mut app = app;
             tx(conn, |x| {
@@ -951,7 +1005,7 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFi
                     }
                 }
                 x.run(
-                    "INSERT INTO versions (app_id, n, note, actor, file_count, bytes, created_at, server, scan, settings, network, based_on) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO versions (app_id, n, note, actor, file_count, bytes, created_at, server, scan, settings, network, based_on, open_paths) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     params![
                         app.id,
                         n,
@@ -964,9 +1018,11 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFi
                         serde_json::to_string(&scan.reasons)?,
                         settings,
                         network,
-                        base
+                        base,
+                        declared_open
                     ],
                 )?;
+                versions::insert_manifest(x, &manifest)?;
                 let from = base.map(|b| format!(" (from v{b})")).unwrap_or_default();
                 if staging {
                     x.run("UPDATE apps SET staging_version = ? WHERE id = ?", params![n, app.id])?;
@@ -1003,6 +1059,8 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFi
                 }
             }
             mark_editing(conn, &c2, &app.id, Some(n))?;
+            crate::git_mirror::poke(&app.id);
+            let open = deployed_open_paths(conn, &cfg, &c2, &app, n)?;
             let mut m = described(conn, &cfg, &c2, &app)?;
             m.insert("version".into(), json!(n));
             m.insert("based_on".into(), json!(base));
@@ -1012,6 +1070,12 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFi
             m.insert("bytes".into(), json!(bytes));
             m.insert("created".into(), json!(created));
             m.insert("kind".into(), json!(kind));
+            if let Some(open) = open {
+                if let Some(url) = open.get("confirm_url") {
+                    m.insert("confirm_url".into(), url.clone());
+                }
+                m.insert("open_paths".into(), open);
+            }
             if staging {
                 let url = staging_url(&cfg, &c2.workspace.slug, &app.slug);
                 m.insert("staging_url".into(), json!(url));
@@ -1026,12 +1090,7 @@ pub async fn deploy(st: &State, c: &Caller, o: DeployTarget, files: Vec<BundleFi
             }
             Ok(Value::Object(m))
         })
-        .await;
-    // A refused version never went anywhere: its files go too.
-    if out.is_err() {
-        st.store.delete_prefix(&prefix).await?;
-    }
-    out
+        .await
 }
 
 // ---------- working together ----------
@@ -1044,7 +1103,7 @@ const INLINE_FILES: i64 = 200;
  * older copy, then deploy with base_version. Small versions come inline; larger ones as a short-lived tar.gz address.
  * Getting the files counts as working on the app, so others are told (see others_editing).
  */
-pub async fn get_files(st: &State, c: &Caller, slug: &str, version: Option<Value>) -> Result<Value> {
+pub async fn get_files(st: &State, c: &Caller, slug: &str, version: Option<Value>, since: Option<Value>) -> Result<Value> {
     let (c2, slug2) = (c.clone(), slug.to_string());
     let (mut out, app_id, n, inline) = st
         .db
@@ -1100,16 +1159,21 @@ pub async fn get_files(st: &State, c: &Caller, slug: &str, version: Option<Value
         "Make your changes there, then call deploy_app with \"app\": \"{slug}\" and \"base_version\": {n}, so a change someone else deploys meanwhile is never undone. \
          These are the files as deployed (the built output): if the app was built from source with a build step, change the source if you have it rather than these."
     );
+    if let Some(since) = since.filter(|v| !matches!(v, Value::Null) && !matches!(v, Value::String(s) if s.is_empty())) {
+        return files_since(st, out, &app_id, n, &since, &slug, &then).await;
+    }
     if inline {
-        let mut files = read_tree(st, &format!("{app_id}/{n}/")).await?;
-        files.sort_by(|a, b| a.path.cmp(&b.path));
-        let files: Vec<Value> = files
-            .into_iter()
-            .map(|f| match String::from_utf8(f.bytes) {
-                Ok(text) => json!({ "path": f.path, "content": text }),
-                Err(e) => json!({ "path": f.path, "content": base64::engine::general_purpose::STANDARD.encode(e.into_bytes()), "encoding": "base64" }),
-            })
-            .collect();
+        let files = match versions::manifest(st, &app_id, n).await? {
+            Some(m) => {
+                let blobs = versions::read_files(st, &app_id, n).await?;
+                blobs.into_iter().zip(m.entries.iter()).map(|(f, e)| file_json(f, e)).collect::<Vec<_>>()
+            }
+            None => {
+                let mut files = read_tree(st, &format!("{app_id}/{n}/")).await?;
+                files.sort_by(|a, b| a.path.cmp(&b.path));
+                files.into_iter().map(file_json_plain).collect()
+            }
+        };
         out.insert("files".into(), Value::Array(files));
         out.insert(
             "next_step".into(),
@@ -1140,16 +1204,116 @@ pub async fn get_files(st: &State, c: &Caller, slug: &str, version: Option<Value
     Ok(Value::Object(out))
 }
 
+fn with_content(mut m: Map<String, Value>, bytes: Vec<u8>) -> Value {
+    match String::from_utf8(bytes) {
+        Ok(text) => {
+            m.insert("content".into(), json!(text));
+        }
+        Err(e) => {
+            m.insert("content".into(), json!(base64::engine::general_purpose::STANDARD.encode(e.into_bytes())));
+            m.insert("encoding".into(), json!("base64"));
+        }
+    }
+    Value::Object(m)
+}
+
+/// A file as get_files lists it. `sha256` is what deploy_app's patch mode accepts in place of content.
+fn file_json(f: BundleFile, e: &versions::Entry) -> Value {
+    let mut m = Map::new();
+    m.insert("path".into(), json!(f.path));
+    m.insert("sha256".into(), json!(e.sha256));
+    m.insert("size".into(), json!(e.size));
+    with_content(m, f.bytes)
+}
+
+fn file_json_plain(f: BundleFile) -> Value {
+    let mut m = Map::new();
+    m.insert("path".into(), json!(f.path));
+    with_content(m, f.bytes)
+}
+
+/// get_files with `since`: what changed from that version to this one, instead of everything.
+async fn files_since(
+    st: &State,
+    mut out: Map<String, Value>,
+    app_id: &str,
+    n: i64,
+    since: &Value,
+    slug: &str,
+    then: &str,
+) -> Result<Value> {
+    let from = match since {
+        Value::Number(x) => x.as_f64(),
+        Value::String(x) => js_trim(x).parse::<f64>().ok(),
+        _ => None,
+    }
+    .filter(|f| f.fract() == 0.0 && f.abs() < 9e15)
+    .map(|f| f as i64);
+    let missing = || {
+        Problem::new(
+            404,
+            "no_version",
+            format!("{slug} has no version {} to compare with. Use get_status to see its versions.", js_string(since)),
+        )
+    };
+    let from = from.ok_or_else(missing)?;
+    let (Some(a), Some(b)) = (versions::manifest(st, app_id, from).await?, versions::manifest(st, app_id, n).await?) else {
+        return Err(missing());
+    };
+    let changes = versions::changes(&a, &b);
+    let size: i64 = changes.iter().filter_map(|c| c.to.map(|e| e.size)).sum();
+    let inline = size <= limits::INLINE_BYTES as i64 && changes.len() as i64 <= INLINE_FILES;
+    out.insert("since".into(), json!(from));
+    out.insert("unchanged".into(), json!(b.entries.len() - changes.iter().filter(|c| c.to.is_some()).count()));
+    out.insert("deleted".into(), Value::Array(changes.iter().filter(|c| c.status == "deleted").map(|c| json!(c.path)).collect()));
+    let mut files = Vec::new();
+    for c in changes.iter().filter(|c| c.to.is_some()) {
+        let e = c.to.expect("filtered to changes with a new side");
+        let mut m = Map::new();
+        m.insert("path".into(), json!(c.path));
+        m.insert("status".into(), json!(c.status));
+        m.insert("sha256".into(), json!(e.sha256));
+        m.insert("size".into(), json!(e.size));
+        files.push(if inline { with_content(m, versions::read_blob(st, &e.sha256, FILE_BYTES).await?) } else { Value::Object(m) });
+    }
+    out.insert("files".into(), Value::Array(files));
+    out.insert("content_included".into(), json!(inline));
+    let how = if inline {
+        "Apply these to your copy of the files: write the listed files, delete the \"deleted\" paths."
+    } else {
+        "The changes are too large to include inline: get_files without \"since\" for the full set, or fetch only what you need."
+    };
+    out.insert("next_step".into(), json!(format!("{how} {then}")));
+    Ok(Value::Object(out))
+}
+
 /// A download address: the version's files as a tar.gz, and a file name for it. The address is its own credential and
 /// works until it expires.
-pub async fn download(st: &State, id: &str) -> Result<(String, Vec<u8>)> {
+pub async fn download(st: &State, id: &str) -> Result<(String, Vec<u8>, &'static str)> {
+    // A git bundle of the app (export_app): the whole history, built when it is fetched.
+    let id1 = id.to_string();
+    let bundle = st
+        .db
+        .call(move |conn| {
+            conn.first(
+                "SELECT a.* FROM downloads d JOIN apps a ON a.id = d.app_id WHERE d.id = ? AND d.kind = 'bundle' AND d.expires_at >= ?",
+                params![id1, now()],
+                AppRow::from_row,
+            )
+        })
+        .await?;
+    if let Some(app) = bundle {
+        let plan = crate::git_export::plan_app(st, app).await?;
+        let body = plan.bundle(st).await?;
+        return Ok((format!("{}.bundle", plan.slug), body, "application/x-git-bundle"));
+    }
     let id2 = id.to_string();
     let found = st
         .db
         .call(move |conn| {
             conn.first(
                 "SELECT d.app_id, d.version, d.expires_at, a.slug, v.created_at FROM downloads d JOIN apps a ON a.id = d.app_id \
-                 JOIN versions v ON v.app_id = d.app_id AND v.n = d.version WHERE d.id = ?",
+                 JOIN versions v ON v.app_id = d.app_id AND v.n = d.version WHERE d.id = ? AND d.kind = 'tar'",
                 [&id2],
                 |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?, r.get::<_, i64>(4)?)),
             )
@@ -1158,14 +1322,13 @@ pub async fn download(st: &State, id: &str) -> Result<(String, Vec<u8>)> {
     let Some((app_id, n, _, slug, created_at)) = found.filter(|d| d.2 >= now()) else {
         return Err(Problem::new(410, "download_gone", "This download address has expired. Call get_files again for a new one."));
     };
-    let mut files = read_tree(st, &format!("{app_id}/{n}/")).await?;
-    files.sort_by(|a, b| a.path.cmp(&b.path));
+    let files = versions::read_files(st, &app_id, n).await?;
     let body = tokio::task::spawn_blocking(move || crate::tar::pack(&files, created_at)).await.map_err(Problem::internal)?;
-    Ok((format!("{slug}-v{n}.tar.gz"), body))
+    Ok((format!("{slug}-v{n}.tar.gz"), body, "application/gzip"))
 }
 
 /// Note that this person is working on the app (getting its files or deploying it). Others are told, never blocked.
-fn mark_editing(conn: &Connection, c: &Caller, app_id: &str, base: Option<i64>) -> Result<()> {
+pub(crate) fn mark_editing(conn: &Connection, c: &Caller, app_id: &str, base: Option<i64>) -> Result<()> {
     let t = now();
     conn.run(
         "INSERT INTO editing (app_id, user_id, email, actor, base_version, since, last_at) VALUES (?,?,?,?,?,?,?) \
@@ -1249,7 +1412,7 @@ pub fn create_upload(conn: &Connection, cfg: &Config, c: &Caller, o: &DeployTarg
     }
     let id = random_id("up_", 20);
     conn.run(
-        "INSERT INTO uploads (id, workspace_id, user_id, actor, app_slug, name, note, expires_at, environment, base_version) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO uploads (id, workspace_id, user_id, actor, app_slug, name, note, expires_at, environment, base_version, options) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         params![
             id,
             c.workspace.id,
@@ -1260,7 +1423,8 @@ pub fn create_upload(conn: &Connection, cfg: &Config, c: &Caller, o: &DeployTarg
             o.note.clone().unwrap_or_default(),
             now() + limits::UPLOAD_TTL_MS,
             o.environment,
-            base
+            base,
+            o.options.as_ref().map(|m| Value::Object(m.clone()).to_string())
         ],
     )?;
     let upload_url = format!("{}/v1/uploads/{id}", cfg.api_origin);
@@ -1283,6 +1447,7 @@ pub fn claim_upload(conn: &Connection, id: &str) -> Result<(Caller, DeployTarget
         used_at: Option<i64>,
         environment: Option<String>,
         base_version: Option<i64>,
+        options: Option<String>,
     }
     let u = conn.first("SELECT * FROM uploads WHERE id = ?", [id], |r| {
         Ok(Up {
@@ -1296,6 +1461,7 @@ pub fn claim_upload(conn: &Connection, id: &str) -> Result<(Caller, DeployTarget
             used_at: r.get("used_at")?,
             environment: r.get("environment")?,
             base_version: r.get("base_version")?,
+            options: r.get("options")?,
         })
     })?;
     let u = match u {
@@ -1323,7 +1489,8 @@ pub fn claim_upload(conn: &Connection, id: &str) -> Result<(Caller, DeployTarget
     }
     let caller = Caller { workspace, user, role, actor: u.actor, agent: true, read_only: false };
     let base_version = u.base_version.map(|b| json!(b));
-    Ok((caller, DeployTarget { app: u.app_slug, name: u.name, note: Some(u.note), environment: u.environment, base_version }))
+    let options = u.options.and_then(|o| serde_json::from_str::<Map<String, Value>>(&o).ok());
+    Ok((caller, DeployTarget { app: u.app_slug, name: u.name, note: Some(u.note), environment: u.environment, base_version, options }))
 }
 
 pub fn release_upload(conn: &Connection, id: &str) -> Result<()> {
@@ -1333,8 +1500,25 @@ pub fn release_upload(conn: &Connection, id: &str) -> Result<()> {
 
 // ---------- confirmations ----------
 
+/// What an agent may not do on its own: each of these, asked for with an agent's token, changes nothing and returns a
+/// confirm_url for a person to open (needs_confirmation). A person signed in to Brod makes the same change directly.
+/// The other direction never waits: narrowing access, removing grants or open paths applies at once. The key is the
+/// confirmation's kind. docs/security.md and docs/mcp.md ("What needs a person") list the same.
+pub const NEEDS_A_PERSON: [(&str, &str); 5] = [
+    ("access", "widening who can open an app: a more open access mode, new grants, or a new password (set_access)"),
+    ("invite", "inviting someone into the workspace or to an app (invite)"),
+    ("delete", "deleting an app with all its versions and data (delete_app)"),
+    ("open_paths", "opening paths of an app to anyone without sign-in (open_paths in brod.json on deploy_app, set_open_paths)"),
+    ("restore_database", "replacing an app's managed database with a backup (restore_database)"),
+];
+
+/// Whether this caller must get a person to confirm an action of this kind.
+pub fn needs_a_person(c: &Caller, kind: &str) -> bool {
+    c.agent && NEEDS_A_PERSON.iter().any(|(k, _)| *k == kind)
+}
+
 /// An agent asked for a change a person must confirm. Nothing changes until they do.
-fn needs_confirmation(
+pub(crate) fn needs_confirmation(
     conn: &Connection,
     cfg: &Config,
     c: &Caller,
@@ -1343,6 +1527,9 @@ fn needs_confirmation(
     payload: &Value,
     summary: &str,
 ) -> Result<Value> {
+    if !NEEDS_A_PERSON.iter().any(|(k, _)| *k == kind) {
+        return Err(Problem::internal(format!("a confirmation of a kind the policy does not list: {kind}")));
+    }
     let id = random_id("cf_", 16);
     let app_id = app.map(|a| a.id.clone());
     tx(conn, |x| {
@@ -1434,6 +1621,15 @@ pub async fn confirm(st: &State, user: &User, id: &str) -> Result<Value> {
         }
         "invite" => invite(st, &c, payload).await,
         "delete" => delete_app(st, &c, &slug).await,
+        "restore_database" => {
+            let backup = payload.get("backup").and_then(|v| v.as_str()).map(String::from);
+            crate::backups::restore(st, &c, &slug, backup.as_deref()).await
+        }
+        "open_paths" => {
+            let (c, cfg) = (c.clone(), st.cfg.clone());
+            let add = payload.get("add").cloned().unwrap_or(json!([]));
+            st.db.call(move |conn| approve_open_paths(conn, &cfg, &c, &slug, &add)).await
+        }
         _ => return Err(Problem::new(400, "bad_confirmation", "Unknown request.")),
     };
     if result.is_err() {
@@ -1442,6 +1638,153 @@ pub async fn confirm(st: &State, user: &User, id: &str) -> Result<Value> {
         st.db.call(move |conn| conn.run("UPDATE confirmations SET done_at = NULL, done_by = NULL WHERE id = ?", [id]).map(|_| ())).await?;
     }
     result
+}
+
+// ---------- open paths ----------
+
+fn approved_open_paths(conn: &Connection, app_id: &str) -> Result<Vec<crate::open_paths::OpenPath>> {
+    let stored: Option<String> = conn.first("SELECT open_paths FROM apps WHERE id = ?", [app_id], |r| r.get(0))?;
+    Ok(crate::open_paths::parse(stored.as_deref()))
+}
+
+fn declared_open_paths(conn: &Connection, app_id: &str, n: i64) -> Result<Vec<crate::open_paths::OpenPath>> {
+    let stored: Option<String> =
+        conn.first("SELECT open_paths FROM versions WHERE app_id = ? AND n = ?", params![app_id, n], |r| r.get(0))?.flatten();
+    Ok(crate::open_paths::parse(stored.as_deref()))
+}
+
+fn path_list(list: &[crate::open_paths::OpenPath]) -> Value {
+    Value::Array(list.iter().map(crate::open_paths::OpenPath::to_json).collect())
+}
+
+fn labels(list: &[crate::open_paths::OpenPath]) -> String {
+    list.iter().map(|e| e.label()).collect::<Vec<_>>().join(", ")
+}
+
+/// Refuse opening paths of an app to anyone where opening the app itself to anyone would be refused.
+fn check_may_open(conn: &Connection, cfg: &Config, c: &Caller, app: &AppRow) -> Result<()> {
+    abuse::check_up(conn, app)?;
+    if crate::instance::Settings::load(conn, cfg)?.flag("features.abuse_checks") {
+        abuse::check_can_open_outside(conn, c, "public")?;
+    }
+    abuse::check_not_flagged(conn, app, "public")
+}
+
+/// Add approved open paths: what a person confirmed, or what a person asked for directly.
+fn approve_open_paths(conn: &Connection, cfg: &Config, c: &Caller, slug: &str, add: &Value) -> Result<Value> {
+    require_role(c, "builder", "change an app's open paths")?;
+    let app = get_app(conn, c, slug)?;
+    let add = crate::open_paths::parse_list(add, "\"open_paths\"")?;
+    let approved = approved_open_paths(conn, &app.id)?;
+    let new = crate::open_paths::uncovered(&approved, &add);
+    if !new.is_empty() {
+        check_may_open(conn, cfg, c, &app)?;
+        let all = crate::open_paths::union(&approved, &new)?;
+        tx(conn, |x| {
+            x.run("UPDATE apps SET open_paths = ? WHERE id = ?", params![crate::open_paths::to_json(&all), app.id])?;
+            event(x, &c.workspace.id, &c.actor, Some(&app.id), "open_paths", &format!("opened {} without sign-in", labels(&new)))
+        })?;
+    }
+    Ok(json!({ "app": app.slug, "open_paths": open_paths_of(conn, cfg, &app)? }))
+}
+
+/// After a deploy: approve the new version's undeclared-before open paths when a person deployed it, or ask a person
+/// to when an agent did. None when the version declares no open paths and the app has none approved.
+pub(crate) fn deployed_open_paths(conn: &Connection, cfg: &Config, c: &Caller, app: &AppRow, n: i64) -> Result<Option<Value>> {
+    let declared = declared_open_paths(conn, &app.id, n)?;
+    let approved = approved_open_paths(conn, &app.id)?;
+    if declared.is_empty() && approved.is_empty() {
+        return Ok(None);
+    }
+    let pending = crate::open_paths::uncovered(&approved, &declared);
+    if pending.is_empty() {
+        let open = crate::open_paths::effective(&approved, &declared);
+        return Ok(Some(json!({ "declared": path_list(&declared), "open": path_list(&open), "approved": path_list(&approved) })));
+    }
+    if !needs_a_person(c, "open_paths") {
+        // A person deploying approves what their own version declares, unless the app may not be opened that far.
+        let approved = match approve_open_paths(conn, cfg, c, &app.slug, &path_list(&pending)) {
+            Ok(_) => approved_open_paths(conn, &app.id)?,
+            Err(e) if !e.is_internal() => {
+                let open = crate::open_paths::effective(&approved, &declared);
+                return Ok(Some(json!({
+                    "declared": path_list(&declared), "open": path_list(&open), "approved": path_list(&approved), "pending": path_list(&pending),
+                    "message": format!("{} stay closed: {}", labels(&pending), e.message),
+                })));
+            }
+            Err(e) => return Err(e),
+        };
+        let open = crate::open_paths::effective(&approved, &declared);
+        return Ok(Some(json!({ "declared": path_list(&declared), "open": path_list(&open), "approved": path_list(&approved) })));
+    }
+    let summary = format!("Open {} on {} to anyone, without sign-in", labels(&pending), app.slug);
+    let asked = needs_confirmation(conn, cfg, c, Some(app), "open_paths", &json!({ "add": path_list(&pending) }), &summary)?;
+    let open = crate::open_paths::effective(&approved, &declared);
+    Ok(Some(json!({
+        "declared": path_list(&declared), "open": path_list(&open), "approved": path_list(&approved), "pending": path_list(&pending),
+        "needs_confirmation": true, "confirm_url": asked["confirm_url"],
+        "message": format!(
+            "v{n} is deployed, but its new open paths ({}) stay closed until the owner confirms: give them confirm_url. Until then those paths ask visitors to sign in like the rest of the app. It expires in 24 hours.",
+            labels(&pending)
+        ),
+    })))
+}
+
+/// An app's open paths for get_status: what is approved, what the live and staging versions declare and actually open,
+/// and the requests waiting for a person.
+pub fn open_paths_of(conn: &Connection, cfg: &Config, app: &AppRow) -> Result<Value> {
+    let approved = approved_open_paths(conn, &app.id)?;
+    let version = |n: Option<i64>| -> Result<Value> {
+        let Some(n) = n else { return Ok(Value::Null) };
+        let declared = declared_open_paths(conn, &app.id, n)?;
+        let open = crate::open_paths::effective(&approved, &declared);
+        let pending = crate::open_paths::uncovered(&approved, &declared);
+        Ok(json!({ "version": n, "declared": path_list(&declared), "open": path_list(&open), "not_approved": path_list(&pending) }))
+    };
+    let waiting = conn.all(
+        "SELECT id, payload, expires_at FROM confirmations WHERE app_id = ? AND kind = 'open_paths' AND done_at IS NULL AND expires_at > ? ORDER BY created_at",
+        params![app.id, now()],
+        |r| {
+            let payload: Value = serde_json::from_str(&r.get::<_, String>(1)?).unwrap_or(Value::Null);
+            Ok(json!({ "paths": payload["add"], "confirm_url": format!("{}/confirm/{}", cfg.api_origin, r.get::<_, String>(0)?), "expires_at": iso(r.get(2)?) }))
+        },
+    )?;
+    Ok(json!({
+        "approved": path_list(&approved),
+        "live": version(app.live_version)?,
+        "staging": version(app.staging_version)?,
+        "awaiting_confirmation": waiting,
+    }))
+}
+
+/// Set an app's approved open paths to `list`. Narrowing (dropping entries, or a narrower path or fewer methods) applies
+/// at once; whatever it would newly open waits for a person when an agent asks (NEEDS_A_PERSON).
+pub fn set_open_paths(conn: &Connection, cfg: &Config, c: &Caller, slug: &str, list: &Value) -> Result<Value> {
+    require_role(c, "builder", "change an app's open paths")?;
+    let app = get_app(conn, c, slug)?;
+    let wanted = crate::open_paths::parse_list(list, "\"open_paths\"")?;
+    let approved = approved_open_paths(conn, &app.id)?;
+    let (kept, added): (Vec<_>, Vec<_>) = wanted.into_iter().partition(|w| approved.iter().any(|a| a.covers(w)));
+    if kept != approved {
+        let closed: Vec<_> = approved.iter().filter(|a| !kept.contains(a)).cloned().collect();
+        tx(conn, |x| {
+            x.run("UPDATE apps SET open_paths = ? WHERE id = ?", params![crate::open_paths::to_json(&kept), app.id])?;
+            let what = if closed.is_empty() { "narrowed open paths".to_string() } else { format!("closed {}", labels(&closed)) };
+            event(x, &c.workspace.id, &c.actor, Some(&app.id), "open_paths", &what)
+        })?;
+    }
+    if added.is_empty() {
+        return Ok(json!({ "app": app.slug, "open_paths": open_paths_of(conn, cfg, &app)? }));
+    }
+    if needs_a_person(c, "open_paths") {
+        check_may_open(conn, cfg, c, &app)?;
+        crate::open_paths::union(&kept, &added)?;
+        let summary = format!("Open {} on {} to anyone, without sign-in", labels(&added), app.slug);
+        let mut out = needs_confirmation(conn, cfg, c, Some(&app), "open_paths", &json!({ "add": path_list(&added) }), &summary)?;
+        out["open_paths"] = open_paths_of(conn, cfg, &app)?;
+        return Ok(out);
+    }
+    approve_open_paths(conn, cfg, c, &app.slug, &path_list(&added))
 }
 
 // ---------- changing an app ----------
@@ -1467,18 +1810,31 @@ pub async fn delete_version(st: &State, c: &Caller, slug: &str, n: i64) -> Resul
             Ok(app)
         })
         .await?;
+    // A version not converted to a manifest yet still has its own objects; the blobs of a converted one go with `gc`.
     st.store.delete_prefix(&format!("{}/{n}/", app.id)).await?;
     let (c3, app_id) = (c.clone(), app.id.clone());
-    st.db
+    let out = st
+        .db
         .call(move |conn| {
             tx(conn, |x| {
                 let bytes = x.count("SELECT bytes FROM versions WHERE app_id = ? AND n = ?", params![app_id, n])?;
                 x.run("DELETE FROM versions WHERE app_id = ? AND n = ?", params![app_id, n])?;
+                versions::delete_manifest(x, &app_id, n)?;
                 event(x, &c3.workspace.id, &c3.actor, Some(&app_id), "version_deleted", &format!("v{n} ({})", crate::usage::mb(bytes)))?;
                 Ok(json!({ "app": app.slug, "deleted": n, "freed_bytes": bytes }))
             })
         })
-        .await
+        .await?;
+    collect_blobs(st).await;
+    Ok(out)
+}
+
+/// Remove the blobs no version refers to any more (after a version or app is deleted). Never fails the caller: the
+/// hourly pass in main.rs tries again.
+async fn collect_blobs(st: &State) {
+    if let Err(e) = versions::gc(st, versions::GC_GRACE_MS).await {
+        tracing::warn!("blob collection failed: {}", e.message);
+    }
 }
 
 pub fn rollback(conn: &Connection, cfg: &Config, c: &Caller, slug: &str, version: Option<f64>) -> Result<Value> {
@@ -1512,6 +1868,7 @@ pub fn rollback(conn: &Connection, cfg: &Config, c: &Caller, slug: &str, version
         abuse::narrow_if_flagged(x, &mut app, n, flag.as_deref())
     })?;
     app.live_version = Some(n);
+    crate::git_mirror::poke(&app.id);
     let mut m = described(conn, cfg, c, &app)?;
     m.insert("changed".into(), json!(true));
     Ok(Value::Object(m))
@@ -1544,6 +1901,7 @@ pub fn publish_staging(conn: &Connection, cfg: &Config, c: &Caller, slug: &str) 
     })?;
     app.live_version = Some(n);
     app.staging_version = None;
+    crate::git_mirror::poke(&app.id);
     let mut m = described(conn, cfg, c, &app)?;
     m.insert("published".into(), json!(n));
     Ok(Value::Object(m))
@@ -1563,6 +1921,7 @@ pub fn discard_staging(conn: &Connection, cfg: &Config, c: &Caller, slug: &str) 
         event(x, &c.workspace.id, &c.actor, Some(&app.id), "staging_discarded", &format!("v{n}"))
     })?;
     app.staging_version = None;
+    crate::git_mirror::poke(&app.id);
     let mut m = described(conn, cfg, c, &app)?;
     m.insert("changed".into(), json!(true));
     Ok(Value::Object(m))
@@ -1670,12 +2029,12 @@ pub fn set_access(
         abuse::check_up(conn, &app)?;
     }
     if opening {
-        if cfg.abuse_checks {
+        if crate::instance::Settings::load(conn, cfg)?.flag("features.abuse_checks") {
             abuse::check_can_open_outside(conn, c, &access)?;
         }
         abuse::check_not_flagged(conn, &app, &access)?;
     }
-    if c.agent && widening {
+    if widening && needs_a_person(c, "access") {
         let mut parts = Vec::new();
         if access != app.access {
             let how = if access == "password" { " (anyone with the address and the password can open it)" } else { "" };
@@ -1810,7 +2169,7 @@ pub async fn delete_app(st: &State, c: &Caller, slug: &str) -> Result<Value> {
             require_role(&c2, "builder", "delete apps")?;
             let app = get_app(conn, &c2, &s)?;
             abuse::check_up(conn, &app)?; // a taken-down app is kept for the Brod team's review
-            if c2.agent {
+            if needs_a_person(&c2, "delete") {
                 let summary = format!("Delete {}, all its versions, and its data", app.slug);
                 return Ok((app.clone(), Some(needs_confirmation(conn, &cfg, &c2, Some(&app), "delete", &json!({}), &summary)?)));
             }
@@ -1820,10 +2179,13 @@ pub async fn delete_app(st: &State, c: &Caller, slug: &str) -> Result<Value> {
     if let Some(p) = pending {
         return Ok(p);
     }
+    // A managed database is backed up a last time (kept 30 days), then dropped with its role; a failed backup stops here.
+    crate::backups::retire(st, &app.id, &c.actor).await?;
     st.store.delete_prefix(&format!("{}/", app.id)).await?;
     runtime::wipe_app_data(st, &app.id).await?;
-    let c2 = c.clone();
-    st.db
+    let (c2, app_id) = (c.clone(), app.id.clone());
+    let out = st
+        .db
         .call(move |conn| {
             tx(conn, |x| {
                 // Releases already published from the app stay in the marketplace; the listing just has no app behind it.
@@ -1834,6 +2196,8 @@ pub async fn delete_app(st: &State, c: &Caller, slug: &str) -> Result<Value> {
                     "DELETE FROM app_settings WHERE app_id = ?",
                     "DELETE FROM network_reports WHERE app_id = ?",
                     "DELETE FROM app_logs WHERE app_id = ?",
+                    "DELETE FROM manifest_entries WHERE app_id = ?",
+                    "DELETE FROM version_manifests WHERE app_id = ?",
                     "DELETE FROM versions WHERE app_id = ?",
                     "DELETE FROM downloads WHERE app_id = ?",
                     "DELETE FROM editing WHERE app_id = ?",
@@ -1848,7 +2212,10 @@ pub async fn delete_app(st: &State, c: &Caller, slug: &str) -> Result<Value> {
             })?;
             Ok(json!({ "deleted": app.slug }))
         })
-        .await
+        .await?;
+    versions::forget_app(&app_id);
+    collect_blobs(st).await;
+    Ok(out)
 }
 
 /// The database half of an invitation, then its email.
@@ -1869,14 +2236,14 @@ pub async fn invite(st: &State, c: &Caller, o: Map<String, Value>) -> Result<Val
 
 /// Invite someone. From an agent this waits for a person to confirm, because it widens who can get in.
 pub async fn invite_from(st: &State, c: &Caller, o: Map<String, Value>) -> Result<Value> {
-    if !c.agent {
+    if !needs_a_person(c, "invite") {
         return invite(st, c, o).await;
     }
     let (c2, cfg) = (c.clone(), st.cfg.clone());
     st.db
         .call(move |conn| {
             let getter = |s: &str| get_app(conn, &c2, s);
-            let ci = people::check_invite(conn, &c2, &o, &getter)?;
+            let ci = people::check_invite(conn, &cfg, &c2, &o, &getter)?;
             let summary = match &ci.app {
                 Some(a) => format!(
                     "Invite {} to {} as {}{}",
@@ -1984,6 +2351,62 @@ mod tests {
         let workspace = conn.first("SELECT * FROM workspaces WHERE id = 'ws_t'", (), Workspace::from_row).unwrap().unwrap();
         let user = User { id: "usr_t".into(), email: "b@tok.test".into(), name: "B".into(), email_verified_at: None };
         Caller { workspace, user, role: "builder".into(), actor: "b@tok.test".into(), agent: false, read_only: false }
+    }
+
+    #[test]
+    fn the_approval_policy_names_what_needs_a_person() {
+        let kinds: Vec<&str> = NEEDS_A_PERSON.iter().map(|(k, _)| *k).collect();
+        assert_eq!(kinds, ["access", "invite", "delete", "open_paths", "restore_database"]);
+        let db = crate::db::test_db();
+        let mut c = tokio::runtime::Runtime::new().unwrap().block_on(db.call(|conn| Ok(builder(conn)))).unwrap();
+        assert!(!needs_a_person(&c, "open_paths"), "a person never waits for themselves");
+        c.agent = true;
+        assert!(kinds.iter().all(|k| needs_a_person(&c, k)));
+        assert!(!needs_a_person(&c, "rollback"));
+    }
+
+    #[tokio::test]
+    async fn open_paths_narrow_at_once_and_widen_only_with_a_person() {
+        let db = crate::db::test_db();
+        db.call(|conn| {
+            let cfg = Config::for_tests();
+            let person = builder(conn);
+            conn.run(
+                "INSERT INTO apps (id, workspace_id, owner_id, slug, name, created_at, live_version) VALUES ('app_o','ws_t','usr_t','hooks','Hooks',1,1)",
+                (),
+            )?;
+            conn.run(
+                "INSERT INTO versions (app_id, n, note, actor, file_count, bytes, created_at, open_paths) VALUES ('app_o',1,'','t',1,1,1,?)",
+                [r#"["/api/webhooks/*",{"path":"/api/mcp","methods":["POST"]}]"#],
+            )?;
+            let mut agent = person.clone();
+            agent.agent = true;
+            agent.actor = "claude".into();
+            // An agent asking to open paths gets a confirm_url; nothing opens.
+            let asked = set_open_paths(conn, &cfg, &agent, "hooks", &json!(["/api/webhooks/*"]))?;
+            assert_eq!(asked["needs_confirmation"], true);
+            assert!(asked["confirm_url"].as_str().unwrap().contains("/confirm/cf_"));
+            assert_eq!(asked["open_paths"]["approved"], json!([]));
+            assert_eq!(asked["open_paths"]["live"]["open"], json!([]));
+            assert_eq!(asked["open_paths"]["awaiting_confirmation"][0]["paths"], json!(["/api/webhooks/*"]));
+            // What a person approves opens, but only as far as the live version declares it.
+            let done = approve_open_paths(conn, &cfg, &person, "hooks", &json!(["/api/webhooks/*", "/admin"]))?;
+            assert_eq!(done["open_paths"]["approved"], json!(["/api/webhooks/*", "/admin"]));
+            assert_eq!(done["open_paths"]["live"]["open"], json!(["/api/webhooks/*"]));
+            assert_eq!(done["open_paths"]["live"]["not_approved"], json!([{ "path": "/api/mcp", "methods": ["POST"] }]));
+            // Narrowing by an agent applies at once, with no confirmation.
+            let narrowed = set_open_paths(conn, &cfg, &agent, "hooks", &json!(["/api/webhooks/stripe"]))?;
+            assert!(narrowed.get("needs_confirmation").is_none());
+            assert_eq!(narrowed["open_paths"]["approved"], json!(["/api/webhooks/stripe"]));
+            // Widening again (a prefix where an exact path was) waits; the narrowing part still applies.
+            let wider = set_open_paths(conn, &cfg, &agent, "hooks", &json!(["/api/webhooks/*"]))?;
+            assert_eq!(wider["needs_confirmation"], true);
+            assert_eq!(wider["open_paths"]["approved"], json!([]));
+            assert_eq!(set_open_paths(conn, &cfg, &agent, "hooks", &json!(["/*"])).unwrap_err().code, "bad_open_paths");
+            Ok(())
+        })
+        .await
+        .unwrap();
     }
 
     #[test]

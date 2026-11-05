@@ -38,7 +38,8 @@ const stripe = await serveFakeStripe(`${API}/stripe/webhook`);
 const dns = await serveFakeDns();
 const env = {
   ...process.env, APPS_DOMAIN: `localhost:${PORT}`, API_ORIGIN: API, ADMIN_SECRET: 'dev-admin-secret', IDENTITY_SECRET: 'dev-identity-secret',
-  SECRETS_KEY: 'dev-secrets-key-0123456789', DEV_MODE: '1', BROD_LISTEN: `127.0.0.1:${PORT}`, BROD_DATA_DIR: state,
+  IDENTITY_SIGNING_KEY: '9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60',
+  SECRETS_KEY: 'dev-secrets-key-0123456789', DEV_MODE: '1', DEV_ALLOW_LOOPBACK_GIT: '1', BROD_LISTEN: `127.0.0.1:${PORT}`, BROD_DATA_DIR: state,
   // The full suite covers the hosted service's plans, billing, marketplace and abuse checks; e2e-self-hosted.mjs covers the default.
   BROD_MODE: 'hosted',
   STRIPE_SECRET_KEY: STRIPE_KEY, STRIPE_WEBHOOK_SECRET: WEBHOOK_SECRET, STRIPE_PRICE_SOLO: 'price_solo', STRIPE_PRICE_TEAM: 'price_team',
@@ -69,6 +70,20 @@ if (pg) {
   env.BROD_DATABASE_URL = url.toString();
 }
 
+// The runtime and the preview service start children of their own (workerd, Chromium). Each runs in its own process
+// group, and the whole group is stopped on every way out, a failed suite or Ctrl-C included, so no workerd is left
+// listening on E2E_RUNTIME_PORT.
+const groups = [];
+const signalGroup = (p, signal) => { try { process.kill(-p.pid, signal); } catch { /* already gone */ } };
+async function stopGroup(p) {
+  if (!p) return;
+  signalGroup(p, 'SIGTERM');
+  if (p.exitCode === null && p.signalCode === null) await Promise.race([new Promise(r => p.once('exit', r)), new Promise(r => setTimeout(r, 5000))]);
+  signalGroup(p, 'SIGKILL');
+}
+process.on('exit', () => { for (const p of groups) signalGroup(p, 'SIGKILL'); });
+for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => process.exit(130));
+
 let runtime, rtLog = '';
 if (withRuntime) {
   Object.assign(env, { BROD_RUNTIME_URL: `http://127.0.0.1:${RT_PORT}`, BROD_RUNTIME_SECRET: RT_SECRET });
@@ -79,14 +94,16 @@ if (withRuntime) {
   // The supervisor restarts workerd when an app stalls it or makes it run out of memory (scripts/e2e-server-apps.mjs
   // checks both); a short stall limit and a small memory limit keep those checks quick.
   runtime = spawn(supervisor, [workerd, 'serve', 'deploy/runtime/config.capnp', '--experimental', '-s', `http=127.0.0.1:${RT_PORT}`, '-e', `brod=127.0.0.1:${PORT}`, '-d', `data=${join(state, 'runtime')}`],
-    { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, BROD_RUNTIME_SECRET: RT_SECRET, BROD_INTERNAL_URL: `http://127.0.0.1:${PORT}`, RUNTIME_PORT: RT_PORT, RUNTIME_STALL_MS: '2000', RUNTIME_MEMORY_MB: '768' } });
+    { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, BROD_RUNTIME_SECRET: RT_SECRET, BROD_INTERNAL_URL: `http://127.0.0.1:${PORT}`, RUNTIME_PORT: RT_PORT, RUNTIME_STALL_MS: '2000', RUNTIME_MEMORY_MB: '768' } });
+  groups.push(runtime);
   runtime.stdout.on('data', d => (rtLog += d)); runtime.stderr.on('data', d => (rtLog += d));
 }
 
 let preview, pvLog = '';
 if (withPreviews) {
-  preview = spawn(process.execPath, ['deploy/preview/server.mjs'], { stdio: ['ignore', 'pipe', 'pipe'],
+  preview = spawn(process.execPath, ['deploy/preview/server.mjs'], { detached: true, stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, BROD_PREVIEW_SECRET: PV_SECRET, BROD_INTERNAL_URL: `http://127.0.0.1:${PORT}`, PREVIEW_LISTEN: `127.0.0.1:${PV_PORT}` } });
+  groups.push(preview);
   preview.stdout.on('data', d => (pvLog += d)); preview.stderr.on('data', d => (pvLog += d));
 }
 
@@ -126,21 +143,21 @@ try {
   if (code === 0) { console.log('\nBilling, visits, analytics, storage and spaces\n'); code = await node('scripts/e2e-billing.mjs', `http://127.0.0.1:${stripe.port}`); }
   if (code === 0) { console.log('\nMarketplace\n'); code = await node('scripts/e2e-market.mjs'); }
   if (code === 0) { console.log('\nAgent connections: scopes, expiry and refresh\n'); code = await node('scripts/e2e-tokens.mjs'); }
+  if (code === 0) { console.log('\nAdmin mode: operator API, settings, limits and console\n'); code = await node('scripts/e2e-admin.mjs'); }
   // The cases of test/server.test.ts, which only the Workers runtime runs otherwise.
   if (runtime && code === 0) { console.log('\nServer apps on the workerd runtime\n'); code = await node('scripts/e2e-server-apps.mjs'); }
   if (code !== 0) console.error(`\n--- server log ---\n${log.slice(-5000)}${runtime ? `\n--- runtime log ---\n${rtLog.slice(-5000)}` : ''}${preview ? `\n--- preview log ---\n${pvLog.slice(-3000)}` : ''}`);
   if (mode === 's3') {
     const files = [...fake.s3.objects.keys()];
-    const ok = files.length > 0 && files.every(k => /^brod-bundles\/(app|lst)_/.test(k));
-    console.log(`${ok ? 'PASS' : 'FAIL'}  app files are in S3 (${files.length} objects)`);
+    const ok = files.length > 0 && files.every(k => /^brod-bundles\/((app|lst)_|blobs\/[0-9a-f]{64}$)/.test(k));
+    console.log(`${ok ? 'PASS' : 'FAIL'}  app files are in S3 (${files.length} objects)${ok ? "" : " " + files.filter(k => !/^brod-bundles\/((app|lst)_|blobs\/)/.test(k)).slice(0, 5).join(", ")}`);
     if (!ok) code = 1;
   }
 } catch (e) {
   console.error(e.message);
 } finally {
   server.kill('SIGTERM');
-  runtime?.kill('SIGTERM');
-  preview?.kill('SIGTERM');
+  await Promise.all([stopGroup(runtime), stopGroup(preview)]);
   fake?.server.close();
   stripe.server.close();
   dns.close();

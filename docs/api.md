@@ -39,6 +39,8 @@ An error answers with an HTTP status and a body like this:
 | 403 | `read_only` | A read-only connection tried to change something |
 | 404 | `not_found` | No such route, or nothing with that name |
 | 409 | `stale_base` | A deploy's `base_version` is no longer the app's current version |
+| 409 | `merge_conflict` | A patch deploy on a stale base changed the same lines or file as a newer version; `conflicts` lists them |
+| 422 | `unknown_blobs` | A patch names a `sha256` the app does not have; `missing` lists them |
 | 429 | `rate_limited` | Too many requests in the window; see `retry_after_seconds` |
 
 ## Routes
@@ -52,7 +54,7 @@ is on (`BROD_MARKETPLACE=true`, the default when hosted, off when self-hosted). 
 | Route | |
 | --- | --- |
 | `GET /v1/me` | The signed-in person and their workspaces. Session cookie only. |
-| `POST /v1/workspaces` `{name, accept_terms}` | Create a workspace. Session cookie only. `accept_terms` is needed only when hosted. Self-hosted, only workspace admins can create workspaces. |
+| `POST /v1/workspaces` `{name, accept_terms}` | Create a workspace. Session cookie only. `accept_terms` is needed only when hosted. Who may is the operator's `workspaces.creation` setting: by default anyone verified when hosted, workspace admins when self-hosted (`403 workspaces_closed` otherwise). |
 | `GET /v1/workspace`, `PATCH /v1/workspace` `{name, color, icon}` | Workspace details and branding |
 | `GET /v1/people`, `PATCH /v1/people/:email-or-id` `{role}`, `DELETE /v1/people/:email-or-id` | The people directory. Changing roles and removing people needs an admin. |
 | `GET /v1/invites`, `POST /v1/invites` `{email, role, app?, app_role?}`, `DELETE /v1/invites/:id` | Invitations, to the workspace or as a guest to one app |
@@ -65,10 +67,16 @@ is on (`BROD_MARKETPLACE=true`, the default when hosted, off when self-hosted). 
 
 | Route | |
 | --- | --- |
-| `POST /v1/deploys` `{name?, app?, note?, environment?, base_version?, files?}` | Same as `deploy_app`. `name` makes a new app, `app` deploys a new version of one. With `files` (up to 1 MB in all) it deploys at once. Without `files` it answers with a one-time `upload_url` and a `tar \| curl` command. |
+| `POST /v1/deploys` `{name?, app?, note?, environment?, base_version?, files?, changes?, deletes?}` | Same as `deploy_app`; `changes`/`deletes` with a required `base_version` make a [patch deploy](apps.md#patch-deploys-and-merging). `name` makes a new app, `app` deploys a new version of one. With `files` (up to 1 MB in all) it deploys at once. Without `files` it answers with a one-time `upload_url` and a `tar \| curl` command. |
 | `PUT /v1/uploads/:id` (a tar.gz as the body) | Upload a bundle to an upload address and deploy it. Up to 25 MB. The address is its own credential and lasts 15 minutes. |
-| `GET /v1/apps/:slug/files?version=` | Same as `get_files`: a version's files inline, or a `download_url` |
-| `GET /v1/downloads/:id` | A version's files as a tar.gz. The address is its own credential and lasts 15 minutes. |
+| `GET /v1/apps/:slug/files?version=&since=` | Same as `get_files`: a version's files inline, or a `download_url`; `since` lists only what changed |
+| `GET /v1/apps/:slug/diff?from=&to=` | Same as `diff_versions` |
+| `GET /v1/apps/:slug/export.bundle` | The app as a git bundle (v2): `main` live, `staging`, tags `v<N>`. Same as `export_app` |
+| `GET /v1/apps/:slug.git/info/refs?service=git-upload-pack`, `POST /v1/apps/:slug.git/git-upload-pack` | Read-only git over HTTP (`git clone`). HTTP Basic (any user name, a Brod token as password) or Bearer; read-only tokens work. `git-receive-pack` answers 403 |
+| `POST /v1/apps/:slug/import` | Same as `import_app`: JSON `{url, ref?, base_version?, history?, target?, note?}`, or a git bundle as the body (`Content-Type: application/x-git-bundle`) with `ref`, `base_version`, `history`, `target` in the query. Builders and owners. A bundle PUT to an upload address also imports |
+| `GET /v1/apps/:slug/git-mirror`, `PUT /v1/apps/:slug/git-mirror`, `DELETE /v1/apps/:slug/git-mirror` | Same as `get_git_mirror` and `set_git_mirror` (JSON body with `url`, `token`, `token_secret`, `enabled`, `branches`, `push_tags`, `sync_inbound`, `inbound_branch`, `rotate_webhook_secret`); DELETE removes the mirror. GET is open to builders; PUT and DELETE to the app's owner or an admin. The token and webhook secret are never returned (the webhook secret once, on PUT) |
+| `POST /v1/apps/:slug/git-webhook?workspace=:ws` | A push event from GitHub (`X-Hub-Signature-256`) or GitLab (`X-Gitlab-Token`). No session or token: the signature with the app's webhook secret is the credential. 202 when accepted or ignored (other branch, other events), 401 for a missing or wrong signature, 413 over 5 MB, 429 when rate limited. The import runs in the background |
+| `GET /v1/downloads/:id` | A version's files as a tar.gz (or the git bundle from `export_app`). The address is its own credential and lasts 15 minutes. |
 
 `environment` is `staging` or `production`. `base_version` is the version the files started from. See
 [Staging](apps.md#staging) and [Several people on one app](apps.md#several-people-on-one-app).
@@ -93,6 +101,8 @@ tar -czf - -C dist . | curl -sS -X PUT --data-binary @- "<upload_url>"
 | `PUT /v1/apps/:slug/secrets/:NAME` `{value}`, `DELETE /v1/apps/:slug/secrets/:NAME` | Set or remove a secret |
 | `GET /v1/apps/:slug/access` | The access mode and who it is shared with (`access`, `shared_with`) |
 | `POST /v1/apps/:slug/access` `{access, password?, add?, remove?}` | Change access and role grants. See [Access](apps.md#access). |
+| `GET /v1/apps/:slug/open-paths` | Approved open paths, what the live and staging versions declare, what is open and what waits for a person |
+| `PUT /v1/apps/:slug/open-paths` `{open_paths}` | Replace the approved [open paths](apps.md#open-paths). Removing applies at once; adding, from an agent, waits for a person to confirm. |
 | `POST /v1/apps/:slug/rollback` `{version}` | Serve an earlier version |
 | `POST /v1/apps/:slug/publish` | Make the staging version live |
 | `DELETE /v1/apps/:slug/staging` | Take the version off staging and keep it |
@@ -168,9 +178,11 @@ the whole connection is disconnected. A refresh token lapses after 30 days witho
 
 ## The operator's API
 
-The person who runs the Brod server has a small API under `/v1/admin/`. Every call needs
-`Authorization: Bearer $ADMIN_SECRET`; without it, or when `ADMIN_SECRET` is empty, the answer is `401 unauthorized`.
-Each action is recorded in the workspace's audit log (`GET /v1/events`) as by `Brod operator`.
+The people who run the Brod server (its *operators*) have an API under `/v1/admin/`. A call is accepted with
+`Authorization: Bearer $ADMIN_SECRET` (for scripts), or from an operator signed in to the dashboard (the session
+cookie, same-origin requests only). Anything else answers `401 unauthorized`, or `403 not_operator` for a signed-in
+person who is not an operator. Each action is recorded in the audit log with the operator's email, or
+`Brod operator` when the admin secret was used. See [the admin mode plan](plans/admin-mode.md) for the full design.
 
 | Route | |
 | --- | --- |
@@ -182,6 +194,8 @@ Each action is recorded in the workspace's audit log (`GET /v1/events`) as by `B
 | `POST /v1/admin/workspaces/:workspace/suspend` `{reason}` | Suspend a workspace. `reason` is required. |
 | `POST /v1/admin/workspaces/:workspace/unsuspend` `{note?}` | Lift a suspension |
 | `POST /v1/admin/workspaces/:workspace/trust` `{note?}` | Let a new workspace open apps to everyone before it is a day old |
+| `POST /v1/admin/backups/run` | Back up every container app's database now ([apps.md](apps.md#databases)) |
+| `POST /v1/admin/backups/drill` | Run the restore drill now: restore each database's latest backup into a scratch database and compare row counts |
 
 ```sh
 A="Authorization: Bearer $ADMIN_SECRET"
@@ -191,6 +205,29 @@ curl -sS -H "$A" -X POST https://brod.example.com/v1/admin/apps/acme/login/resto
 curl -sS -H "$A" -H 'content-type: application/json' -d '{"status":"dismissed","note":"Not abuse"}' https://brod.example.com/v1/admin/reports/rep_0123456789abcdef
 curl -sS -H "$A" -H 'content-type: application/json' -d '{"reason":"Spam"}' https://brod.example.com/v1/admin/workspaces/acme/suspend
 curl -sS -H "$A" -X POST https://brod.example.com/v1/admin/workspaces/acme/trust
+```
+
+### Settings, limits and operators
+
+| Route | |
+| --- | --- |
+| `GET /v1/admin/overview` | Counts of workspaces, users and apps (live, paused, taken down), storage used, open reports, and configuration warnings |
+| `GET /v1/admin/settings` | Every instance setting: `key`, `value`, `default`, `source` (`env`, `database` or `default`), `locked`, `env` and `help` |
+| `PATCH /v1/admin/settings` `{key: value\|null, ...}` | Change settings. `null` goes back to the default. All keys are checked before any is written: unknown key `404 unknown_setting`, set by an environment variable `409 setting_locked`, wrong type `400 bad_setting`. |
+| `GET /v1/admin/workspaces?q=&cursor=` | Workspaces, newest first, 50 at a time, with usage and their effective limits. `q` matches the slug or name. |
+| `GET /v1/admin/workspaces/:workspace/limits` | The workspace's base limits (plan or instance settings), its override and the effective limits |
+| `PATCH /v1/admin/workspaces/:workspace/limits` `{max_running_apps?, max_members?, max_storage_mb?, analytics_days?, note?}` | Change the override. A number or `"unlimited"` sets a field, `null` clears it back to the base. Lowering a limit never stops or deletes anything. |
+| `GET /v1/admin/operators` | The operators |
+| `POST /v1/admin/operators` `{email}` | Make someone with an account an operator (`404 no_account` otherwise) |
+| `DELETE /v1/admin/operators/:user` | Remove an operator. The last one (`409 last_operator`) and the one named by `BROD_ADMIN_EMAIL` (`409 admin_email`) cannot be removed. |
+| `GET /v1/admin/audit?cursor=` | The server-wide audit log of operator actions, newest first |
+
+Limits count running (live) apps only; paused apps are free. Settings are explained in
+[configuration](configuration.md#instance-settings).
+
+```sh
+curl -sS -H "$A" -X PATCH -H 'content-type: application/json' -d '{"limits.max_running_apps":5,"workspaces.creation":"operators"}' https://brod.example.com/v1/admin/settings
+curl -sS -H "$A" -X PATCH -H 'content-type: application/json' -d '{"max_running_apps":"unlimited","note":"Pilot customer"}' https://brod.example.com/v1/admin/workspaces/acme/limits
 ```
 
 A taken-down app answers `410` with a neutral "This app has been taken down" page on every address. Its owner cannot

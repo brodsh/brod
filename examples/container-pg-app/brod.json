@@ -1,0 +1,5 @@
+{
+  "port": 3000,
+  "health": "/healthz",
+  "migrate": "node migrate.js"
+}
