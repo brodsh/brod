@@ -4,7 +4,9 @@ All notable changes to Brod. The format follows [Keep a Changelog](https://keepa
 [Semantic Versioning](https://semver.org/) (0.x: minor versions may change behaviour). Release notes on GitHub are
 generated from conventional commits.
 
-## Unreleased
+## 0.3.0 (unreleased)
+
+App MCP sign-in, smart traffic and the shield, and the identity SDK published as `@brodsh/auth`.
 
 ### Added
 
@@ -19,9 +21,34 @@ generated from conventional commits.
 - App MCP: an app declares `"mcp": "/api/mcp"` in `brod.json`; MCP clients sign in with Brod (OAuth, tokens bound to
   that app's address) and the app reads the caller with `currentUser()`.
 
+### Changed
+
+- The identity SDK is published as `@brodsh/auth` (it was `@brod/auth`, a scope Brod doesn't own). Apps importing
+  `@brod/auth` change the import; the API is unchanged. `get_auth_integration` and the docs name the new package.
+- The shield is on by default: an address that scans for vulnerable paths is refused (`403`), one over the request
+  limit gets `429`, and suspicious or very busy page loads get a proof-of-work page. People signed in to the app, open
+  paths, bots that say what they are and private addresses are never checked. Set `BROD_SHIELD=false` to turn it off.
+
+### Fixed
+
+- Staging addresses (`<app>--staging`) get TLS certificates; before, every staging address failed its handshake.
+- For server apps, `/` and folder addresses serve the folder's `index.html` when the bundle has one, instead of always
+  going to `_worker.js`. The `deploy_app` description says that `files` replaces the whole bundle.
+
 ### Upgrading
 
-- Migrations 0028 and 0029 run at start.
+- Migrations 0028 and 0029 run at start. No compose or Caddyfile changes.
+
+## 0.2.2 (2026-11-05)
+
+### Fixed
+
+- Server apps can fetch over HTTPS (workerd's `internet` service had no TLS), and a failed fetch says why.
+- The runtime records undeclared hosts before refusing private addresses.
+- Container deploys work on nodes using Docker's containerd image store: containers are created from the image id the
+  node's Docker knows.
+
+The 0.2.2 binaries report version 0.2.1: the release was tagged without a version bump.
 
 ## 0.2.1 (2026-11-02)
 
