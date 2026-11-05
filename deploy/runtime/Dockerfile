@@ -20,7 +20,7 @@ RUN set -eu; \
     mkdir /data
 
 # The supervisor: one small binary, std and libc only.
-FROM --platform=$BUILDPLATFORM rust:1.97-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97 AS supervisor
+FROM --platform=$BUILDPLATFORM rust:1.98-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS supervisor
 ARG TARGETARCH
 ARG BUILDARCH
 RUN set -eu; \
