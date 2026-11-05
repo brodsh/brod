@@ -1,17 +1,23 @@
 # Every push and pull request: no secrets in the history, dependency licenses and advisories, the Rust crates'
 # format, lints, unit tests and end-to-end suites (on SQLite and on Postgres), the Node unit tests, and the Docker
-# images and Compose stack (built and started, never pushed). Actions are pinned by commit; Dependabot updates them.
+# images and Compose stack (built and started, never pushed), and container apps and managed Postgres with real Docker.
+# Actions are pinned by commit; Dependabot updates them.
+# A version tag does not run this workflow on its own: Release calls it (workflow_call) and publishes nothing unless
+# every job here passes.
 name: CI
 
 on:
   push:
+    branches: ["**"]
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # Called from Release, github.workflow is "Release", so a release never cancels (or is cancelled by) a branch's CI.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -201,6 +207,48 @@ jobs:
         run: |
           deploy/smoke-test.sh
           docker compose -p brodsmoke down -v
+
+  # Container apps and managed Postgres with real Docker (scripts/e2e-containers.mjs, scripts/e2e-postgres.mjs): Brod,
+  # a brod-node on the runner, a registry:2 and, for Postgres, a postgres:17 as apps-postgres. The runner is a Linux VM
+  # with Docker and buildx, and the node runs as root (E2E_NODE_SUDO=1) so it installs its iptables rules and the
+  # network isolation check runs instead of being skipped.
+  containers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Install Rust
+        run: rustup toolchain install 1.97 --profile minimal && rustup default 1.97
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            server/target
+            node/target
+          key: rust-containers-${{ runner.os }}-${{ hashFiles('server/Cargo.lock', 'node/Cargo.lock') }}
+      - name: Build Brod and brod-node
+        run: |
+          cargo build --release --locked --manifest-path server/Cargo.toml
+          cargo build --release --locked --manifest-path node/Cargo.toml
+      - name: Docker and buildx
+        run: docker version && docker buildx version
+      - name: End-to-end tests, container apps (build, registry, gateway, hardening, network rules, rollback)
+        run: npm run e2e:containers
+        env:
+          BROD_BIN: server/target/release/brod
+          BROD_NODE_BIN: node/target/release/brod-node
+          E2E_NODE_SUDO: "1"
+      - name: End-to-end tests, managed Postgres (request, isolation, migrate, backup, restore drill, delete)
+        run: npm run e2e:postgres
+        env:
+          BROD_BIN: server/target/release/brod
+          BROD_NODE_BIN: node/target/release/brod-node
 
   # The Rust server with its database in Postgres (BROD_DATABASE_URL): the unit tests, the SQLite-to-Postgres copy,
   # and the same end-to-end suite.

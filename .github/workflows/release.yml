@@ -1,6 +1,8 @@
 # On a version tag (v0.1.0, ...): build both images for linux/amd64 and linux/arm64, push them to GitHub's container
 # registry as :<version>, :<major>.<minor> and :latest, make an SBOM of each, regenerate THIRD_PARTY_LICENSES.md, and
 # publish a GitHub release with notes from the conventional commits since the last tag.
+# Nothing is built or published until the whole CI workflow (ci.yml, including the container and Postgres end-to-end
+# tests) has passed on the tagged commit.
 name: Release
 
 on:
@@ -15,7 +17,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   images:
+    needs: ci
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
