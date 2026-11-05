@@ -24,10 +24,10 @@
     "gen:og": "node scripts/gen-og.mjs"
   },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "^1.32.1",
-    "jose": "^6.2.12",
-    "playwright": "1.56.1",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "jose": "^6.2.14",
+    "playwright": "1.64.1",
     "vitest": "^4.1.11",
-    "workerd": "1.20261006.1"
+    "workerd": "1.20261030.1"
   }
 }
