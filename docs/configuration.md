@@ -146,6 +146,15 @@ This page is generated from `.env.example` by `node scripts/config-docs.mjs`. Ed
 | `BROD_GIT_REAL_EMAILS` | `false` | Use people's real email addresses as the author of exported git commits. Off: &lt;user id&gt;@users.noreply.&lt;apps domain&gt;. |
 | `BROD_GIT_MAX_IMPORT_MB` | `50` | Largest git bundle or repository (in MB) import_app accepts. |
 | `BROD_GIT_SYNC_POLL_MINUTES` | `10` | How often (minutes) Brod polls the remote of a git mirror with inbound sync when no webhook arrived recently. 0: never. |
+| `BROD_SHIELD` | `true` | Bot and flood protection for apps (shield.rs): a request limit per address, blocking addresses that scan for vulnerable paths, and a proof-of-work check for suspicious or very busy clients. Off, traffic is still classified for analytics. |
+| `BROD_SHIELD_REQUESTS_PER_MINUTE` | `1200` | Requests one address may make to apps per minute before it is answered 429. |
+| `BROD_SHIELD_CHALLENGE_PER_MINUTE` | `300` | Requests per minute from one address after which its page loads must pass the proof-of-work check. 0 turns this trigger off. |
+| `BROD_SHIELD_CHALLENGE_SUSPICIOUS` | `true` | Page loads classified suspicious (odd headers, bursts, many errors) must pass the proof-of-work check. |
+| `BROD_SHIELD_CHALLENGE_BITS` | `16` | Difficulty of the proof-of-work check, in leading zero bits of a SHA-256 hash. Each extra bit doubles the work; 16 takes a browser well under a second. |
+| `BROD_SHIELD_PASS_HOURS` | `24` | How long (hours) a client that passed the check is let through without another one. |
+| `BROD_SHIELD_SCANNER_PROBES` | `8` | Probe paths (/wp-login.php, /.env, /.git/, ...) refused to one address within 10 minutes before it is labelled a scanner and blocked. 0 never blocks. |
+| `BROD_SHIELD_BLOCK_MINUTES` | `60` | How long (minutes) a scanner's address stays blocked. |
+| `BROD_TRAFFIC_BURST_VIEWS_PER_MINUTE` | `30` | Page views per minute from one address above which its visits are labelled suspicious in analytics. 0 turns this signal off. |
 
 ## Hosted only
 
