@@ -4,7 +4,7 @@ name: brod-dev
 
 services:
   postgres:
-    image: postgres:17-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826
+    image: postgres:18-bookworm@sha256:5c4783a8cc3f0074912164f94dfa1be4e043438f0f707cf968d7af9a0d31a2c8
     environment:
       POSTGRES_USER: brod
       POSTGRES_DB: brod
