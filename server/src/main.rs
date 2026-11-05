@@ -234,10 +234,11 @@ async fn run(cfg: Config) {
             }
         });
     }
-    // Container apps (deployments.rs): what was in progress when Brod stopped has failed; deployments follow the apps'
-    // pointers every few seconds; the registry keeps only recent images (pruned nightly).
+    // Container apps (deployments.rs): what was in progress when Brod stopped resumes, or fails without touching
+    // what is live; deployments follow the apps' pointers every few seconds; the registry keeps only recent images
+    // (pruned nightly).
     if let Err(e) = brod::deployments::recover(&st).await {
-        tracing::warn!("could not mark interrupted deployments: {}", e.message);
+        tracing::warn!("could not recover interrupted deployments: {}", e.message);
     }
     {
         let st = st.clone();

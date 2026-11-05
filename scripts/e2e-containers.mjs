@@ -3,7 +3,8 @@
 // on this machine and a registry:2 container that only Brod talks to. The app is examples/container-app (a small Node
 // HTTP server with a Dockerfile). Checks: upload -> built -> pushed -> serving through the gateway, sign-in and the
 // identity header, stripped client headers, open paths, a broken Dockerfile and a failing health check leaving what is
-// live untouched, rollback without a rebuild, staging and publish, the container's hardening, and a node going away.
+// live untouched, rollback without a rebuild, staging and publish, the container's hardening, Brod restarting during a
+// deployment (it resumes), and a node going away.
 // Network isolation (no metadata service, no Brod listener) needs a Linux node with iptables and root; elsewhere those
 // checks are skipped with the reason.
 // Usage: npm run e2e:containers   (builds both release binaries unless BROD_BIN and BROD_NODE_BIN are set)
@@ -92,7 +93,7 @@ const parse = r => { try { return JSON.parse(r.body); } catch { return {}; } };
 
 // ---------- the pieces: Brod, the registry, a node ----------
 
-const server = spawn(bin, [], {
+const startServer = () => spawn(bin, [], {
   cwd: state, stdio: ['ignore', 'pipe', 'pipe'],
   env: { PATH: process.env.PATH, APPS_DOMAIN: `localhost:${PORT}`, API_ORIGIN: API, ADMIN_SECRET: ADMIN, IDENTITY_SECRET: 'dev-identity-secret',
     SECRETS_KEY: 'dev-secrets-key-0123456789', DEV_MODE: '1', BROD_LISTEN: `127.0.0.1:${PORT}`, BROD_DATA_DIR: join(state, 'data'),
@@ -100,7 +101,18 @@ const server = spawn(bin, [], {
     BROD_REGISTRY_CERT_FILE: certFile, BROD_CONTAINER_PREFIX: PREFIX },
 });
 let log = '';
-server.stdout.on('data', d => (log += d)); server.stderr.on('data', d => (log += d));
+let server = startServer();
+const follow = p => { p.stdout.on('data', d => (log += d)); p.stderr.on('data', d => (log += d)); };
+follow(server);
+/** Wait until Brod answers /healthz. */
+async function serverUp(ms = 30_000) {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    try { if ((await fetch(`${API}/healthz`)).ok) return; } catch { /* not up yet */ }
+    if (Date.now() > deadline || server.exitCode !== null) throw new Error(`Brod did not start:\n${log}`);
+    await sleep(100);
+  }
+}
 
 function startNode() {
   const p = spawn(nodeBin, ['run'], { stdio: ['ignore', 'pipe', 'pipe'],
@@ -140,12 +152,7 @@ function fixture(changes = {}) {
 let node, code = 1;
 try {
   cleanup();
-  const deadline = Date.now() + 30_000;
-  for (;;) {
-    try { if ((await fetch(`${API}/healthz`)).ok) break; } catch { /* not up yet */ }
-    if (Date.now() > deadline || server.exitCode !== null) throw new Error(`Brod did not start:\n${log}`);
-    await sleep(100);
-  }
+  await serverUp();
   check('Brod writes the registry token certificate for registry:2', existsSync(certFile) && readFileSync(certFile, 'utf8').includes('BEGIN CERTIFICATE'));
   check('and generates REGISTRY_SIGNING_KEY into secrets.env', /REGISTRY_SIGNING_KEY=/.test(readFileSync(join(state, 'data', 'secrets.env'), 'utf8')));
 
@@ -330,6 +337,32 @@ try {
     return (r.body?.requests ?? r.body?.lines ?? r.body?.logs ?? []).length > 0 && r.body;
   }, 30_000, 1000);
   check('the container\'s output reaches the app\'s logs', !!logs, JSON.stringify(logs).slice(0, 400));
+
+  // ---------- Brod restarts during a deployment ----------
+
+  // Killed mid-deployment (no clean shutdown), Brod resumes the deployment when it starts again: from its kept build
+  // context or its image in the registry, once the node has reconnected. What is live serves throughout.
+  const v7 = await alice.api('/v1/deploys', { json: { app: slug, files: fixture({ 'version.txt': 'v7\n' }), environment: 'production' } });
+  const id7 = v7.body?.deployment?.id;
+  await sleep(1500);
+  const before = (await deployment(slug, id7)).body?.state;
+  if (!['scheduled', 'building', 'pulling', 'starting', 'healthy'].includes(before)) {
+    skip('a deployment Brod restarted during resumes and serves', `it was already ${before} before Brod could be stopped`);
+  } else {
+    const exited = new Promise(r => server.once('exit', r));
+    server.kill('SIGKILL');
+    await exited;
+    server = startServer();
+    follow(server);
+    await serverUp();
+    const d7 = await settle(slug, id7);
+    const log7 = d7.body?.log ?? [];
+    check(`a deployment Brod restarted during (${before}) resumes and serves`, d7.body?.state === 'serving'
+      && log7.some(l => /Brod restarted during this deployment/.test(l)), JSON.stringify(d7.body).slice(0, 1500));
+    const live7 = await until(async () => (await alice.go(url + '/')).body.includes('hello from v7'), 30_000);
+    check('and its version is live', !!live7);
+    check('only the resumed run\'s container is left', dockerQuiet('ps', '-a', '--format', '{{.Names}}').split('\n').filter(n => n === cname(id7)).length === 1);
+  }
 
   // ---------- the node goes away ----------
 
