@@ -23,6 +23,10 @@ pub struct AppState {
     pub watchdog: crate::watchdog::Watchdog,
     /// REST and MCP calls per connection in the current minute (abuse.rs).
     pub calls: crate::abuse::CallLimits,
+    /// Requests to apps per client address in the current minute (shield.rs).
+    pub app_requests: crate::abuse::CallLimits,
+    /// What each address and visitor did lately, for classifying traffic and the shield (traffic.rs).
+    pub traffic: crate::traffic::Tracker,
     /// Nodes' live tunnels, challenges and seen signatures (nodes.rs).
     pub nodes: crate::nodes::Nodes,
     /// Brod's image registry for container apps (registry.rs), when BROD_REGISTRY_URL is set.
@@ -61,6 +65,8 @@ impl AppState {
             previews: Default::default(),
             watchdog: Default::default(),
             calls: Default::default(),
+            app_requests: Default::default(),
+            traffic: Default::default(),
             nodes: Default::default(),
         })
     }

@@ -128,7 +128,30 @@ curl -sS -H "Authorization: Bearer $BROD_TOKEN" -H 'content-type: application/js
 | `GET /v1/spaces`, `POST /v1/spaces` `{name, note}`, `DELETE /v1/spaces/:name` | Spaces |
 | `POST /v1/spaces/:name/members` `{email, role}`, `DELETE /v1/spaces/:name/members/:email` | Space members |
 | `GET /v1/usage?days=` | Visits and storage for every app |
-| `GET /v1/analytics?days=&app=&tz=` | Analytics for every app, or one. `days` is cut to what the workspace keeps (365 days self-hosted; the plan's allowance when hosted). `tz` is the viewer's offset in minutes east of UTC. |
+| `GET /v1/analytics?days=&app=&tz=&traffic=&country=&path=&referrer=&browser=&os=&device=&visitor=&status=` | Analytics for every app, or one. `days` is cut to what the workspace keeps (365 days self-hosted; the plan's allowance when hosted). `tz` is the viewer's offset in minutes east of UTC. `traffic` picks the visits shown: `human` (the default), `suspicious`, `bot`, `all`, or a comma-separated list; anything else is a 400. The other parameters narrow page views to one exact value (`(none)` matches an empty one, such as a direct visit); `status` is a code (`404`) or a class (`4xx`). See [Traffic classes](#traffic-classes). |
+
+
+#### Traffic classes
+
+Every page view is labelled when it is recorded, in `page_views.traffic` with the signals that decided it in
+`page_views.traffic_reason` (server/src/traffic.rs):
+
+| Class | When | Reasons |
+| --- | --- | --- |
+| `bot` | The user agent says it is a bot (or is empty), the path is a scanner probe (`/wp-login.php`, `/.env`, `/.git/`, `/phpmyadmin`, `/xmlrpc.php`, `/cgi-bin/`, ...), or the address was blocked as a scanner. Also three or more of the suspicious signals at once. | `ua`, `no_ua`, `probe`, `scanner` |
+| `suspicious` | One or two of: no `Accept-Language`, no `Accept`, HTTP/1.0, more than `BROD_TRAFFIC_BURST_VIEWS_PER_MINUTE` page views a minute from the address, or at least half of 20+ recent requests answered 4xx. | `no_lang`, `no_accept`, `http1.0`, `burst`, `4xx` |
+| `human` | None of these, or the client proved it runs a browser: it is signed in to the app, passed the shield's check, or (when reading) the insights script reported from that visitor. | `signed_in`, `js` |
+
+A suspicious visitor whose browser later ran the insights script counts as `human` in reports. `requests.by_class`
+splits the request counts the same way. Reports gain:
+
+- `traffic`: `{shown: [...], classes: {human|suspicious|bot: {views, visitors}}}`, the size of every class whatever is shown;
+- `filters`: the filters applied;
+- `visitors`: the 50 visitors with the most views (`visitor`, `traffic`, `reason`, `views`, `first`, `last`, `country`, `browser`, `os`, `device`);
+- `reasons` and `statuses`: breakdowns of why visits were not people, and of their status codes.
+
+Rows recorded before this existed are `human`: self-declared bots were never stored as page views then. Usage and
+visit counts (`/v1/usage`) are unchanged: they leave out self-declared bots only.
 
 ### Marketplace (*marketplace*)
 
