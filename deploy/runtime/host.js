@@ -271,13 +271,14 @@ export class AppOutbound extends WorkerEntrypoint {
     const { appId, version, network } = this.ctx.props;
     const url = new URL(request.url);
     const host = url.hostname;
-    const internal = internalHost(host);
-    if (internal) throw unreachable(url, `refused, ${host} is ${internal}. Apps can reach only the public internet.`);
+    // Undeclared hosts are recorded first, private ones included, so the app's owners see every attempt.
     if (network.policy !== 'off' && !declares(network.allow, host)) {
       const blocked = network.policy === 'enforce';
       reportUndeclared(this.env, this.ctx, appId, version, host, blocked);
       if (blocked) return new Response(`Brod refused this request: ${host} is not one of the hosts this app declares in the "network" list of its brod.json.`, { status: 403, headers: { 'x-brod-network': 'refused' } });
     }
+    const internal = internalHost(host);
+    if (internal) throw unreachable(url, `refused, ${host} is ${internal}. Apps can reach only the public internet.`);
     try {
       return await fetch(request);
     } catch (e) {
