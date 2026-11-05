@@ -1,4 +1,4 @@
-// @brod/auth: the person Brod signed in, read from the x-brod-identity JWT the Brod gateway adds to every request.
+// @brodsh/auth: the person Brod signed in, read from the x-brod-identity JWT the Brod gateway adds to every request.
 //
 // The token is a compact JWS signed with Ed25519 (alg EdDSA), with iss = Brod's public URL, aud = brod:app:<app id>,
 // sub = the user id, and email, name, workspace { id, slug }, role, groups, iat, exp (iat + 300), jti. Brod gives
@@ -336,7 +336,7 @@ function devUser(opts: BrodAuthOptions): BrodUser | null {
   };
   if (!warnedDev) {
     warnedDev = true;
-    console.warn(`@brod/auth: no x-brod-identity header, using BROD_DEV_USER (${email}). This never happens in production.`);
+    console.warn(`@brodsh/auth: no x-brod-identity header, using BROD_DEV_USER (${email}). This never happens in production.`);
   }
   return user;
 }
