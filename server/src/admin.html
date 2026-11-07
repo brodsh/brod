@@ -108,6 +108,26 @@ ul,ol{list-style:none;margin:0;padding:0}
 .cardtop{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
 .cardfoot{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:auto;padding-top:8px;border-top:1px solid var(--line)}
 .cardfoot .link{margin-left:auto}
+.domain>details{flex:1;min-width:0}
+.domain summary{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;cursor:pointer;list-style:none}
+.domain summary::-webkit-details-marker{display:none}
+.domain summary::before{content:'';width:6px;height:6px;flex:none;margin:0 2px;border:solid var(--muted);border-width:0 1.5px 1.5px 0;transform:rotate(-45deg);transition:transform .12s}
+.domain details[open]>summary::before{transform:rotate(45deg)}
+.domain summary .grow{flex:1 1 8em}
+.domainbody{display:flex;flex-direction:column;gap:10px;padding:12px 0 6px 18px}
+.cfbox{display:flex;flex-direction:column;gap:8px;background:var(--sunk);border-radius:var(--r);padding:12px 14px}
+.cfbox.warn{background:var(--bad-bg)}
+.cfacts{display:flex;flex-wrap:wrap;gap:8px}
+.copyable{display:inline-flex;align-items:baseline;gap:10px}
+@media(max-width:640px){
+  .domainbody{padding-left:0}
+  .domainbody thead{display:none}
+  .domainbody tr,.domainbody td{display:block}
+  .domainbody tr{padding:8px 0;border-bottom:1px solid var(--line)}
+  .domainbody td{border:0;padding:2px 0}
+  .copyable{display:flex;justify-content:space-between}
+  .copyable .mono{min-width:0;overflow-wrap:anywhere}
+}
 .url{color:var(--muted)}
 .search input{width:min(100%,320px)}
 .empty{border:1px dashed var(--line);border-radius:var(--r);padding:32px;display:flex;flex-direction:column;gap:10px;align-items:flex-start}
@@ -909,32 +929,70 @@ function appSecrets(s, slug) {
       field('Name', name), field('Value', val, 'grow'), h('button', { class: 'btn' }, 'Save')));
 }
 // ---------- custom domains ----------
-/** One domain: its status, the DNS records to create, and verify and remove buttons. */
-function domainCard(d) {
+const domainOpen = new Map();
+/** A file offered from the page itself, for records the person imports somewhere else. */
+function saveText(name, text) {
+  const a = h('a', { href: URL.createObjectURL(new Blob([text], { type: 'text/plain' })), download: name });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+/** What to do at Cloudflare: open the zone's DNS records and import the file, or add the records by hand. */
+function domainCloudflare(d) {
+  const cf = d.cloudflare;
+  const pending = d.status !== 'verified';
+  return h('div', { class: 'cfbox' + (cf.warning ? ' warn' : '') },
+    cf.warning ? h('p', { class: 'small' }, cf.warning) :
+      h('p', { class: 'small' }, 'This domain\'s DNS is on Cloudflare, in the zone ', h('span', { class: 'mono' }, cf.zone), '.'),
+    h('div', { class: 'cfacts' },
+      h('a', { class: pending ? 'btn deploy' : 'btn', href: cf.records_url, target: '_blank', rel: 'noopener' }, 'Open DNS records in Cloudflare'),
+      pending ? h('button', { class: 'btn', type: 'button', onclick: () => saveText(cf.zone_file_name, cf.zone_file) }, 'Download records file') : null),
+    pending ? h('p', { class: 'muted small' }, `Choose ${cf.zone} if asked. Under Import and Export, pick the downloaded file. Or add the two records below by hand, with the CNAME set to `, h('b', {}, 'DNS only'), ' (grey cloud), not Proxied: Brod cannot serve the domain through Cloudflare\'s proxy.') : null);
+}
+/** One domain as one line: open to its DNS records and buttons while it waits for DNS, or when someone asks. */
+function domainRow(d) {
   const name = d.domain.replace(/^\*\./, '');
   const live = d.status === 'verified';
+  const cf = d.cloudflare;
+  const key = `${d.domain} ${d.status}`;
   const verify = act(() => api(`/domains/${enc(name)}/verify`, { method: 'POST' }),
-    { done: r => r.status === 'verified' ? `${d.domain} is verified` : 'The TXT record is not there yet. DNS changes can take a few minutes.' });
+    { done: r => r.status === 'verified' ? (r.cloudflare?.warning ? `${d.domain} is verified, but check Cloudflare's proxy setting` : `${d.domain} is verified`) : 'The TXT record is not there yet. DNS changes can take a few minutes.' });
   const remove = act(async () => {
     if (!confirm(`Stop serving ${d.domain}? Visitors there get nothing until it is added and verified again.`)) return;
     return api(`/domains/${enc(name)}`, { method: 'DELETE' });
   }, { done: 'Domain removed' });
-  return h('section', { class: 'card' },
-    h('div', { class: 'cardtop' }, h('div', {},
-      h('h3', { class: 'mono' }, d.domain),
-      h('p', { class: 'muted small' }, d.kind === 'workspace' ? 'Every app in the workspace, at <app>.' + name : ['Serves ', d.app ? appLink(d.app) : 'an app'])),
+  const copyable = (text) => h('span', { class: 'copyable' }, h('span', { class: 'mono' }, text), h('button', { class: 'link small', type: 'button', 'aria-label': `Copy ${text}`, onclick: () => copy(text) }, 'Copy'));
+  return h('li', { class: 'domain' }, h('details', { open: domainOpen.get(key) ?? !live, ontoggle: e => domainOpen.set(key, e.target.open) },
+    h('summary', {},
+      live && d.kind !== 'workspace' ? h('a', { class: 'link mono', href: d.url + '/', target: '_blank', rel: 'noopener' }, d.domain) : h('span', { class: 'mono' }, d.domain),
+      h('span', { class: 'muted small grow' }, d.kind === 'workspace' ? 'every app in the workspace' : ['serves ', d.app ? appLink(d.app) : 'an app']),
+      cf?.warning ? h('span', { class: 'pill bad' }, h('i'), 'Proxied?') : null,
       live ? h('span', { class: 'pill ok' }, h('i'), 'Verified') : h('span', { class: 'pill warn' }, h('i'), 'Waiting for DNS')),
-    live ? h('p', { class: 'small' }, d.kind === 'workspace' ? h('span', { class: 'mono' }, d.url) :
-      h('a', { class: 'link mono', href: d.url + '/', target: '_blank', rel: 'noopener' }, d.url)) :
-      h('p', { class: 'small' }, 'Create these records at your DNS provider, then verify. Nothing is served here until then.'),
-    h('div', { class: 'scroll' }, h('table', {},
-      h('thead', {}, h('tr', {}, h('th', {}, 'Type'), h('th', {}, 'Name'), h('th', {}, 'Value'), h('th', { class: 'right' }, ''))),
-      h('tbody', {}, d.dns.map(r => h('tr', {}, h('td', {}, h('span', { class: 'tag' }, r.type)), h('td', { class: 'mono' }, r.name), h('td', { class: 'mono' }, r.value),
-        h('td', { class: 'right' }, h('button', { class: 'link', onclick: () => copy(r.value) }, 'Copy'))))))),
-    live ? null : h('p', { class: 'muted small' }, 'A bare domain such as example.com cannot have a CNAME: use your DNS provider\'s ALIAS or CNAME flattening instead.'),
-    h('div', { class: 'cardfoot' }, live ? null : h('button', { class: 'btn', onclick: verify }, 'Verify'),
-      h('button', { class: 'link danger', onclick: remove }, 'Remove')));
+    h('div', { class: 'domainbody' },
+      live ? h('p', { class: 'muted small' }, d.kind === 'workspace' ? `Every app opens at <app>.${name}. ` : '', 'Keep these DNS records.') :
+        cf ? null : h('p', { class: 'small' }, 'Create these records at your DNS provider, then verify. Nothing is served here until then.'),
+      cf && (!live || cf.warning) ? domainCloudflare(d) : null,
+      h('div', { class: 'scroll' }, h('table', {},
+        h('thead', {}, h('tr', {}, h('th', {}, 'Type'), h('th', {}, 'Name'), h('th', {}, 'Value'))),
+        h('tbody', {}, d.dns.map(r => h('tr', {},
+          h('td', {}, h('span', { class: 'tag' }, r.type), cf && r.type === 'CNAME' ? [' ', h('span', { class: 'tag' }, cf.cname_proxy_status)] : null),
+          h('td', {}, copyable(r.name)), h('td', {}, copyable(r.value))))))),
+      live || cf ? null : h('p', { class: 'muted small' }, 'A bare domain such as example.com cannot have a CNAME: use your DNS provider\'s ALIAS or CNAME flattening instead.'),
+      h('div', { class: 'cardfoot' }, live ? null : h('button', { class: 'btn', onclick: verify }, 'Verify'),
+        h('button', { class: 'link danger', onclick: remove }, 'Remove')))));
 }
+const domainList = (domains) => h('ul', { class: 'list tight' }, domains.map(domainRow));
+/** Add a domain, and when it is on Cloudflare and still needs its records, open them there in a new tab. Browsers allow
+ *  that for a few seconds after the click and some not at all, so the button on the domain's row stays as the way in. */
+async function addDomain(body) {
+  const r = await api('/domains', { method: 'POST', body });
+  if (!r.cloudflare || r.status === 'verified') return r;
+  const tab = window.open('about:blank', '_blank');
+  if (tab) { tab.opener = null; tab.location = r.cloudflare.records_url; }
+  return { ...r, tabOpened: !!tab };
+}
+const domainAdded = (r) => r.status === 'verified' ? `${r.domain} is verified` :
+  !r.cloudflare ? 'Domain added. Now create the DNS records.' :
+  r.tabOpened ? 'Domain added. Cloudflare\'s DNS records opened in a new tab.' : 'Domain added. Your browser kept the new tab from opening: open Cloudflare from here.';
 async function appDomains(s, slug) {
   const { domains } = await api('/domains');
   const own = domains.filter(d => d.app === s.app);
@@ -942,8 +1000,8 @@ async function appDomains(s, slug) {
   const input = h('input', { id: 'dom-name', name: 'domain', required: true, placeholder: 'shop.example.com', autocomplete: 'off' });
   return [
     h('section', {}, h('h2', {}, 'Custom domains'), h('p', { class: 'sub' }, 'Serve this app at a domain you own. Sign-in and access work the same as on its own address.'),
-      own.length ? h('div', { class: 'stack' }, own.map(domainCard)) : null,
-      h('form', { class: 'inline', onsubmit: act(() => api('/domains', { method: 'POST', body: { domain: input.value.trim(), app: s.app } }), { done: 'Domain added. Now create the DNS records.' }) },
+      own.length ? domainList(own) : null,
+      h('form', { class: 'inline', onsubmit: act(() => addDomain({ domain: input.value.trim(), app: s.app }), { done: domainAdded }) },
         field('Domain', input, 'grow'), h('button', { class: 'btn' }, 'Add domain'))),
     viaWorkspace.length ? h('section', {}, h('h2', {}, 'From workspace domains'), h('ul', { class: 'list tight' }, viaWorkspace.map(d => h('li', {},
       h('span', { class: 'grow mono' }, d.domain), d.status === 'verified' ? h('span', { class: 'pill ok' }, h('i'), 'Verified') : h('span', { class: 'pill warn' }, h('i'), 'Waiting for DNS'))))) : null,
@@ -955,11 +1013,11 @@ async function domains() {
   const target = select('app', { ...Object.fromEntries(apps.apps.map(a => [a.app, a.name])), ...(ADMIN ? { '*': 'Every app (*.domain)' } : {}) }, apps.apps[0]?.app ?? '*', { id: 'dom-app', label: 'Serves' });
   const add = act(() => {
     const d = input.value.trim().replace(/^\*\./, '');
-    return api('/domains', { method: 'POST', body: target.value === '*' ? { domain: '*.' + d } : { domain: d, app: target.value } });
-  }, { done: 'Domain added. Now create the DNS records.' });
+    return addDomain(target.value === '*' ? { domain: '*.' + d } : { domain: d, app: target.value });
+  }, { done: domainAdded });
   return [
     head('Domains', 'Serve apps at domains you own: one domain for one app, or ' + (ADMIN ? '' : 'as an admin ') + 'a whole domain for every app, as <app>.apps.example.com.'),
-    domains.length ? h('div', { class: 'stack' }, domains.map(domainCard)) : empty('No custom domains yet', 'Add one below, then create the two DNS records it shows.'),
+    domains.length ? domainList(domains) : empty('No custom domains yet', 'Add one below, then create the two DNS records it shows.'),
     h('section', {}, h('h2', {}, 'Add a domain'), h('form', { class: 'inline', onsubmit: add },
       field('Domain', input, 'grow'), field('Serves', target), h('button', { class: 'btn' }, 'Add domain'))),
   ];

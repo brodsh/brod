@@ -193,6 +193,27 @@ if (process.env.E2E_DNS) {
   check('get_status lists the app\'s domains', (await tool('get_status', { app: APP })).data.domains?.filter(d => d.status === 'verified').length === 2);
   const rm = await tool('set_domain', { domain: SHOP, remove: true });
   check('removing a domain stops serving it at once', rm.data.removed === SHOP && !(await alice.go(`http://${SHOP}${port}/`)).headers['x-brod-app']);
+
+  // Cloudflare: found from the public NS records of the zone holding the name.
+  const dnsSet = (body, path = 'records') => fetch(`${process.env.E2E_DNS}/_test/${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const ZONE = `cf-${run}.example.test`, CF = `shop.${ZONE}`, OTHER = `shop.other-${run}.example.test`, TARGET = new URL(API).hostname;
+  check('a domain elsewhere gets no Cloudflare steps', !(await tool('set_domain', { domain: OTHER, app: APP })).data.cloudflare);
+  for (const value of ['lou.ns.cloudflare.com.', 'addyson.ns.cloudflare.com.']) await dnsSet({ name: ZONE, type: 'NS', value });
+  const cf = await tool('set_domain', { domain: CF, app: APP });
+  check('a domain on Cloudflare gets a link to the zone\'s DNS records and the DNS only instruction', cf.data.cloudflare?.zone === ZONE && cf.data.cloudflare.records_url === 'https://dash.cloudflare.com/?to=/:account/:zone/dns/records' && /DNS only/.test(cf.data.next_step), JSON.stringify(cf.data));
+  check('its zone file holds both records, with the CNAME out of the proxy', cf.data.cloudflare?.zone_file.includes(`_brod.${CF}. 300 IN TXT "brod-verify=`) && cf.data.cloudflare.zone_file.includes(`${CF}. 300 IN CNAME ${TARGET}. ; cf_tags=cf-proxied:false`), cf.data.cloudflare?.zone_file);
+  check('a domain with no record yet raises no warning', !cf.data.cloudflare?.warning);
+  await dnsSet({ name: TARGET, type: 'A', value: '198.51.100.1' });
+  await dnsSet({ name: CF, type: 'A', value: '104.21.1.1' });
+  const listed = (await alice.api('/v1/domains')).body.domains.find(d => d.domain === CF);
+  check('the domain list carries the Cloudflare steps and warns when a record looks proxied', listed?.cloudflare?.zone === ZONE && /DNS only/.test(listed.cloudflare.warning), JSON.stringify(listed));
+  await dnsSet({ on: true }, 'outage');
+  const remembered = (await alice.api('/v1/domains')).body.domains.find(d => d.domain === CF);
+  check('the domain list does not ask DNS again on every redraw', remembered?.cloudflare?.zone === ZONE, JSON.stringify(remembered));
+  const down = await alice.api('/v1/domains', { json: { domain: `www.${ZONE}`, app: APP } });
+  check('a failed DNS lookup only leaves the Cloudflare steps out', down.status === 201 && !down.body.cloudflare && down.body.dns?.length === 2, JSON.stringify(down.body));
+  await dnsSet({ on: false }, 'outage');
+  for (const d of [CF, OTHER, `www.${ZONE}`]) await tool('set_domain', { domain: d, remove: true });
 } else console.log('SKIP  custom domains: E2E_DNS is not set');
 
 // ---------- 3. people, invites, confirmations, groups, roles ----------
