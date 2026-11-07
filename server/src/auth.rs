@@ -25,7 +25,11 @@ use crate::util::{
 
 fn safe_return(r: Option<&Value>) -> String {
     match r {
-        Some(Value::String(s)) if s.starts_with('/') && !s.starts_with("//") && !s.starts_with("/\\") && !s.chars().any(char::is_control) => s.clone(),
+        Some(Value::String(s))
+            if s.starts_with('/') && !s.starts_with("//") && !s.starts_with("/\\") && !s.chars().any(char::is_control) =>
+        {
+            s.clone()
+        }
         _ => "/".into(),
     }
 }
