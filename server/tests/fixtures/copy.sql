@@ -12,7 +12,7 @@ INSERT INTO tokens VALUES ('tok_1', 'ws_1', 'usr_a', 'Claude', 'h2', 1, 2, NULL,
 INSERT INTO tokens VALUES ('tok_2', 'ws_1', 'usr_a', 'Claude Desktop', 'h7', 1, NULL, NULL, 'read', 5, 'cli_1', 'h8', 'h9', 6);
 INSERT INTO apps VALUES ('app_1', 'ws_1', 'usr_a', 'reading', 'Reading', 'Reading list', 'Hi', 'live', 'people', '["owner","editor","viewer"]', 2, 1, 3, 'sp_1', 4096, 8192, NULL, NULL, '', 3, 2, '[]', 'db_1');
 INSERT INTO apps VALUES ('app_2', 'ws_1', 'usr_a', 'draft', 'draft', '', '', 'live', 'password', '["owner"]', NULL, 2, 0, NULL, 0, 0, 'pbkdf2$100000$c2FsdA$aGFzaA', 1700000002000, 'Phishing ''kit''', NULL, NULL, '[]', NULL);
-INSERT INTO grants VALUES ('app_1', 'user:usr_B', 'viewer', 1), ('app_1', 'domain:acme.test', 'editor', 2);
+INSERT INTO grants VALUES ('app_1', 'user:usr_B', 'viewer', 1, NULL), ('app_1', 'domain:acme.test', 'editor', 2, '{"tenant":"acme"}');
 INSERT INTO versions VALUES ('app_1', 1, 'First version', 'ana@acme.test', 2, 120, 1, NULL, '[]', NULL, NULL, NULL, NULL, NULL, 'auto', NULL, NULL);
 INSERT INTO versions VALUES ('app_1', 2, 'Update', 'Claude (ana@acme.test)', 3, 4096, 2, '{"main":"_worker.js","modules":["_worker.js"]}', '["a password field"]', 3, '[{"key":"name","label":"Name","type":"text","default":"Reading"}]', '["api.stripe.com"]', 1, NULL, 'auto', NULL, '/api/mcp');
 INSERT INTO secrets VALUES ('app_1', 'STRIPE_KEY', 'iv.ct', 1, 'ana@acme.test');

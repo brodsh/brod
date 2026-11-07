@@ -258,6 +258,9 @@ pub fn forward_headers(req: &Req, identity: Option<(Value, String)>) -> HeaderMa
         set(&mut headers, "x-brod-role", identity["role"].as_str().unwrap_or(""));
         let groups: Vec<&str> = identity["groups"].as_array().map(|g| g.iter().filter_map(|x| x.as_str()).collect()).unwrap_or_default();
         set(&mut headers, "x-brod-groups", &groups.join(","));
+        if identity["filters"].as_object().is_some_and(|f| !f.is_empty()) {
+            set(&mut headers, "x-brod-filters", &encode_uri_component(&identity["filters"].to_string()));
+        }
         set(&mut headers, "x-brod-identity", &token);
     }
     headers

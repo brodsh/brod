@@ -66,6 +66,13 @@ describe('verifying a Brod token', () => {
     expect(user?.claims.aud).toBe(AUDIENCE);
   });
 
+  it('reads the filters a grant carries, and none from an older server', async () => {
+    const withFilters = await currentUser(withToken(await sign(key, claims({ filters: { tenant: 'acme', region: ['np', 'in'] } }))), opts);
+    expect(withFilters?.filters).toEqual({ tenant: 'acme', region: ['np', 'in'] });
+    const older = await currentUser(withToken(await sign(key, claims())), opts);
+    expect(older?.filters).toEqual({});
+  });
+
   it('keeps a null role (a public app)', async () => {
     const user = await currentUser(withToken(await sign(key, claims({ role: null, groups: [] }))), opts);
     expect(user?.role).toBeNull();

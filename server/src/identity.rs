@@ -379,7 +379,7 @@ pub fn integration(cfg: &crate::config::Config, framework: Option<&str>, runtime
                 "iss": "Brod's public URL.", "aud": "brod:app:<app id>: refuse any other, so a token made for one app never works in another.",
                 "sub": "The person's user id (stable).", "email": "Their email address.", "name": "Their display name.",
                 "workspace": "{ id, slug } of the app's workspace.", "role": "Their role in this app (null when the app gives them none, as on a public app).",
-                "groups": "Their workspace groups.", "iat": "Issued at (seconds).", "exp": "Expires at: 5 minutes after iat.", "jti": "A unique id per token.",
+                "groups": "Their workspace groups.", "filters": "What their grant carries besides a role, such as { \"tenant\": \"acme\" }; {} when none. Brod only passes it on: the app must apply it to every query.", "iat": "Issued at (seconds).", "exp": "Expires at: 5 minutes after iat.", "jti": "A unique id per token.",
             },
             "env": {
                 "BROD_ISSUER": "The expected iss.", "BROD_APP_ID": "The app's id: the audience is brod:app:<BROD_APP_ID>.",
@@ -393,7 +393,7 @@ pub fn integration(cfg: &crate::config::Config, framework: Option<&str>, runtime
                 "Read the x-brod-identity header. No header: the request is anonymous.",
                 "Check the signature with alg EdDSA only, using the key whose kid matches, from BROD_IDENTITY_JWKS or jwks_url.",
                 "Check iss equals BROD_ISSUER, aud equals brod:app:<BROD_APP_ID>, and exp is in the future.",
-                "Use sub as the user id. Never keep passwords or a user table: Brod signs people in.",
+                "Use sub as the user id. Never keep passwords or sessions: Brod signs people in. An app may keep its own rows about people (a company, a role), keyed by sub, and answer 403 when there is none.",
             ],
         },
         "access": {
@@ -402,6 +402,15 @@ pub fn integration(cfg: &crate::config::Config, framework: Option<&str>, runtime
             "mcp": "For an MCP server inside the app, declare its path in brod.json: { \"mcp\": \"/api/mcp\" } (one path; its sub-paths count too). Brod then signs MCP clients in for it with OAuth: a client is given only the address (https://<app host>/api/mcp), gets 401 with a pointer to /.well-known/oauth-protected-resource/api/mcp, signs the person in at Brod, and sends a token bound to that one address. The gateway checks on every request that the person may still open the app, removes the token, and adds the usual identity, so the handler does const user = await currentUser(request) (@brodsh/auth) like any other route and answers 401 when it is null. Never issue or check tokens in the app, and never put a secret in the URL. A browser signed in to the app reaches the path as before. Declaring it needs no approval: it lets in nobody who could not open the app already.",
             "open_paths": "Paths that must work without sign-in (webhooks, an MCP endpoint with its own auth) go in brod.json: { \"open_paths\": [\"/api/webhooks/*\", { \"path\": \"/api/mcp\", \"methods\": [\"POST\"] }] }. They open once a person approves them (deploy_app returns a confirm_url when an agent adds one; set_open_paths changes them).",
             "anonymous": "Requests on an open path, and to a public app from someone not signed in, carry no x-brod-identity and no x-brod-user-* headers. Treat them as untrusted and authenticate them yourself (a webhook signature, an API key).",
+        },
+        "sign_in_page": {
+            "when": "Whenever people must sign in to an app, build its login page in the app's own design, from the same template and styles as its other pages, unless the person asks for Brod's standard page. Brod still sends the code, checks it and sets the session. Never add a password field.",
+            "brod_json": { "open_paths": [{ "path": "/login", "sign_in_page": true }, "/assets/*"] },
+            "brod_json_note": "One exact path is the sign-in page. Also list every file it loads (styles, scripts, fonts, images) as open paths; open paths are public, so keep private data out of them. A new open path waits for a person: pass on the confirm_url from the deploy. Until they confirm, visitors see Brod's standard page and the calls below answer 404 no_sign_in_page. Signed-out visitors are sent to /login?return=<where they were going>.",
+            "page_code": "<script src=\"/_brod/client.js\"></script> then: const how = await Brod.auth.methods(); // { email, google, app: { name } }\nawait Brod.auth.sendCode(email); // emails a 6-digit code\nconst r = await Brod.auth.verifyCode(email, code); // throws Error with .code and .message when wrong\nif (r.allowed) location.href = r.return; else showNoAccess();\nif (how.google) Brod.auth.google(); // a redirect; comes back signed in\nawait Brod.auth.signOut();",
+            "package": "Bundled apps: import { sendCode, verifyCode, google, methods, signOut } from '@brodsh/auth/client' does the same.",
+            "after_sign_in": "r.allowed is false when the app is not shared with this person: say so on the page. A session from this page works on this app only. Show each error's message to the person: it says what to do, including when to wait.",
+            "selling_to_companies": "For an app sold to companies, name its users with set_access: { \"app_user\": \"sam@acme.com\", \"role\": \"viewer\", \"filters\": { \"tenant\": \"acme\" } }, or { \"domain\": \"acme.com\", ... } for a whole company. App users belong to that app alone, with no place in the workspace. Scope every query by user.filters.tenant, and answer 403 when it is missing. Each change waits for a person to confirm.",
         },
         "workerd_note": workerd_note,
         "snippets": snippets,

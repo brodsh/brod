@@ -2009,7 +2009,12 @@ pub fn set_access(
         if !roles.contains(&role) {
             return Err(Problem::new(400, "bad_role", format!("{} understands the roles {}.", app.slug, roles.join(", "))));
         }
-        add.push((people::resolve_subject(conn, c, &g)?, role));
+        let filters = present(&g, "filters").map(people::check_filters).transpose()?;
+        let subject = people::resolve_subject(conn, c, &g)?;
+        if filters.is_some() && matches!(subject.subject.as_str(), "workspace" | "signed_in") {
+            return Err(Problem::new(400, "bad_filters", "Filters go on a person, a group or an email domain, not on everyone."));
+        }
+        add.push((subject, role, filters));
     }
     let remove = grant_list(o.get("remove"), "remove")?.iter().map(|g| people::resolve_subject(conn, c, g)).collect::<Result<Vec<_>>>()?;
     let password = match o.get("password") {
@@ -2065,7 +2070,14 @@ pub fn set_access(
             parts.push(format!("give {} a new password", app.slug));
         }
         if !add.is_empty() {
-            let who: Vec<String> = add.iter().map(|(s, r)| format!("{} the {r} role", s.label)).collect();
+            let who: Vec<String> = add
+                .iter()
+                .map(|(s, r, f)| match f {
+                    Some(f) if f != "{}" => format!("{} the {r} role, limited to {f}", s.label),
+                    Some(_) => format!("{} the {r} role, with no filters", s.label),
+                    None => format!("{} the {r} role", s.label),
+                })
+                .collect();
             parts.push(format!("give {} on {}", who.join(", "), app.slug));
         }
         let summary = capitalise(&parts.join(" and "));
@@ -2090,12 +2102,15 @@ pub fn set_access(
                 x.run("DELETE FROM grants WHERE app_id = ? AND subject = ?", params![app.id, r.subject])?;
                 event(x, &c.workspace.id, &c.actor, Some(&app.id), "ungrant", &r.label)?;
             }
-            for (s, role) in &add {
+            for (s, role, filters) in &add {
+                // Left out, the filters stay: changing a role must not quietly lift a limit.
                 x.run(
-                    "INSERT INTO grants (app_id, subject, role, created_at) VALUES (?,?,?,?) ON CONFLICT(app_id, subject) DO UPDATE SET role = excluded.role",
-                    params![app.id, s.subject, role, now()],
+                    "INSERT INTO grants (app_id, subject, role, created_at, filters) VALUES (?,?,?,?,?)
+                     ON CONFLICT(app_id, subject) DO UPDATE SET role = excluded.role, filters = COALESCE(excluded.filters, grants.filters)",
+                    params![app.id, s.subject, role, now(), filters],
                 )?;
-                event(x, &c.workspace.id, &c.actor, Some(&app.id), "grant", &format!("{} as {role}", s.label))?;
+                let limits = filters.as_deref().map(|f| format!(", filters {f}")).unwrap_or_default();
+                event(x, &c.workspace.id, &c.actor, Some(&app.id), "grant", &format!("{} as {role}{limits}", s.label))?;
             }
             Ok(())
         })?;

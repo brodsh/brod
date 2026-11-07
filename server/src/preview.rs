@@ -91,8 +91,14 @@ pub async fn serve(st: &State, req: Req, token: &str) -> Result<Response> {
         takedown_reason: String::new(),
     };
     let user = User { id: "usr_preview".into(), email: "preview@brod.invalid".into(), name: "Preview".into(), email_verified_at: Some(0) };
-    let decision =
-        Decision { allowed: true, sign_in_needed: false, role: app.role_list().first().cloned(), groups: Vec::new(), member: None };
+    let decision = Decision {
+        allowed: true,
+        sign_in_needed: false,
+        role: app.role_list().first().cloned(),
+        groups: Vec::new(),
+        member: None,
+        filters: Default::default(),
+    };
     let identity = crate::gateway::identity_for(&st.cfg, &app, "preview", &user, &decision);
     match req.path.as_str() {
         "/_brod/client.js" => {

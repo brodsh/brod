@@ -6,7 +6,7 @@ import { defineConfig, type Options } from 'tsup';
 // require('@brodsh/auth') works on every Node 20, not only on those with require(esm). The output uses nothing from
 // Node, so it runs on Node 20+, in Next.js middleware (edge) and on workerd.
 const common: Options = {
-  entry: { index: 'src/index.ts', next: 'src/next.ts' },
+  entry: { index: 'src/index.ts', next: 'src/next.ts', client: 'src/client.ts' },
   dts: true,
   sourcemap: true,
   target: 'es2022',

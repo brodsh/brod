@@ -22,8 +22,10 @@ pub fn tools() -> Value {
     let app_arg = || s("The app's short name (slug), as shown by list_apps.");
     let grant_item = json!({
         "type": "object",
-        "description": "Exactly one of email, group, domain or everyone, plus a role.",
+        "description": "Exactly one of app_user, email, group, domain or everyone, plus a role and optional filters.",
         "properties": {
+            "app_user": s("Someone who uses this app only, such as a customer: an email address. They get no place in the workspace and no invitation."),
+            "filters": { "type": "object", "description": "What this grant carries besides a role, such as { \"tenant\": \"acme\" }. The app gets it in the identity token and must apply it to its data. Left out, existing filters stay; {} clears them. Not for everyone." },
             "email": s("A person already in the workspace."), "group": s("A workspace group name, for example \"finance\"."),
             "domain": s("An email domain, for example \"example.com\"."), "everyone": { "type": "string", "enum": ["workspace", "signed_in"] },
             "role": s("One of the app's roles (default owner, editor, viewer)."),
@@ -45,7 +47,7 @@ pub fn tools() -> Value {
                 "The signed-in person arrives as request headers x-brod-user-id, x-brod-user-email, x-brod-role and x-brod-groups (the platform strips any a visitor sends), plus x-brod-identity, a signed JWT (get_auth_integration explains how to verify it). ",
                 "Apps are private: paths that must work without sign-in (webhooks) go in the \"open_paths\" list of a brod.json at the top of the bundle; new ones stay closed until the owner opens the result's confirm_url. ",
                 "To give an app its own MCP server, put \"mcp\": \"/api/mcp\" in brod.json and handle that path in the server code: MCP clients connect with just the address and Brod signs the person in, so the handler reads them like any request (never add a token of your own). ",
-                "Never build a login or user table. A version whose server code does not start is refused, and the live version stays. Use get_logs to see console output and errors. ",
+                "Never store passwords or sessions; Brod signs people in. A version whose server code does not start is refused, and the live version stays. Use get_logs to see console output and errors. ",
                 "STAGING: when you update an app that already has a live version, ask the person first whether to try it on staging before it goes live (recommended) or to publish straight away. ",
                 "Updates to a live app go to staging unless \"environment\" is \"production\": the result's staging_url serves the new version to the app's builders only, while visitors keep the live one. ",
                 "Give the person the staging_url to test, and call publish_staging only once they say it is ready. Staging and live share the app's data (env.DB, env.KV, env.FILES) and secrets. ",
@@ -306,7 +308,7 @@ pub fn tools() -> Value {
             "name": "get_auth_integration", "title": "Identity and access for an app's code",
             "description": concat!("How an app's code learns who is signed in and how to trust it: the identity contract (the x-brod-identity JWT, its claims, the JWKS URL and env vars), ",
                 "how access works (private by default, the gateway signs people in, open paths are anonymous, an app's own MCP endpoint is signed in by Brod), and a short verification snippet for a framework (the @brodsh/auth package for Next.js, Node and Workers). ",
-                "Call this before writing code that reads the user, checks roles, exposes a webhook or serves MCP. Never build a login or user table."),
+                "Call this before writing code that reads the user, checks roles, exposes a webhook, serves MCP, or needs a login page: it says how to build one in the app's own design. Never store passwords or sessions."),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -599,7 +601,7 @@ async fn handle(st: &State, c: &Caller, m: &Value) -> Option<Value> {
                 "capabilities": { "tools": { "listChanged": false } },
                 "serverInfo": { "name": "brod", "title": "Brod", "version": "0.2.0" },
                 "instructions": concat!("Brod puts small web apps online inside a team workspace with one sign-in. Call get_workspace before building an app that needs to know who is using it: ",
-                    "the platform signs people in and the app reads them from /_brod/me, so never build a login or user table. Use deploy_app to publish and return the address. ",
+                    "the platform signs people in and the app reads them from /_brod/me, so never store passwords or sessions. When people must sign in, build the login page in the app's own design with Brod's sign-in client: get_auth_integration shows how. Use deploy_app to publish and return the address. ",
                     "Apps start private. To share one with people outside the workspace without accounts, set_access with \"access\": \"password\" and a password, then give them the address and the password. ",
                     "Sharing more widely and inviting people need the owner to confirm: pass on the confirm_url you get back. ",
                     "Once an app is live, ask before changing it whether to deploy to staging first: updates go to its staging address, the person tests there, and publish_staging makes it live. ",
