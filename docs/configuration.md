@@ -111,6 +111,15 @@ This page is generated from `.env.example` by `node scripts/config-docs.mjs`. Ed
 | `DNS_RESOLVER_URL` | `https://cloudflare-dns.com/dns-query` | The DNS-over-HTTPS resolver that checks a custom domain's TXT record and whether its DNS is on Cloudflare. Default: Cloudflare's. |
 | `CUSTOM_DOMAIN_TARGET` |  | The name custom domains point their CNAME at. Default: BROD_PUBLIC_URL's host. |
 
+## Domain Connect
+
+| Variable | Example or default | What it does |
+| --- | --- | --- |
+| `DOMAIN_CONNECT_PRIVATE_KEY` |  | Signs the links: an RSA key of at least 2048 bits, PKCS#8 in base64. Keep it as secret as ADMIN_SECRET and never commit it. Make one with: openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER, then base64 with no line breaks. |
+| `DOMAIN_CONNECT_KEY_HOST` | `_dcpubkeyv1` | The TXT name holding the public key, under the template's syncPubKeyDomain. Use a new name to rotate the key. |
+| `DOMAIN_CONNECT_PROVIDER_ID` |  | The template's providerId. |
+| `DOMAIN_CONNECT_SERVICE_ID` | `custom_domain` | The template's serviceId. Default: custom_domain. |
+
 ## Logs
 
 | Variable | Example or default | What it does |

@@ -76,6 +76,8 @@ pub struct Config {
     pub dns_resolver_url: String,
     /// The name custom domains point their CNAME at. None: the API host.
     pub custom_domain_target: Option<String>,
+    /// DOMAIN_CONNECT_*: signs links that add a custom domain's DNS records at its provider (domain_connect.rs). None: off.
+    pub domain_connect: Option<crate::domain_connect::DomainConnect>,
     /// BROD_TLS: Brod serves HTTPS itself, with certificates on demand (tls.rs). None: a proxy in front does.
     pub tls: Option<crate::tls::TlsConfig>,
     /// BROD_NETWORK: what happens when an app reaches an outside host its brod.json does not declare (network.rs).
@@ -541,6 +543,7 @@ impl Config {
             custom_domain_target: get("CUSTOM_DOMAIN_TARGET")
                 .map(|t| t.trim().trim_end_matches('.').to_lowercase())
                 .filter(|t| !t.is_empty()),
+            domain_connect: crate::domain_connect::DomainConnect::from_vars(get)?,
             dev_allow_loopback_git: get("DEV_MODE").as_deref() == Some("1") && get("DEV_ALLOW_LOOPBACK_GIT").as_deref() == Some("1"),
             dev_free_storage_mb: if get("DEV_MODE").as_deref() == Some("1") {
                 get("DEV_FREE_STORAGE_MB").and_then(|v| v.parse().ok())

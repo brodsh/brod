@@ -570,8 +570,23 @@ the records are still missing. A browser that blocks the tab leaves the link on 
   addresses, `cloudflare.warning` says so and the Domains tab marks the domain. An older `A` record looks the same.
   The list can be two minutes behind. Adding or verifying a domain always looks again.
 
-Cloudflare has no link that fills in a record. Its way to do that, Domain Connect, needs a template published in
-advance by whoever runs the server and every link signed with that server's key, so Brod does not use it.
+Cloudflare has no plain link that fills in a record. Its way to do that is Domain Connect, which needs a template
+published in advance by whoever runs the server and every link signed with that server's key, so it is off unless the
+server is set up for it. A server that is set up also gives:
+
+- **A link that adds the records.** `cloudflare.apply_url` opens instead of the DNS records page. Cloudflare asks the
+  person to sign in and confirm, then adds both records. Whether the CNAME comes out DNS only depends on what the
+  server's operator agreed with Cloudflare, so the proxied warning above still applies.
+- **Only for a subdomain for one app.** The root of a zone and a wildcard domain keep the steps above, as does any zone
+  whose provider does not know the template. Anyone who opens the link and can confirm at Cloudflare creates the
+  records, so treat it like the TXT value itself.
+
+To set it up, publish a template in [Domain-Connect/Templates](https://github.com/Domain-Connect/Templates), have
+Cloudflare accept it, publish the public key in DNS at `<DOMAIN_CONNECT_KEY_HOST>.<syncPubKeyDomain>`, and set
+`DOMAIN_CONNECT_*` ([configuration](configuration.md#domain-connect)). Setting only some of the three required values
+stops the server at startup. The template's CNAME names one target, which must be this server's `CUSTOM_DOMAIN_TARGET`
+(or `BROD_PUBLIC_URL`'s host). Brod cannot check that for you. With none of it set, Brod makes no Domain Connect lookups
+at all.
 
 - Nothing is served at a domain until it is verified.
 - Several workspaces may claim the same name while it is pending, so nobody can squat on it. Only the one holding the
