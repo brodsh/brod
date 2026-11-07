@@ -260,6 +260,7 @@ pub fn describe_workspace(conn: &Connection, cfg: &Config, c: &Caller) -> Result
             "how": "An app never keeps its own user table. The platform signs people in before a request reaches the app. In the browser, GET /_brod/me on the app's own address returns the signed-in person, or 401 if nobody is signed in (public apps).",
             "shape": { "user": { "id": "usr_…", "email": "ana@example.com", "name": "Ana" }, "role": "editor", "groups": ["finance"], "app": "reading-list", "workspace": c.workspace.slug, "token": "<signed identity token>" },
             "client_library": "<script src=\"/_brod/client.js\"></script> then: const me = await Brod.me(); if (me?.role === \"editor\") { … }; Brod.signIn(); Brod.signOut();",
+            "sign_in_page": "When people must sign in, build the login page in the app's own design with Brod.auth from the same client library, and name it in brod.json: get_auth_integration shows how. Never add a password field or store sessions.",
             "roles": "Check me.role against the roles the app declares (default owner, editor, viewer; most powerful first). Hide or disable what a role may not do.",
             "server_apps": "Server code (_worker.js) receives the signed-in person on every request as headers x-brod-user-id, x-brod-user-email, x-brod-user-name (URI-encoded), x-brod-role and x-brod-groups (comma-separated), plus x-brod-identity (the signed token). They are absent for anonymous visitors of public apps. The platform removes any x-brod-* header a visitor sends.",
             "signed_token": format!("me.token and x-brod-identity are a JWT signed with Ed25519 (alg EdDSA), valid 5 minutes: iss {}, aud \"brod:app:<app id>\", sub (user id), email, name, workspace {{id, slug}}, role, groups, iat, exp, jti. Verify it with any JWT library against {}/.well-known/jwks.json (server apps also get it inline as env.BROD_IDENTITY_JWKS, with env.BROD_ISSUER and env.BROD_APP_ID). get_auth_integration has snippets per framework.", cfg.api_origin, cfg.api_origin),
@@ -715,6 +716,20 @@ pub struct Subject {
 /// One grant, as given by a person or agent: exactly one of email, group, domain, or everyone ("workspace" or "signed_in").
 pub fn resolve_subject(conn: &Connection, c: &Caller, g: &Map<String, Value>) -> Result<Subject> {
     let s = |k: &str| present(g, k).filter(|v| crate::model::truthy(Some(v))).map(crate::model::js_string);
+    // An app user: named on this one app, with no place in the workspace and no invitation sent.
+    if let Some(email) = s("app_user") {
+        let e = norm_email(&email);
+        if !is_email(&e) {
+            return Err(Problem::new(400, "bad_email", "\"app_user\" is an email address."));
+        }
+        let t = now();
+        conn.run(
+            "INSERT INTO users (id, email, name, email_verified_at, created_at) VALUES (?,?,'',NULL,?) ON CONFLICT(email) DO NOTHING",
+            params![random_id("usr_", 12), e, t],
+        )?;
+        let p = user_by_email(conn, &e)?.ok_or_else(|| Problem::internal("user vanished after insert"))?;
+        return Ok(Subject { subject: format!("user:{}", p.id), label: p.email });
+    }
     if let Some(email) = s("email") {
         let p = person_in_workspace(conn, c, &email)?;
         return Ok(Subject { subject: format!("user:{}", p.id), label: p.email });
@@ -737,7 +752,7 @@ pub fn resolve_subject(conn: &Connection, c: &Caller, g: &Map<String, Value>) ->
         _ => Err(Problem::new(
             400,
             "bad_grant",
-            "Each grant names one of \"email\", \"group\", \"domain\", or \"everyone\" (\"workspace\" or \"signed_in\"), plus a \"role\".",
+            "Each grant names one of \"app_user\", \"email\", \"group\", \"domain\", or \"everyone\" (\"workspace\" or \"signed_in\"), plus a \"role\".",
         )),
     }
 }
@@ -756,18 +771,25 @@ fn valid_domain(d: &str) -> bool {
 
 pub fn list_grants(conn: &Connection, app: &AppRow) -> Result<Vec<Value>> {
     conn.all(
-        "SELECT g.subject, g.role, u.email, gr.name AS gname FROM grants g
+        "SELECT g.subject, g.role, u.email, gr.name AS gname, g.filters, m.role AS member FROM grants g
          LEFT JOIN users u ON g.subject = 'user:' || u.id LEFT JOIN groups gr ON g.subject = 'group:' || gr.id
+         LEFT JOIN members m ON m.workspace_id = ? AND m.user_id = u.id
          WHERE g.app_id = ? ORDER BY g.created_at",
-        [&app.id],
+        params![app.workspace_id, app.id],
         |r| {
             let subject: String = r.get(0)?;
             let role: String = r.get(1)?;
             let email: Option<String> = r.get(2)?;
             let gname: Option<String> = r.get(3)?;
+            let filters: Option<String> = r.get(4)?;
+            let member: Option<String> = r.get(5)?;
             let mut m = Map::new();
             m.insert("role".into(), json!(role));
+            if let Some(f) = filters.and_then(|f| serde_json::from_str::<Map<String, Value>>(&f).ok()).filter(|f| !f.is_empty()) {
+                m.insert("filters".into(), Value::Object(f));
+            }
             match (email.filter(|e| !e.is_empty()), gname.filter(|g| !g.is_empty())) {
+                (Some(e), _) if member.is_none() => m.insert("app_user".into(), json!(e)),
                 (Some(e), _) => m.insert("email".into(), json!(e)),
                 (None, Some(g)) => m.insert("group".into(), json!(g)),
                 (None, None) => match subject.strip_prefix("domain:") {
@@ -789,6 +811,8 @@ pub struct Decision {
     pub role: Option<String>,
     pub groups: Vec<String>,
     pub member: Option<String>,
+    /// What the person's grant carries besides a role, such as {"tenant": "acme"}. The app applies it to its data.
+    pub filters: Map<String, Value>,
 }
 
 /// Decide whether a person (or an anonymous visitor) may open an app, and with which app role.
@@ -799,7 +823,14 @@ pub fn decide(conn: &Connection, app: &AppRow, user: Option<&User>) -> Result<De
     let lowest = roles.last().cloned().unwrap_or_default();
     let Some(user) = user else {
         let public = app.access == "public";
-        return Ok(Decision { allowed: public, sign_in_needed: !public, role: None, groups: vec![], member: None });
+        return Ok(Decision {
+            allowed: public,
+            sign_in_needed: !public,
+            role: None,
+            groups: vec![],
+            member: None,
+            filters: Default::default(),
+        });
     };
     let member: Option<String> =
         conn.first("SELECT role FROM members WHERE workspace_id = ? AND user_id = ?", params![app.workspace_id, user.id], |r| r.get(0))?;
@@ -818,7 +849,70 @@ pub fn decide(conn: &Connection, app: &AppRow, user: Option<&User>) -> Result<De
             grants.push((format!("user:{}", user.id), if roles.contains(&role) { role } else { lowest.clone() }));
         }
     }
-    Ok(decide_with(app, &roles, &lowest, user, member, &groups, &grants))
+    let mut decision = decide_with(app, &roles, &lowest, user, member, &groups, &grants);
+    if decision.allowed {
+        let rows = conn.all("SELECT subject, filters FROM grants WHERE app_id = ? AND filters IS NOT NULL", [&app.id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        decision.filters = filters_for(user, &groups, &rows);
+    }
+    Ok(decision)
+}
+
+/// The filters that apply to a person: the grant naming them, else their groups' together, else their email domain's.
+/// One never adds to another, so a person given one tenant does not also get their domain's.
+pub fn filters_for(user: &User, groups: &[(String, String)], rows: &[(String, String)]) -> Map<String, Value> {
+    let parsed = |subject: &str| -> Option<Map<String, Value>> {
+        let (_, stored) = rows.iter().find(|(s, _)| s == subject)?;
+        serde_json::from_str::<Map<String, Value>>(stored).ok().filter(|m| !m.is_empty())
+    };
+    if let Some(mine) = parsed(&format!("user:{}", user.id)) {
+        return mine;
+    }
+    let mut merged = Map::new();
+    for (id, _) in groups {
+        for (k, v) in parsed(&format!("group:{id}")).unwrap_or_default() {
+            let mut all: Vec<Value> = match merged.remove(&k) {
+                Some(Value::Array(a)) => a,
+                Some(one) => vec![one],
+                None => Vec::new(),
+            };
+            for x in if let Value::Array(a) = v { a } else { vec![v] } {
+                if !all.contains(&x) {
+                    all.push(x);
+                }
+            }
+            merged.insert(k, if all.len() == 1 { all.remove(0) } else { Value::Array(all) });
+        }
+    }
+    if !merged.is_empty() {
+        return merged;
+    }
+    let domain = user.email.split('@').nth(1).unwrap_or("");
+    parsed(&format!("domain:{domain}")).unwrap_or_default()
+}
+
+/// Filters as asked for: { "tenant": "acme", "region": ["np", "in"] }. Stored as JSON; `{}` clears them.
+pub fn check_filters(v: &Value) -> Result<String> {
+    const WHAT: &str =
+        "\"filters\" is an object of up to 8 names, each a short string or a list of up to 50, like { \"tenant\": \"acme\" }.";
+    let bad = || Problem::new(400, "bad_filters", WHAT);
+    let m = v.as_object().ok_or_else(bad)?;
+    if m.len() > 8 {
+        return Err(bad());
+    }
+    let short = |x: &Value| x.as_str().is_some_and(|s| !s.is_empty() && s.chars().count() <= 100 && !s.chars().any(char::is_control));
+    for (k, x) in m {
+        let name_ok = !k.is_empty()
+            && k.len() <= 32
+            && k.as_bytes()[0].is_ascii_lowercase()
+            && k.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+        let value_ok = short(x) || x.as_array().is_some_and(|a| !a.is_empty() && a.len() <= 50 && a.iter().all(&short));
+        if !name_ok || !value_ok {
+            return Err(bad());
+        }
+    }
+    Ok(v.to_string())
 }
 
 /// The pure part of decide(): the same rules over rows already read.
@@ -844,8 +938,14 @@ pub fn decide_with(
     let best_of = |list: &[&(String, String)]| list.iter().filter_map(|(_, r)| index(r)).min().map(|i| roles[i].clone());
     let best = best_of(&matched);
     let names: Vec<String> = groups.iter().map(|(_, n)| n.clone()).collect();
-    let yes =
-        |role: String| Decision { allowed: true, sign_in_needed: false, role: Some(role), groups: names.clone(), member: member.clone() };
+    let yes = |role: String| Decision {
+        allowed: true,
+        sign_in_needed: false,
+        role: Some(role),
+        groups: names.clone(),
+        member: member.clone(),
+        filters: Default::default(),
+    };
     if app.owner_id == user.id || member.as_deref() == Some("admin") {
         return yes(roles.first().cloned().unwrap_or_default());
     }
@@ -865,7 +965,7 @@ pub fn decide_with(
         "signed_in" | "public" => return yes(best.unwrap_or_else(|| lowest.to_string())),
         _ => {}
     }
-    Decision { allowed: false, sign_in_needed: false, role: None, groups: names, member }
+    Decision { allowed: false, sign_in_needed: false, role: None, groups: names, member, filters: Default::default() }
 }
 
 /// One sentence that says who can open an app (the share sheet).
@@ -873,7 +973,7 @@ pub fn who_can_open(app: &AppRow, grants: &[Value], workspace_name: &str) -> Str
     let named: Vec<String> = grants
         .iter()
         .filter_map(|g| {
-            if let Some(e) = g.get("email").and_then(|v| v.as_str()) {
+            if let Some(e) = g.get("email").or(g.get("app_user")).and_then(|v| v.as_str()) {
                 Some(e.to_string())
             } else if let Some(gr) = g.get("group").and_then(|v| v.as_str()) {
                 Some(format!("the {gr} group"))
@@ -912,6 +1012,48 @@ pub fn app_by_slug(conn: &Connection, slug: &str) -> Result<Option<AppRow>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn filters_come_from_the_most_specific_grant_and_never_add_up() {
+        let user = crate::model::User { id: "u".into(), email: "a@acme.test".into(), name: String::new(), email_verified_at: None };
+        let groups = [("g1".to_string(), "one".to_string()), ("g2".to_string(), "two".to_string())];
+        let row = |s: &str, f: &str| (s.to_string(), f.to_string());
+        let mine = row("user:u", r#"{"tenant":"mine"}"#);
+        let g1 = row("group:g1", r#"{"tenant":"a"}"#);
+        let g2 = row("group:g2", r#"{"tenant":["a","b"],"region":"np"}"#);
+        let dom = row("domain:acme.test", r#"{"tenant":"dom","extra":"x"}"#);
+        let val = |m: Map<String, Value>| Value::Object(m);
+        assert_eq!(val(filters_for(&user, &groups, &[mine.clone(), g1.clone(), dom.clone()])), json!({ "tenant": "mine" }));
+        assert_eq!(
+            val(filters_for(&user, &groups, &[g1.clone(), g2.clone(), dom.clone()])),
+            json!({ "tenant": ["a", "b"], "region": "np" })
+        );
+        assert_eq!(val(filters_for(&user, &[], &[g1, dom.clone()])), json!({ "tenant": "dom", "extra": "x" }));
+        assert_eq!(
+            val(filters_for(&user, &[], &[row("domain:other.test", r#"{"tenant":"no"}"#), row("user:someone", r#"{"tenant":"no"}"#)])),
+            json!({})
+        );
+        // Cleared on the person: their domain's apply.
+        assert_eq!(val(filters_for(&user, &[], &[row("user:u", "{}"), dom])), json!({ "tenant": "dom", "extra": "x" }));
+    }
+
+    #[test]
+    fn filters_are_short_names_and_short_values() {
+        assert!(check_filters(&json!({ "tenant": "acme", "region": ["np", "in"] })).is_ok());
+        assert_eq!(check_filters(&json!({})).unwrap(), "{}");
+        for bad in [
+            json!(["acme"]),
+            json!({ "Tenant": "a" }),
+            json!({ "a b": "a" }),
+            json!({ "tenant": "" }),
+            json!({ "tenant": 1 }),
+            json!({ "tenant": [] }),
+            json!({ "tenant": "a\nb" }),
+            json!({ "tenant": "x".repeat(101) }),
+        ] {
+            assert!(check_filters(&bad).is_err(), "{bad}");
+        }
+    }
+
     use super::*;
     use crate::db::test_db;
 

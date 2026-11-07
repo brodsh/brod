@@ -28,6 +28,58 @@ Every app lives at `<slug>.<workspace>.<APPS_DOMAIN>`.
 - **Signing out** of any app ends the platform session and every app session made from it. **Removing a person** from
   the workspace ends their access to every app on their next request.
 - The emailed link opens a page with a Continue button. Mail scanners that open links do not use them up.
+- An app can have [its own login page](#your-own-login-page). Brod still does the work behind it.
+
+### Your own login page
+
+Brod's sign-in page carries the app's icon, name and colour. For anything more, build the page in the app's own design
+and let Brod do the rest: Brod sends the code, checks it and sets the session, on the app's own address, including a
+custom domain. The app never handles a password or a session token.
+
+Name the page in `brod.json`, with every file it loads:
+
+```json
+{
+  "open_paths": [
+    { "path": "/login", "sign_in_page": true },
+    "/assets/*"
+  ]
+}
+```
+
+These are [open paths](#open-paths), so a person approves them, and anyone can read them. Until then, visitors see Brod's page
+and the routes below answer `404 no_sign_in_page`. Afterwards, signed-out visitors go to `/login?return=<where they were
+going>`, and `Brod.signIn()` goes there too. A live version that stops naming the page goes back to Brod's.
+
+```html
+<script src="/_brod/client.js"></script>
+<script type="module">
+  const how = await Brod.auth.methods();            // { email, google, app: { name }, return }
+  await Brod.auth.sendCode(email);                  // emails a 6-digit code
+  const r = await Brod.auth.verifyCode(email, code); // throws an Error with .code and .message
+  if (r.allowed) location.href = r.return; else showNoAccess();
+  if (how.google) Brod.auth.google();               // a redirect, and back signed in
+  await Brod.auth.signOut();
+</script>
+```
+
+In a bundled app, `@brodsh/auth/client` has the same functions.
+
+| Route, on the app's address | |
+| --- | --- |
+| `GET /_brod/auth/methods` | How people can sign in here |
+| `POST /_brod/auth/start` `{email}` | Email a code |
+| `POST /_brod/auth/verify` `{email, code, return}` | Swap the code for the session cookie: `{ok, allowed, return}` |
+| `GET /_brod/auth/google?return=` | Sign in with Google, if the server has it |
+| `POST /_brod/auth/signout` | End the session |
+
+- **One app only.** A session from a code works on that app, and nowhere else: not on the platform, not on another
+  app. Google sign-in goes through the API host, so it is the ordinary single sign-in, and signing out of it signs out
+  of every app.
+- **Access is unchanged.** `verify` answers `allowed: false` when the app is not shared with the person, so the page can say so.
+- **Limits.** A code lasts 10 minutes and allows 5 tries. Per hour: 5 codes for one address across all apps, 20 from
+  one network, and 100 from one app. POSTs must come from the app's own origin, with a JSON body.
+- **The email** names the app and its address and comes from the server's sender (`EMAIL_FROM`).
 
 ## The identity contract
 
@@ -528,6 +580,35 @@ Narrowing access applies at once. See [mcp.md](mcp.md).
 `signed_in` or `public` for its first 24 hours. The refusal is `403 workspace_too_new` with `available_at`. Sharing
 inside the workspace (`workspace`, or `people` with named people and groups) works from the start. A self-hosted
 server has this hold off by default. See [security.md](security.md).
+
+### App users and filters
+
+An app user is someone who uses one app and nothing else, such as a customer's employee. They get no place in the
+workspace and no invitation, and see nothing of Brod but the app. Name them, or a whole email domain, on the app:
+
+```json
+{
+  "access": "people",
+  "add": [
+    { "app_user": "sam@acme.com", "role": "viewer", "filters": { "tenant": "acme" } },
+    { "domain": "beta.example", "role": "viewer", "filters": { "tenant": ["beta", "beta-eu"] } }
+  ]
+}
+```
+
+`filters` is what a grant carries besides a role: up to 8 names, each a short string or a list. It works on any grant
+except one to everyone, and on any kind of person, not just app users.
+
+- **The app applies them.** Brod passes filters on and does nothing else with them. Scope every query by them, and
+  refuse a person with none, unless the app means otherwise: no filter must never mean every tenant by accident.
+- **Where they arrive.** `filters` in `/_brod/me` and in the identity token, `user.filters` from `@brodsh/auth`, and
+  the `x-brod-filters` header in server code (URI-encoded JSON, absent when there are none).
+- **Which apply.** The grant naming the person, else their groups' together, else their email domain's. They never add
+  to each other, so someone given one tenant does not also get their domain's. Owners and workspace admins open every app, with
+  whatever filters their own grants carry, so decide in the app what they see.
+- **Changing them.** An agent's change waits for a person to confirm, and the confirmation shows the filters. Moving
+  someone between tenants shows other data, so it counts as widening. Leaving `filters` out keeps what is there,
+  and `{}` clears them. A change applies on the person's next request.
 
 ## Custom domains
 

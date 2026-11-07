@@ -1,6 +1,6 @@
 {
   "name": "@brodsh/auth",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Read the person Brod signed in: verify the x-brod-identity JWT in Next.js, Node and Workers.",
   "license": "MIT",
   "type": "module",
@@ -52,6 +52,16 @@
       "require": {
         "types": "./dist/next.d.cts",
         "default": "./dist/next.cjs"
+      }
+    },
+    "./client": {
+      "import": {
+        "types": "./dist/client.d.ts",
+        "default": "./dist/client.js"
+      },
+      "require": {
+        "types": "./dist/client.d.cts",
+        "default": "./dist/client.cjs"
       }
     },
     "./package.json": "./package.json"

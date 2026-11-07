@@ -31,6 +31,21 @@ window.Brod = {
   async settings() { const r = await fetch('/_brod/settings', { credentials: 'same-origin' }); return r.ok ? r.json() : {}; },
   signIn(path) { location.href = '/_brod/signin?return=' + encodeURIComponent(path || location.pathname + location.search); },
   signOut() { location.href = '/_brod/signout'; },
+  // For the app's own login page: named in brod.json as an open path with \"sign_in_page\": true.
+  auth: {
+    async post(path, body) {
+      const r = await fetch('/_brod/auth/' + path, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { const e = new Error((d.error && d.error.message) || 'Sign-in failed. Try again.'); e.code = d.error && d.error.code; e.status = r.status; throw e; }
+      return d;
+    },
+    async methods() { const r = await fetch('/_brod/auth/methods', { credentials: 'same-origin' }); return r.ok ? r.json() : { email: false, google: false }; },
+    sendCode(email) { return this.post('start', { email }); },
+    verifyCode(email, code, returnTo) { return this.post('verify', { email, code, return: returnTo || this.returnTo() }); },
+    google(returnTo) { location.href = '/_brod/auth/google?return=' + encodeURIComponent(returnTo || this.returnTo()); },
+    signOut() { return this.post('signout'); },
+    returnTo() { const r = new URLSearchParams(location.search).get('return'); return r && r[0] === '/' && r[1] !== '/' && r[1] !== '\\\\' ? r : '/'; },
+  },
 };
 ";
 
@@ -43,7 +58,7 @@ fn sign_in_url(cfg: &Config, app: &AppRow, workspace_slug: &str, domain: Option<
 }
 pub(crate) fn app_return(r: Option<String>) -> String {
     match r {
-        Some(r) if r.starts_with('/') && !r.starts_with("//") && !r.starts_with("/\\") => r,
+        Some(r) if r.starts_with('/') && !r.starts_with("//") && !r.starts_with("/\\") && !r.chars().any(char::is_control) => r,
         _ => "/".into(),
     }
 }
@@ -54,7 +69,7 @@ pub fn identity_for(cfg: &Config, app: &AppRow, workspace_slug: &str, user: &Use
     let t = now() / 1000;
     let identity = json!({
         "user": { "id": user.id, "email": user.email, "name": user.name },
-        "role": d.role, "groups": d.groups, "app": app.slug, "workspace": workspace_slug,
+        "role": d.role, "groups": d.groups, "filters": d.filters, "app": app.slug, "workspace": workspace_slug,
     });
     let claims = json!({
         "iss": cfg.api_origin,
@@ -65,6 +80,7 @@ pub fn identity_for(cfg: &Config, app: &AppRow, workspace_slug: &str, user: &Use
         "workspace": { "id": app.workspace_id, "slug": workspace_slug },
         "role": d.role,
         "groups": d.groups,
+        "filters": d.filters,
         "iat": t,
         "exp": t + limits::IDENTITY_TTL_SEC,
         "jti": random_id("", 16),
@@ -100,7 +116,7 @@ struct Visit {
 /// A bearer token on an app's MCP endpoint, checked (app_mcp.rs).
 enum TokenAuth {
     /// A token for exactly this endpoint, and whether its person may open the app now, decided as for their browser.
-    Person(User, Decision),
+    Person(User, Box<Decision>),
     Invalid(&'static str),
 }
 
@@ -196,7 +212,7 @@ pub enum Where {
 /// and anyone granted its top role. Nobody gets in anonymously or with the app's password, whatever its access mode.
 pub fn admit_staging(app: &AppRow, d: &mut Decision, visitor: Option<&User>) {
     let Some(user) = visitor else {
-        *d = Decision { allowed: false, sign_in_needed: true, role: None, groups: vec![], member: None };
+        *d = Decision { allowed: false, sign_in_needed: true, role: None, groups: vec![], member: None, filters: Default::default() };
         return;
     };
     let top = app.role_list().into_iter().next();
@@ -301,7 +317,7 @@ async fn serve(
                     Some(match crate::app_mcp::check(c, t, &app.id, &format!("{origin}{path}"))? {
                         crate::app_mcp::Bearer::Person(user) => {
                             let d = crate::app_mcp::decide(c, &app, staging, &user)?;
-                            TokenAuth::Person(user, d)
+                            TokenAuth::Person(user, Box::new(d))
                         }
                         crate::app_mcp::Bearer::Invalid(why) => TokenAuth::Invalid(why),
                     })
@@ -360,7 +376,7 @@ async fn serve(
                 }
                 // The app never sees a Brod token.
                 req.headers.remove(axum::http::header::AUTHORIZATION);
-                decision = d;
+                decision = *d;
                 person = Some(user);
             }
             None if visitor.is_some() && decision.allowed => {}
@@ -415,6 +431,9 @@ async fn serve(
             return Ok(password_page(&app, &ret, "", 401));
         }
         if decision.sign_in_needed {
+            if let Some(login) = crate::open_paths::sign_in_page(&open) {
+                return Ok(redirect(&format!("{login}?return={}", encode_uri_component(&ret)), &[]));
+            }
             return Ok(redirect(&sign_in_url(&st.cfg, &app, &workspace_slug, domain.as_deref(), staging, &ret), &[]));
         }
         // Someone signed in whom the app was not shared with sees what an empty address shows, so nothing leaks about it.
@@ -595,7 +614,7 @@ async fn special(st: &State, req: &mut Req, v: Visit) -> Result<Response> {
     } else {
         ""
     };
-    let Visit { app, visitor, decision, workspace_slug, origin, domain, staging, .. } = v;
+    let Visit { app, open, visitor, decision, workspace_slug, origin, domain, staging, .. } = v;
     // The answer to the shield's proof-of-work check (shield.rs).
     if req.path == "/_brod/challenge" {
         let who = crate::usage::visitor_hash(&st.cfg, req, &app.id, visitor.as_ref().map(|v| v.user.id.as_str()));
@@ -639,6 +658,27 @@ async fn special(st: &State, req: &mut Req, v: Visit) -> Result<Response> {
         let cc = if public { "public, max-age=60" } else { "private, no-cache" };
         return Ok(json_response(&Value::Object(values), 200, &[("cache-control", cc.into())]));
     }
+    // The app's own login page (app_signin.rs). Nothing here answers until a person approved that page.
+    if req.path == "/_brod/auth/signout" {
+        return crate::app_signin::sign_out(st, req, &origin, visitor).await;
+    }
+    if req.path.starts_with("/_brod/auth/") {
+        if crate::open_paths::sign_in_page(&open).is_none() {
+            return Err(crate::problem::Problem::new(404, "no_sign_in_page", "This app has no approved sign-in page of its own."));
+        }
+        return match req.path.as_str() {
+            "/_brod/auth/start" => crate::app_signin::start(st, req, &app, &origin).await,
+            "/_brod/auth/verify" => crate::app_signin::verify(st, req, &app, &origin, staging).await,
+            "/_brod/auth/methods" => Ok(crate::app_signin::methods(st, req, &app)),
+            "/_brod/auth/google" if st.cfg.google_client_id.is_some() => {
+                // Google answers on the API host only, so the hand-back to this address is the same as for Brod's own page.
+                let url = sign_in_url(&st.cfg, &app, &workspace_slug, domain.as_deref(), staging, &app_return(req.param("return")));
+                let inner = url.strip_prefix(st.cfg.api_origin.as_str()).unwrap_or(&url);
+                Ok(redirect(&format!("{}/auth/google?return={}", st.cfg.api_origin, encode_uri_component(inner)), &[]))
+            }
+            _ => Err(crate::problem::Problem::new(404, "not_found", "There is nothing at this address.")),
+        };
+    }
     match req.path.as_str() {
         "/_brod/client.js" => Ok(response(
             200,
@@ -670,6 +710,9 @@ async fn special(st: &State, req: &mut Req, v: Visit) -> Result<Response> {
             Ok(crate::http::empty(204))
         }
         "/_brod/signin" => {
+            if let Some(login) = crate::open_paths::sign_in_page(&open) {
+                return Ok(redirect(&format!("{login}?return={}", encode_uri_component(&app_return(req.param("return")))), &[]));
+            }
             Ok(redirect(&sign_in_url(&st.cfg, &app, &workspace_slug, domain.as_deref(), staging, &app_return(req.param("return"))), &[]))
         }
         "/_brod/callback" => {
@@ -702,8 +745,9 @@ async fn special(st: &State, req: &mut Req, v: Visit) -> Result<Response> {
         }
         "/_brod/signout" => {
             // One sign-in, so signing out of one app signs out of all of them.
-            if let Some(parent) = visitor.and_then(|v| v.parent) {
-                st.db.call(move |c| people::revoke_session(c, &parent)).await?;
+            // A session from the app's own login page has nothing behind it, so it ends by itself.
+            if let Some(hash) = visitor.map(|v| v.parent.unwrap_or(v.hash)) {
+                st.db.call(move |c| people::revoke_session(c, &hash)).await?;
             }
             Ok(page(
                 200,
@@ -881,13 +925,20 @@ mod tests {
             takedown_reason: String::new(),
             staging_version: None,
         };
-        let d = Decision { allowed: true, sign_in_needed: false, role: Some("owner".into()), groups: vec!["finance".into()], member: None };
+        let d = Decision {
+            allowed: true,
+            sign_in_needed: false,
+            role: Some("owner".into()),
+            groups: vec!["finance".into()],
+            member: None,
+            filters: Default::default(),
+        };
         let (identity, token) = identity_for(&cfg, &app, "acme", &user, &d);
         assert_eq!(identity["role"], "owner");
         let now = crate::util::now() / 1000;
         let claims = cfg.identity_key.verify(&token, "http://localhost:8787", "brod:app:app_1", now).unwrap();
         let keys: Vec<&String> = claims.as_object().unwrap().keys().collect();
-        assert_eq!(keys, ["iss", "aud", "sub", "email", "name", "workspace", "role", "groups", "iat", "exp", "jti"]);
+        assert_eq!(keys, ["iss", "aud", "sub", "email", "name", "workspace", "role", "groups", "filters", "iat", "exp", "jti"]);
         assert_eq!(claims["workspace"], json!({ "id": "ws", "slug": "acme" }));
         assert_eq!(
             (claims["sub"].as_str(), claims["role"].as_str(), claims["groups"][0].as_str()),

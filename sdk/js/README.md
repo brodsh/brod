@@ -21,6 +21,8 @@ dependency, [`jose`](https://github.com/panva/jose).
 - [Node: http and Express](#node-http-and-express)
 - [Workers (workerd)](#workers-workerd)
 - [Your own users table: the 403 pattern](#your-own-users-table-the-403-pattern)
+- [App users and tenants](#app-users-and-tenants)
+- [Your own login page](#your-own-login-page)
 - [API](#api)
 - [Local development: BROD_DEV_USER](#local-development-brod_dev_user)
 - [Other languages](#other-languages)
@@ -201,6 +203,45 @@ export async function GET(request: Request) {
 401 means "not signed in"; 403 means "signed in, but not allowed here". Never create a row on the fly for anyone who
 gets through unless the app is meant to be open to the whole workspace, and never keep passwords: Brod signs people
 in.
+
+## App users and tenants
+
+A person's grant on an app can carry filters besides a role, such as a tenant. Brod passes them on; your code applies them:
+
+```ts
+import { filterValues, requireUser } from '@brodsh/auth';
+
+const user = await requireUser(request);
+const [tenant] = filterValues(user, 'tenant'); // user.filters is { tenant: 'acme' }
+if (!tenant) return new Response('No access', { status: 403 });
+const rows = await env.DB.query('SELECT * FROM jobs WHERE tenant = ?', [tenant]);
+```
+
+See [App users and filters](https://github.com/brodsh/brod/blob/main/docs/apps.md#app-users-and-filters).
+
+## Your own login page
+
+Build the page in your app's design. Brod sends the code, checks it and sets the session, so your code never handles
+a password or a session token. Name the page in `brod.json` as an open path with `"sign_in_page": true`, along with the
+files it loads, and pass on the `confirm_url` from the deploy. See
+[the docs](https://github.com/brodsh/brod/blob/main/docs/apps.md#your-own-login-page).
+
+```ts
+import { methods, sendCode, verifyCode, google, signOut, BrodSignInError } from '@brodsh/auth/client';
+
+const how = await methods(); // { email, google, app: { name }, return }
+await sendCode(email);
+try {
+  const r = await verifyCode(email, code);
+  if (r.allowed) location.href = r.return;
+  else showNoAccess();
+} catch (e) {
+  if (e instanceof BrodSignInError) showError(e.message); // e.code: bad_code, rate_limited, ...
+}
+```
+
+`@brodsh/auth/client` runs in the browser and has no dependencies. Without a bundler, `<script src="/_brod/client.js">`
+gives the same functions as `Brod.auth`.
 
 ## API
 

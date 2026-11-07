@@ -19,5 +19,5 @@ export async function requireUserFromHeaders(opts?: BrodAuthOptions): Promise<Br
   return requireUser(await headers(), opts);
 }
 
-export { BrodAuthError, currentUser, requireUser, verifyIdentityToken } from '@brodsh/auth';
+export { BrodAuthError, currentUser, filterValues, requireUser, verifyIdentityToken } from '@brodsh/auth';
 export type { BrodAuthErrorCode, BrodAuthOptions, BrodClaims, BrodUser } from '@brodsh/auth';

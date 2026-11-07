@@ -30,6 +30,8 @@ export interface BrodClaims extends JWTPayload {
   workspace: { id: string; slug: string };
   role: string | null;
   groups: string[];
+  /** What the person's grant carries besides a role, such as { tenant: 'acme' }. Absent from older servers. */
+  filters?: Record<string, string | string[]>;
   iat: number;
   exp: number;
   jti: string;
@@ -45,6 +47,11 @@ export interface BrodUser {
   /** The person's role in this app, or null when the app gives them none (a public app). */
   role: string | null;
   groups: string[];
+  /**
+   * What the person's grant carries besides a role, such as { tenant: 'acme' }. Brod only passes it on: scope your
+   * queries by it, and refuse a person who has none.
+   */
+  filters: Record<string, string | string[]>;
   /** The app id the token was made for (aud without its "brod:app:" prefix). */
   app: string;
   /** The verified claims as they came. */
@@ -219,6 +226,7 @@ function toUser(claims: BrodClaims): BrodUser {
     workspace: { id: claims.workspace.id, slug: claims.workspace.slug },
     role: typeof claims.role === 'string' ? claims.role : null,
     groups: Array.isArray(claims.groups) ? claims.groups.filter((g): g is string => typeof g === 'string') : [],
+    filters: claims.filters && typeof claims.filters === 'object' && !Array.isArray(claims.filters) ? claims.filters : {},
     app: claims.aud.startsWith('brod:app:') ? claims.aud.slice('brod:app:'.length) : claims.aud,
     claims,
   };
@@ -318,6 +326,7 @@ function devUser(opts: BrodAuthOptions): BrodUser | null {
     workspace,
     role: given.role === undefined ? 'owner' : given.role,
     groups: given.groups ?? [],
+    filters: given.filters ?? {},
     app,
     claims: {
       iss: 'brod:dev',
@@ -366,4 +375,10 @@ export function clearKeyCache(): void {
   localSets.clear();
   remoteSets.clear();
   warnedDev = false;
+}
+
+/** The values of one filter as a list: filterValues(user, 'tenant') is [] when the person has none. */
+export function filterValues(user: Pick<BrodUser, 'filters'>, name: string): string[] {
+  const v = user.filters[name];
+  return v === undefined ? [] : Array.isArray(v) ? v : [v];
 }

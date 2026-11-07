@@ -27,6 +27,8 @@ pub struct OpenPath {
     pub path: String,
     /// Upper case, sorted, without repeats. None: every method.
     pub methods: Option<Vec<String>>,
+    /// The app's own login page: signed-out visitors are sent here, and its sign-in routes answer (app_signin.rs).
+    pub sign_in_page: bool,
 }
 
 impl OpenPath {
@@ -65,17 +67,20 @@ impl OpenPath {
     }
 
     pub fn to_json(&self) -> Value {
-        match &self.methods {
-            None => json!(self.path),
-            Some(m) => json!({ "path": self.path, "methods": m }),
+        match (&self.methods, self.sign_in_page) {
+            (None, false) => json!(self.path),
+            (Some(m), false) => json!({ "path": self.path, "methods": m }),
+            (None, true) => json!({ "path": self.path, "sign_in_page": true }),
+            (Some(m), true) => json!({ "path": self.path, "methods": m, "sign_in_page": true }),
         }
     }
 
     /// "/api/mcp (POST)" for summaries.
     pub fn label(&self) -> String {
+        let page = if self.sign_in_page { ", the app's sign-in page" } else { "" };
         match &self.methods {
-            None => self.path.clone(),
-            Some(m) => format!("{} ({})", self.path, m.join(", ")),
+            None => format!("{}{page}", self.path),
+            Some(m) => format!("{} ({}){page}", self.path, m.join(", ")),
         }
     }
 }
@@ -129,6 +134,7 @@ pub fn parse_list(v: &Value, whence: &str) -> Result<Vec<OpenPath>> {
     }
     let mut out: Vec<OpenPath> = Vec::new();
     for item in list {
+        let sign_in_page = item.get("sign_in_page").and_then(Value::as_bool).unwrap_or(false);
         let (path, methods) = match item {
             Value::String(s) => (s.clone(), None),
             Value::Object(o) => (
@@ -157,7 +163,18 @@ pub fn parse_list(v: &Value, whence: &str) -> Result<Vec<OpenPath>> {
         if let Some(why) = pattern_problem(&path) {
             return Err(bad(format!("{whence}: the open path {path:?} {why}.")));
         }
-        let entry = OpenPath { path, methods };
+        if sign_in_page {
+            if path.ends_with("/*") {
+                return Err(bad(format!("{whence}: the sign-in page {path:?} must be one exact path, not a prefix.")));
+            }
+            if methods.as_ref().is_some_and(|m| !m.iter().any(|x| x == "GET")) {
+                return Err(bad(format!("{whence}: the sign-in page {path:?} must answer GET.")));
+            }
+            if out.iter().any(|e| e.sign_in_page && e.path != path) {
+                return Err(bad(format!("{whence}: an app has one sign-in page.")));
+            }
+        }
+        let entry = OpenPath { path, methods, sign_in_page };
         if !out.contains(&entry) {
             out.push(entry);
         }
@@ -173,6 +190,11 @@ pub fn to_json(list: &[OpenPath]) -> String {
 /// A list as stored, read leniently (it was checked when it was written).
 pub fn parse(stored: Option<&str>) -> Vec<OpenPath> {
     stored.and_then(|s| serde_json::from_str::<Value>(s).ok()).and_then(|v| parse_list(&v, "stored").ok()).unwrap_or_default()
+}
+
+/// The app's own login page, if the served version names one that a person approved. `open` is `effective`'s result.
+pub fn sign_in_page(open: &[OpenPath]) -> Option<&str> {
+    open.iter().find(|e| e.sign_in_page).map(|e| e.path.as_str())
 }
 
 /// Read the "open_paths" list from a bundle's brod.json, as the JSON kept with the version. None: it declares none.
@@ -256,6 +278,25 @@ mod tests {
 
     fn list(v: Value) -> Vec<OpenPath> {
         parse_list(&v, "test").unwrap()
+    }
+
+    #[test]
+    fn a_sign_in_page_is_one_exact_path_that_answers_get() {
+        let parsed = parse_list(&json!([{ "path": "/login", "sign_in_page": true }, "/assets/*"]), "t").unwrap();
+        assert_eq!(sign_in_page(&parsed), Some("/login"));
+        assert_eq!(parse(Some(&to_json(&parsed))), parsed);
+        assert!(parse_list(&json!([{ "path": "/login/*", "sign_in_page": true }]), "t").is_err());
+        assert!(parse_list(&json!([{ "path": "/login", "methods": ["POST"], "sign_in_page": true }]), "t").is_err());
+        assert!(parse_list(&json!([{ "path": "/a", "sign_in_page": true }, { "path": "/b", "sign_in_page": true }]), "t").is_err());
+    }
+
+    #[test]
+    fn a_sign_in_page_counts_only_once_a_person_approved_its_path() {
+        let declared = parse_list(&json!([{ "path": "/login", "sign_in_page": true }]), "t").unwrap();
+        assert_eq!(sign_in_page(&effective(&[], &declared)), None);
+        let approved = parse_list(&json!(["/login"]), "t").unwrap();
+        assert_eq!(sign_in_page(&effective(&approved, &declared)), Some("/login"));
+        assert_eq!(sign_in_page(&effective(&declared, &parse_list(&json!(["/login"]), "t").unwrap())), None);
     }
 
     #[test]

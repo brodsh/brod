@@ -10,6 +10,7 @@ pub mod analytics;
 pub mod api;
 pub mod app;
 pub mod app_mcp;
+pub mod app_signin;
 pub mod auth;
 pub mod backups;
 pub mod billing;

@@ -12,7 +12,7 @@ INSERT INTO tokens VALUES ('tok_1', 'ws_1', 'usr_a', 'Claude', 'h2', 1, 2, NULL,
 INSERT INTO tokens VALUES ('tok_2', 'ws_1', 'usr_a', 'Claude Desktop', 'h7', 1, NULL, NULL, 'read', 5, 'cli_1', 'h8', 'h9', 6);
 INSERT INTO apps VALUES ('app_1', 'ws_1', 'usr_a', 'reading', 'Reading', 'Reading list', 'Hi', 'live', 'people', '["owner","editor","viewer"]', 2, 1, 3, 'sp_1', 4096, 8192, NULL, NULL, '', 3, 2, '[]', 'db_1');
 INSERT INTO apps VALUES ('app_2', 'ws_1', 'usr_a', 'draft', 'draft', '', '', 'live', 'password', '["owner"]', NULL, 2, 0, NULL, 0, 0, 'pbkdf2$100000$c2FsdA$aGFzaA', 1700000002000, 'Phishing ''kit''', NULL, NULL, '[]', NULL);
-INSERT INTO grants VALUES ('app_1', 'user:usr_B', 'viewer', 1), ('app_1', 'domain:acme.test', 'editor', 2);
+INSERT INTO grants VALUES ('app_1', 'user:usr_B', 'viewer', 1, NULL), ('app_1', 'domain:acme.test', 'editor', 2, '{"tenant":"acme"}');
 INSERT INTO versions VALUES ('app_1', 1, 'First version', 'ana@acme.test', 2, 120, 1, NULL, '[]', NULL, NULL, NULL, NULL, NULL, 'auto', NULL, NULL);
 INSERT INTO versions VALUES ('app_1', 2, 'Update', 'Claude (ana@acme.test)', 3, 4096, 2, '{"main":"_worker.js","modules":["_worker.js"]}', '["a password field"]', 3, '[{"key":"name","label":"Name","type":"text","default":"Reading"}]', '["api.stripe.com"]', 1, NULL, 'auto', NULL, '/api/mcp');
 INSERT INTO secrets VALUES ('app_1', 'STRIPE_KEY', 'iv.ct', 1, 'ana@acme.test');
@@ -62,3 +62,4 @@ INSERT INTO git_sync_events (id, app_id, at, source, remote_oid, branch, result,
 INSERT INTO blobs (sha256, size, created_at) VALUES ('aa00000000000000000000000000000000000000000000000000000000000001', 12, 1700000000);
 INSERT INTO version_manifests (app_id, version, parent, author, note, created_at, file_count, bytes) VALUES ('app_1', 2, 1, 'usr_a', 'Update', 1700000000, 1, 12);
 INSERT INTO manifest_entries (app_id, version, path, sha256, size, mode) VALUES ('app_1', 2, 'index.html', 'aa00000000000000000000000000000000000000000000000000000000000001', 12, 420);
+INSERT INTO app_sign_in_codes (id, app_id, email, hash, attempts, created_at, expires_at, used_at) VALUES ('sic_1', 'app_1', 'ana@acme.test', 'aa00', 0, 1, 2, NULL);

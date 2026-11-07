@@ -13,6 +13,12 @@ pub mod limits {
     pub const EDITING_WINDOW_MS: i64 = 2 * 3600 * 1000;
     pub const LOGIN_LINK_TTL_MS: i64 = 15 * 60 * 1000;
     pub const LOGIN_LINKS_PER_HOUR: i64 = 5;
+    /// Codes from an app's own login page (app_signin.rs).
+    pub const APP_SIGN_IN_CODE_TTL_MS: i64 = 10 * 60 * 1000;
+    pub const APP_SIGN_IN_CODE_TRIES: i64 = 5;
+    pub const APP_SIGN_IN_CODES_PER_HOUR: i64 = 100;
+    pub const APP_SIGN_IN_CODES_PER_IP_HOUR: i64 = 60; // a company behind one address signs in together
+    pub const APP_SIGN_IN_CHECKS_PER_IP_HOUR: i64 = 100;
     pub const INVITE_TTL_MS: i64 = 7 * 24 * 3600 * 1000;
     pub const SESSION_TTL_MS: i64 = 30 * 24 * 3600 * 1000;
     pub const APP_CODE_TTL_MS: i64 = 60 * 1000;

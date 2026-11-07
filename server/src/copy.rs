@@ -37,6 +37,7 @@ pub const TABLES: &[&str] = &[
     "login_links",
     "sessions",
     "app_codes",
+    "app_sign_in_codes",
     "confirmations",
     "reports",
     "events",
