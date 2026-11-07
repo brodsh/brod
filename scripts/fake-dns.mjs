@@ -2,6 +2,8 @@
 // A small DNS-over-HTTPS resolver (the JSON API Cloudflare and Google serve) that answers lookups from records tests
 // set, for custom domains. POST /_test/records {name, value, type?} adds a record (TXT unless type says otherwise);
 // DELETE removes all. POST /_test/outage {on} makes the resolver fail until turned off.
+// It also plays a Domain Connect provider under /dc: POST /_test/domain-connect {zone, settings} sets what
+// /dc/v2/<zone>/settings answers, and {template: "<provider>/<service>"} makes that template known.
 // The same handler runs as a Node HTTP server (e2e) and as Miniflare's outbound service (vitest).
 // Usage: node scripts/fake-dns.mjs [port]
 import http from 'node:http';
@@ -12,6 +14,7 @@ const TYPES = { A: 1, NS: 2, CNAME: 5, TXT: 16 };
 export function fakeDns() {
   const records = new Map();
   let outage = false;
+  const settings = new Map(), templates = new Set();
   /** (Request) -> Response, for Miniflare's outboundService. */
   return async function handle(request) {
     const url = new URL(request.url);
@@ -22,7 +25,17 @@ export function fakeDns() {
       return Response.json({ ok: true });
     }
     if (url.pathname === '/_test/outage' && request.method === 'POST') { ({ on: outage } = await request.json()); return Response.json({ ok: true }); }
-    if (url.pathname === '/_test/records' && request.method === 'DELETE') { records.clear(); return Response.json({ ok: true }); }
+    if (url.pathname === '/_test/records' && request.method === 'DELETE') { records.clear(); settings.clear(); templates.clear(); return Response.json({ ok: true }); }
+    if (url.pathname === '/_test/domain-connect' && request.method === 'POST') {
+      const b = await request.json();
+      if (b.zone) settings.set(b.zone, b.settings);
+      if (b.template) templates.add(b.template);
+      return Response.json({ ok: true });
+    }
+    const dcSettings = /^\/dc\/v2\/([^/]+)\/settings$/.exec(url.pathname);
+    if (dcSettings) return settings.has(dcSettings[1]) ? Response.json(settings.get(dcSettings[1])) : new Response('unknown zone', { status: 404 });
+    const dcTemplate = /^\/dc\/v2\/domainTemplates\/providers\/([^/]+)\/services\/([^/]+)$/.exec(url.pathname);
+    if (dcTemplate) return templates.has(`${dcTemplate[1]}/${dcTemplate[2]}`) ? Response.json({ version: 1 }) : new Response('unknown template', { status: 404 });
     if (url.pathname === '/dns-query' && request.method === 'GET') {
       if (outage) return new Response('resolver down', { status: 503 });
       const name = (url.searchParams.get('name') ?? '').toLowerCase().replace(/\.$/, '');

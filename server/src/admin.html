@@ -944,8 +944,10 @@ function domainCloudflare(d) {
     cf.warning ? h('p', { class: 'small' }, cf.warning) :
       h('p', { class: 'small' }, 'This domain\'s DNS is on Cloudflare, in the zone ', h('span', { class: 'mono' }, cf.zone), '.'),
     h('div', { class: 'cfacts' },
-      h('a', { class: pending ? 'btn deploy' : 'btn', href: cf.records_url, target: '_blank', rel: 'noopener' }, 'Open DNS records in Cloudflare'),
+      cf.apply_url ? h('a', { class: 'btn deploy', href: cf.apply_url, target: '_blank', rel: 'noopener' }, 'Add records in Cloudflare') : null,
+      h('a', { class: pending && !cf.apply_url ? 'btn deploy' : 'btn', href: cf.records_url, target: '_blank', rel: 'noopener' }, 'Open DNS records in Cloudflare'),
       pending ? h('button', { class: 'btn', type: 'button', onclick: () => saveText(cf.zone_file_name, cf.zone_file) }, 'Download records file') : null),
+    cf.apply_url ? h('p', { class: 'muted small' }, 'Cloudflare asks you to sign in and confirm, then adds both records. Then come back here and verify. To add them yourself instead, open the DNS records.') : null,
     pending ? h('p', { class: 'muted small' }, `Choose ${cf.zone} if asked. Under Import and Export, pick the downloaded file. Or add the two records below by hand, with the CNAME set to `, h('b', {}, 'DNS only'), ' (grey cloud), not Proxied: Brod cannot serve the domain through Cloudflare\'s proxy.') : null);
 }
 /** One domain as one line: open to its DNS records and buttons while it waits for DNS, or when someone asks. */
@@ -987,12 +989,12 @@ async function addDomain(body) {
   const r = await api('/domains', { method: 'POST', body });
   if (!r.cloudflare || r.status === 'verified') return r;
   const tab = window.open('about:blank', '_blank');
-  if (tab) { tab.opener = null; tab.location = r.cloudflare.records_url; }
+  if (tab) { tab.opener = null; tab.location = r.cloudflare.apply_url || r.cloudflare.records_url; }
   return { ...r, tabOpened: !!tab };
 }
 const domainAdded = (r) => r.status === 'verified' ? `${r.domain} is verified` :
   !r.cloudflare ? 'Domain added. Now create the DNS records.' :
-  r.tabOpened ? 'Domain added. Cloudflare\'s DNS records opened in a new tab.' : 'Domain added. Your browser kept the new tab from opening: open Cloudflare from here.';
+  r.tabOpened ? (r.cloudflare.apply_url ? 'Domain added. Confirm the records at Cloudflare in the new tab, then verify here.' : 'Domain added. Cloudflare\'s DNS records opened in a new tab.') : 'Domain added. Your browser kept the new tab from opening: open Cloudflare from here.';
 async function appDomains(s, slug) {
   const { domains } = await api('/domains');
   const own = domains.filter(d => d.app === s.app);

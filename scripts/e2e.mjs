@@ -5,6 +5,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { execSync } from 'node:child_process';
+import { verify as cryptoVerify } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -213,7 +214,45 @@ if (process.env.E2E_DNS) {
   const down = await alice.api('/v1/domains', { json: { domain: `www.${ZONE}`, app: APP } });
   check('a failed DNS lookup only leaves the Cloudflare steps out', down.status === 201 && !down.body.cloudflare && down.body.dns?.length === 2, JSON.stringify(down.body));
   await dnsSet({ on: false }, 'outage');
+  check('with no _domainconnect record a domain on Cloudflare gets the ordinary steps', !cf.data.cloudflare?.apply_url);
   for (const d of [CF, OTHER, `www.${ZONE}`]) await tool('set_domain', { domain: d, remove: true });
+
+  // Domain Connect: a signed link, when the server has a key and the zone's provider knows its template.
+  if (process.env.E2E_DC_PUBLIC_KEY) {
+    const DC = `dc-${run}.example.test`, DC_SHOP = `shop.${DC}`, DC_PROVIDER = new URL(process.env.E2E_DNS).host;
+    const dcSet = body => dnsSet(body, 'domain-connect');
+    const applyUrl = async () => (await tool('set_domain', { domain: DC_SHOP, app: APP })).data.cloudflare?.apply_url;
+    const SETTINGS = { urlSyncUX: `http://${DC_PROVIDER}/sync`, urlAPI: `http://${DC_PROVIDER}/dc` };
+    await dnsSet({ name: DC, type: 'NS', value: 'lou.ns.cloudflare.com.' });
+    await dnsSet({ name: `_domainconnect.${DC}`, value: 'evil.example.test/dc' });
+    check('a _domainconnect record leading anywhere but the provider is ignored', !(await applyUrl()));
+    await dnsSet({ name: `_domainconnect.${DC}`, value: `${DC_PROVIDER}/dc` });
+    check('a provider that does not hold the zone falls back to the ordinary steps', !(await applyUrl()));
+    await dcSet({ zone: DC, settings: { urlAPI: SETTINGS.urlAPI } });
+    check('a provider with no synchronous flow falls back to the ordinary steps', !(await applyUrl()));
+    await dcSet({ zone: DC, settings: SETTINGS });
+    check('a provider that does not know the template falls back to the ordinary steps', !(await applyUrl()));
+    await dcSet({ zone: DC, settings: { ...SETTINGS, urlSyncUX: 'https://evil.example.test/sync' } });
+    await dcSet({ template: 'brod.test/custom_domain' });
+    check('a link leading anywhere but the provider is not offered', !(await applyUrl()));
+    await dcSet({ zone: DC, settings: SETTINGS });
+    const applied = await tool('set_domain', { domain: DC_SHOP, app: APP });
+    const link = applied.data.cloudflare?.apply_url ?? '';
+    const [linkPath, linkQuery = ''] = link.split('?');
+    const signed = linkQuery.split('&key=')[0], [, linkKey, linkSig] = /&key=([^&]+)&sig=([^&]+)$/.exec(linkQuery) ?? [];
+    const token = applied.data.dns?.[0].value.replace('brod-verify=', '');
+    check('a supporting provider gets a link to apply the template to the subdomain', linkPath === `${SETTINGS.urlSyncUX}/v2/domainTemplates/providers/brod.test/services/custom_domain/apply` && signed === `domain=${DC}&host=shop&token=${token}` && linkKey === '_dcpubkeyv1', link);
+    check('its signature checks out with the public key, and is the last parameter', !!linkSig && cryptoVerify('sha256', Buffer.from(signed), process.env.E2E_DC_PUBLIC_KEY, Buffer.from(decodeURIComponent(linkSig), 'base64')), link);
+    check('the instructions lead with the link, and the zone file stays as the other way', applied.data.next_step.includes(link) && applied.data.cloudflare?.records_url && !!applied.data.cloudflare?.zone_file);
+    const inList = (await alice.api('/v1/domains')).body.domains.find(d => d.domain === DC_SHOP);
+    check('the domain list carries the link too', inList?.cloudflare?.apply_url?.startsWith(`${linkPath}?${signed}&key=`), JSON.stringify(inList));
+    const root = (await tool('set_domain', { domain: DC, app: APP })).data, wild = (await tool('set_domain', { domain: `*.apps.${DC}` })).data;
+    check('the root of a zone and a wildcard domain keep the ordinary steps', root.cloudflare?.zone === DC && !root.cloudflare.apply_url && wild.cloudflare?.zone === DC && !wild.cloudflare.apply_url, JSON.stringify([root, wild]));
+    await txt(`_brod.${DC_SHOP}`, `brod-verify=${token}`);
+    const proven = await tool('set_domain', { domain: DC_SHOP });
+    check('a verified domain has no link left', proven.data.status === 'verified' && !proven.data.cloudflare?.apply_url, JSON.stringify(proven.data));
+    for (const d of [DC_SHOP, DC, `*.apps.${DC}`]) await tool('set_domain', { domain: d, remove: true });
+  }
 } else console.log('SKIP  custom domains: E2E_DNS is not set');
 
 // ---------- 3. people, invites, confirmations, groups, roles ----------

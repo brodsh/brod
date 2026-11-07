@@ -11,6 +11,7 @@
 // Marketplace previews are taken by the headless-browser service in deploy/preview/ (Playwright's Chromium); set
 // E2E_SKIP_PREVIEWS=1 to run without it.
 import { execFileSync, spawn } from 'node:child_process';
+import { generateKeyPairSync } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -36,6 +37,8 @@ let fake;
 const stripe = await serveFakeStripe(`${API}/stripe/webhook`);
 // Custom domains are proven against a fake DNS-over-HTTPS resolver.
 const dns = await serveFakeDns();
+// A throwaway Domain Connect key for this run. Nothing outside these tests ever sees it.
+const dcKey = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const env = {
   ...process.env, APPS_DOMAIN: `localhost:${PORT}`, API_ORIGIN: API, ADMIN_SECRET: 'dev-admin-secret', IDENTITY_SECRET: 'dev-identity-secret',
   IDENTITY_SIGNING_KEY: '9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60',
@@ -46,6 +49,8 @@ const env = {
   STRIPE_API_BASE: `http://127.0.0.1:${stripe.port}`, DNS_RESOLVER_URL: `http://127.0.0.1:${dns.port}/dns-query`,
   // A small free plan, so the storage checks can fill it (honoured only with DEV_MODE=1).
   DEV_FREE_STORAGE_MB: '3',
+  DOMAIN_CONNECT_PRIVATE_KEY: dcKey.privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64'),
+  DOMAIN_CONNECT_KEY_HOST: '_dcpubkeyv1', DOMAIN_CONNECT_PROVIDER_ID: 'brod.test',
 };
 if (mode === 's3') {
   fake = await serveFakeS3();
@@ -138,7 +143,7 @@ try {
   }
   console.log(`Brod (Rust, ${pg ? 'Postgres' : 'SQLite'}, ${mode === 's3' ? 'files in S3' : 'files in a folder'}, ${runtime ? 'server apps on workerd' : 'static apps only'}${preview ? ', previews' : ''}) at ${API}\n`);
   const skip = runtime ? '' : '1';
-  const node = (script, ...more) => new Promise(resolve => spawn(process.execPath, [script, API, ...more], { stdio: 'inherit', env: { ...process.env, E2E_SKIP_SERVER_APPS: skip, E2E_PREVIEWS: withPreviews ? '1' : '', E2E_DNS: `http://127.0.0.1:${dns.port}` } }).on('exit', resolve));
+  const node = (script, ...more) => new Promise(resolve => spawn(process.execPath, [script, API, ...more], { stdio: 'inherit', env: { ...process.env, E2E_DC_PUBLIC_KEY: dcKey.publicKey.export({ type: 'spki', format: 'pem' }), E2E_SKIP_SERVER_APPS: skip, E2E_PREVIEWS: withPreviews ? '1' : '', E2E_DNS: `http://127.0.0.1:${dns.port}` } }).on('exit', resolve));
   code = await node('scripts/e2e.mjs');
   if (code === 0) { console.log('\nBilling, visits, analytics, storage and spaces\n'); code = await node('scripts/e2e-billing.mjs', `http://127.0.0.1:${stripe.port}`); }
   if (code === 0) { console.log('\nMarketplace\n'); code = await node('scripts/e2e-market.mjs'); }

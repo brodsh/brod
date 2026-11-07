@@ -9,7 +9,8 @@
 //
 // A domain whose DNS is on Cloudflare (found from its public NS records, no account or token needed) also gets a link
 // to the zone's DNS records, a zone file to import, and a warning when its record looks proxied, which Brod cannot
-// serve through. A failed lookup only means those extras are left out.
+// serve through. A failed lookup only means those extras are left out. A server that has set up Domain Connect
+// (domain_connect.rs) also offers a link that adds the records there once the person confirms.
 use crate::db::{Connection, Row, params};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -171,6 +172,8 @@ const CLOUDFLARE_RECORDS_URL: &str = "https://dash.cloudflare.com/?to=/:account/
 /// A page of the domains list should not wait long on DNS. Whatever is not answered by then is left out.
 const CLOUDFLARE_LOOKUP: Duration = Duration::from_secs(3);
 const CLOUDFLARE_SEEN_FOR: Duration = Duration::from_secs(120);
+/// Domain Connect has this long, so that when it is slow the rest of the lookup still arrives in CLOUDFLARE_LOOKUP.
+const DOMAIN_CONNECT_LOOKUP: Duration = Duration::from_millis(2500);
 
 fn dns_name(name: &str) -> String {
     name.trim_end_matches('.').to_lowercase()
@@ -240,13 +243,32 @@ async fn looks_proxied(st: &State, d: &DomainRow, target: &str) -> bool {
 struct OnCloudflare {
     zone: String,
     proxied: bool,
+    /// Where the provider applies this server's Domain Connect template. The link itself is made per request: the
+    /// domain's token differs between the workspaces that claim it, and this is kept by name.
+    sync_ux: Option<String>,
+}
+
+/// The `host` of a Domain Connect link for this domain, when it can have one: a pending subdomain of the zone for one
+/// app. The template's CNAME sits at @, which the spec allows only with hostRequired, so the root of a zone cannot use
+/// it, and it cannot make the *.domain record a wildcard domain needs. Those keep the ordinary steps.
+fn apply_host<'a>(d: &'a DomainRow, zone: &str) -> Option<&'a str> {
+    if d.verified_at.is_some() || d.app_id.is_none() {
+        return None;
+    }
+    d.hostname.strip_suffix(zone)?.strip_suffix('.').filter(|host| !host.is_empty())
 }
 
 async fn on_cloudflare(st: &State, d: &DomainRow) -> Option<OnCloudflare> {
+    let started = tokio::time::Instant::now();
     let lookup = async {
         let zone = cloudflare_zone(st, &d.hostname).await?;
-        let proxied = looks_proxied(st, d, &target_of(&st.cfg)).await;
-        Some(OnCloudflare { zone, proxied })
+        let sync_ux = async {
+            let dc = st.cfg.domain_connect.as_ref().filter(|_| apply_host(d, &zone).is_some())?;
+            tokio::time::timeout_at(started + DOMAIN_CONNECT_LOOKUP, dc.sync_ux(st, &zone)).await.ok().flatten()
+        };
+        let target = target_of(&st.cfg);
+        let (proxied, sync_ux) = tokio::join!(looks_proxied(st, d, &target), sync_ux);
+        Some(OnCloudflare { zone, proxied, sync_ux })
     };
     tokio::time::timeout(CLOUDFLARE_LOOKUP, lookup).await.ok().flatten()
 }
@@ -302,7 +324,21 @@ fn add_cloudflare(cfg: &Config, d: &DomainRow, m: &mut Map<String, Value>, on: O
         );
         info["warning"] = json!(warning);
     }
-    if d.verified_at.is_none() {
+    let apply_url = on
+        .sync_ux
+        .as_deref()
+        .and_then(|sync_ux| cfg.domain_connect.as_ref()?.apply_url(sync_ux, &on.zone, apply_host(d, &on.zone)?, &d.token));
+    if let Some(url) = &apply_url {
+        info["apply_url"] = json!(url);
+        m.insert(
+            "next_step".into(),
+            json!(format!(
+                "This domain's DNS is on Cloudflare, in the zone {}. Give the person this link to open: {url}. Cloudflare asks them to sign in and confirm, then adds both DNS records. Then verify (POST /v1/domains/<domain>/verify, or set_domain again). \
+                 If the link does not work, they can add the records at {CLOUDFLARE_RECORDS_URL}, with the CNAME's proxy status set to DNS only (grey cloud), not Proxied.",
+                on.zone
+            )),
+        );
+    } else if d.verified_at.is_none() {
         m.insert(
             "next_step".into(),
             json!(format!(
@@ -739,9 +775,8 @@ mod tests {
         assert!(!differs_from_target(&proxied, &json!({ "Status": 3 })), "nothing to compare with");
     }
 
-    #[test]
-    fn the_zone_file_keeps_the_cname_out_of_the_proxy() {
-        let row = |app: Option<&str>| DomainRow {
+    fn row(app: Option<&str>) -> DomainRow {
+        DomainRow {
             id: "dom_1".into(),
             hostname: "shop.example.org".into(),
             workspace_id: "w".into(),
@@ -749,7 +784,40 @@ mod tests {
             token: "abc".into(),
             verified_at: None,
             slug: None,
-        };
+        }
+    }
+
+    #[test]
+    fn only_a_pending_subdomain_for_one_app_can_have_an_apply_link() {
+        assert_eq!(apply_host(&row(Some("a")), "example.org"), Some("shop"));
+        assert_eq!(apply_host(&DomainRow { hostname: "a.b.example.org".into(), ..row(Some("a")) }, "example.org"), Some("a.b"));
+        assert_eq!(apply_host(&row(Some("a")), "shop.example.org"), None, "the root of a zone");
+        assert_eq!(apply_host(&row(None), "example.org"), None, "a wildcard domain");
+        assert_eq!(apply_host(&DomainRow { verified_at: Some(1), ..row(Some("a")) }, "example.org"), None, "already verified");
+        assert_eq!(apply_host(&row(Some("a")), "ple.org"), None, "a zone that only ends in the same letters");
+    }
+
+    #[test]
+    fn with_no_provider_support_the_cloudflare_steps_are_the_ordinary_ones() {
+        let cfg = Config::for_tests();
+        let mut m = Map::new();
+        add_cloudflare(&cfg, &row(Some("a")), &mut m, OnCloudflare { zone: "example.org".into(), proxied: false, sync_ux: None });
+        assert!(m["cloudflare"].get("apply_url").is_none());
+        assert_eq!(m["cloudflare"]["records_url"], CLOUDFLARE_RECORDS_URL);
+        assert!(m["next_step"].as_str().unwrap().contains(CLOUDFLARE_RECORDS_URL));
+        // A provider answer kept from earlier means nothing to a server with no key.
+        let mut m = Map::new();
+        add_cloudflare(
+            &cfg,
+            &row(Some("a")),
+            &mut m,
+            OnCloudflare { zone: "example.org".into(), proxied: false, sync_ux: Some("https://dash.cloudflare.com/domainconnect".into()) },
+        );
+        assert!(m["cloudflare"].get("apply_url").is_none());
+    }
+
+    #[test]
+    fn the_zone_file_keeps_the_cname_out_of_the_proxy() {
         assert_eq!(
             cloudflare_zone_file(&row(Some("a")), "brod.sh"),
             "_brod.shop.example.org. 300 IN TXT \"brod-verify=abc\"\nshop.example.org. 300 IN CNAME brod.sh. ; cf_tags=cf-proxied:false\n"

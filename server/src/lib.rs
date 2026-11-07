@@ -22,6 +22,7 @@ pub mod copy;
 pub mod databases;
 pub mod db;
 pub mod deployments;
+pub mod domain_connect;
 pub mod domains;
 pub mod email;
 pub mod gateway;
