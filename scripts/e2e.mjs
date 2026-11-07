@@ -756,6 +756,26 @@ const toSignIn = await new Browser('nobody').go(authzPath);
 check('authorizing without a session goes to sign-in and back', toSignIn.status === 302 && toSignIn.headers.location === `/auth/signin?return=${encodeURIComponent(authzPath)}`, toSignIn.headers.location);
 const strangerB = new Browser(`stranger-${run}@else.test`); await strangerB.signIn();
 check('a person who builds in no workspace cannot connect an agent', (await strangerB.go(authzPath)).status === 403);
+// Someone with no account starts from their agent, signs up, makes a workspace, and lands back on the consent page.
+const htmlAttr = t => t.replaceAll('&', '&amp;');
+const authzBack = encodeURIComponent(authzPath);
+const newcomerB = new Browser(`newcomer-${run}@else.test`);
+check('the sign-in page offers sign-up without losing the agent', (await newcomerB.go(`/auth/signin?return=${authzBack}`)).body.includes(`href="/auth/signup?return=${authzBack}"`));
+const signUpBack = await newcomerB.go(`/auth/signup?return=${authzBack}`);
+check('the sign-up page keeps where the agent was going', signUpBack.status === 200 && signUpBack.body.includes(`name="return" value="${htmlAttr(authzPath)}"`) && signUpBack.body.includes(`href="/auth/signin?return=${authzBack}"`));
+await newcomerB.signIn();
+const noWorkspace = await newcomerB.go(authzPath);
+check('with no workspace, consent links to making one and coming back', noWorkspace.status === 403 && noWorkspace.body.includes(`href="/new?return=${htmlAttr(authzBack)}"`));
+const newForm = await newcomerB.go(`/new?return=${authzBack}`);
+check('the new-workspace form keeps where the agent was going', newForm.status === 200 && newForm.body.includes(`name="return" value="${htmlAttr(authzPath)}"`));
+const madeBack = await newcomerB.go('/new', { form: { name: `Newcomer ${run}`, accept_terms: '1', return: authzPath } });
+check('making the workspace returns to the agent\'s consent page', madeBack.status === 302 && madeBack.headers.location === authzPath, madeBack.headers.location);
+check('the consent page now offers the new workspace', (await newcomerB.go(authzPath)).body.includes('Connect E2E agent'));
+for (const [i, [why, bad]] of [['another site', 'https://evil.test/'], ['a protocol-relative address', '//evil.test/'], ['a line break', '/x\r\nset-cookie: a=b']].entries()) {
+  const b = new Browser(`return-${i}-${run}@else.test`); await b.signIn();
+  const made = await b.go('/new', { form: { name: `Return ${i} ${run}`, accept_terms: '1', return: bad } });
+  check(`making a workspace does not follow a return to ${why}`, made.status === 302 && made.headers.location?.startsWith('/w/'), made.headers.location);
+}
 const consent = await mallory.go(authzPath);
 const OW = (await mallory.api('/v1/me')).body.workspaces[0].slug;
 check('the consent page names the client and the workspace', consent.status === 200 && consent.body.includes('Connect E2E agent') && consent.body.includes(`value="${OW}"`));

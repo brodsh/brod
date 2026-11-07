@@ -322,6 +322,7 @@ async fn authorize(st: &State, req: &mut Req) -> Result<Response> {
     };
     let here = if req.query.is_empty() { req.path.clone() } else { format!("{}?{}", req.path, req.query) };
     let cookie = req.header("cookie").map(String::from);
+    let new_workspace = format!("/new?return={}", encode_uri_component(&here));
     enum Out {
         Done(Response),
         SignIn,
@@ -344,7 +345,7 @@ async fn authorize(st: &State, req: &mut Req) -> Result<Response> {
                         403,
                         "No workspace to connect",
                         "An agent works in a workspace where you are a builder or admin. Create a workspace, or ask an admin to make you a builder.",
-                        "<p><a class=\"btn\" href=\"/new\">Create a workspace</a></p>",
+                        &format!("<p><a class=\"btn\" href=\"{}\">Create a workspace</a></p>", esc(&new_workspace)),
                     )));
                 }
                 return Ok(Out::Consent(a, user.email, workspaces));

@@ -25,7 +25,7 @@ use crate::util::{
 
 fn safe_return(r: Option<&Value>) -> String {
     match r {
-        Some(Value::String(s)) if s.starts_with('/') && !s.starts_with("//") && !s.starts_with("/\\") => s.clone(),
+        Some(Value::String(s)) if s.starts_with('/') && !s.starts_with("//") && !s.starts_with("/\\") && !s.chars().any(char::is_control) => s.clone(),
         _ => "/".into(),
     }
 }
@@ -163,9 +163,9 @@ async fn sign_in_page(st: &State, ret: Option<String>, app: Option<String>, sent
     };
     let slug = app.as_ref().map(BrandedApp::reference).unwrap_or_default();
     let newcomer = if app.is_some() || st.cfg.mode != crate::config::Mode::Hosted {
-        ""
+        String::new()
     } else {
-        "<p class=\"muted\">New to Brod? <a href=\"/auth/signup\">Create a workspace</a></p>"
+        format!("<p class=\"muted\">New to Brod? <a href=\"/auth/signup{}\">Create a workspace</a></p>", return_query(&ret))
     };
     Ok(page(
         200,
@@ -182,23 +182,33 @@ async fn sign_in_page(st: &State, ret: Option<String>, app: Option<String>, sent
     ))
 }
 
+/// "?return=..." for a link to another sign-in page, or nothing when the person is only going home.
+fn return_query(ret: &str) -> String {
+    if ret == "/" { String::new() } else { format!("?return={}", encode_uri_component(ret)) }
+}
+
 /// Where "Start free" on the landing page leads: the same email form, written for someone who has no account yet.
-/// After the link, / sends a person with no workspace on to /new.
-fn sign_up_page(cfg: &Config) -> Response {
+/// After the link, / sends a person with no workspace on to /new. `ret` is where they were going, such as an agent's
+/// /oauth/authorize, which also leads through /new when they have no workspace.
+fn sign_up_page(cfg: &Config, ret: &str) -> Response {
     let google = if cfg.google_client_id.is_some() {
-        "<p><a class=\"btn secondary block\" href=\"/auth/google?return=%2F\">Continue with Google</a></p><div class=\"or\">or</div>"
+        format!(
+            "<p><a class=\"btn secondary block\" href=\"/auth/google?return={}\">Continue with Google</a></p><div class=\"or\">or</div>",
+            encode_uri_component(ret)
+        )
     } else {
-        ""
+        String::new()
     };
+    let (form_return, sign_in) = (esc(ret), return_query(ret));
     page(
         200,
         "Create your workspace",
         &format!(
             "<h1>Create your workspace</h1><p>Free to start. No password and no card.</p>
 <ol><li>We email you a sign-in link.</li><li>You name your workspace: one sign-in and one home page for your team's apps.</li><li>You connect your agent and ask it to put something online.</li></ol>{google}
-<form method=\"post\" action=\"/auth/start\"><input type=\"hidden\" name=\"return\" value=\"/\"><input type=\"hidden\" name=\"app\" value=\"\">
+<form method=\"post\" action=\"/auth/start\"><input type=\"hidden\" name=\"return\" value=\"{form_return}\"><input type=\"hidden\" name=\"app\" value=\"\">
 <input type=\"email\" name=\"email\" required autocomplete=\"email\" placeholder=\"you@example.com\" aria-label=\"Email address\"><button class=\"block\">Email me a link</button></form>
-<p class=\"muted\">Already use Brod? <a href=\"/auth/signin\">Sign in</a></p>"
+<p class=\"muted\">Already use Brod? <a href=\"/auth/signin{sign_in}\">Sign in</a></p>"
         ),
         None,
         &[],
@@ -306,7 +316,7 @@ fn no_workspace_page() -> Response {
     )
 }
 
-fn new_workspace_page(cfg: &Config, error: &str) -> Response {
+fn new_workspace_page(cfg: &Config, error: &str, ret: &str) -> Response {
     let terms = if cfg.mode == crate::config::Mode::Hosted {
         "<p><label><input type=\"checkbox\" name=\"accept_terms\" value=\"1\" required> I accept the <a href=\"/terms\">terms of use and acceptable-use policy</a>.</label></p>"
     } else {
@@ -318,8 +328,9 @@ fn new_workspace_page(cfg: &Config, error: &str) -> Response {
         "Create a workspace",
         &format!(
             "<h1>Create a workspace</h1><p>One workspace for your team or company: one sign-in, one set of groups, one home page for every app.</p>
-{alert}<form method=\"post\" action=\"/new\"><input name=\"name\" required maxlength=\"60\" placeholder=\"Workspace name, for example Acme\" aria-label=\"Workspace name\">
-{terms}<button class=\"block\">Create workspace</button></form>"
+{alert}<form method=\"post\" action=\"/new\"><input type=\"hidden\" name=\"return\" value=\"{}\"><input name=\"name\" required maxlength=\"60\" placeholder=\"Workspace name, for example Acme\" aria-label=\"Workspace name\">
+{terms}<button class=\"block\">Create workspace</button></form>",
+            esc(ret)
         ),
         None,
         &[],
@@ -378,10 +389,11 @@ pub async fn serve(st: &State, req: &mut Req) -> Result<Option<Response>> {
         return sign_in_page(st, req.param("return"), req.param("app"), None).await.map(Some);
     }
     if p == "/auth/signup" && m == Method::GET {
+        let ret = safe_return_str(req.param("return"));
         if person(st, req).await?.is_some() || cfg.mode != crate::config::Mode::Hosted {
-            return Ok(Some(redirect("/", &[])));
+            return Ok(Some(redirect(&ret, &[])));
         }
-        return Ok(Some(sign_up_page(&cfg)));
+        return Ok(Some(sign_up_page(&cfg, &ret)));
     }
     if m == Method::GET {
         match p.as_str() {
@@ -725,12 +737,14 @@ pub async fn serve(st: &State, req: &mut Req) -> Result<Option<Response>> {
     }
 
     if p == "/new" && m == Method::GET {
+        let ret = safe_return_str(req.param("return"));
         let Some((user, _)) = person(st, req).await? else {
-            return Ok(Some(redirect("/auth/signin?return=%2Fnew", &[])));
+            let here = format!("/new{}", return_query(&ret));
+            return Ok(Some(redirect(&format!("/auth/signin?return={}", encode_uri_component(&here)), &[])));
         };
         let c2 = cfg.clone();
         let may = st.db.call(move |c| people::may_create_workspace(c, &c2, &user)).await?;
-        return Ok(Some(if may { new_workspace_page(&cfg, "") } else { no_workspace_page() }));
+        return Ok(Some(if may { new_workspace_page(&cfg, "", &ret) } else { no_workspace_page() }));
     }
     if p == "/new" && m == Method::POST {
         same_origin(&cfg, req)?;
@@ -739,10 +753,13 @@ pub async fn serve(st: &State, req: &mut Req) -> Result<Option<Response>> {
         };
         let b = input(req).await?;
         let (name, accept) = (text(&b, "name"), b.get("accept_terms") == Some(&json!("1")));
+        let ret = safe_return(b.get("return"));
         let made = st.db.call(move |c| people::create_workspace(c, &cfg, &user, &name, accept)).await;
         return Ok(Some(match made {
+            // Back to where they were going, such as an agent waiting on /oauth/authorize; otherwise the new workspace.
+            Ok(_) if ret != "/" => redirect(&ret, &[]),
             Ok(w) => redirect(&format!("/w/{}", w["workspace"].as_str().unwrap_or("")), &[]),
-            Err(e) if !e.is_internal() => new_workspace_page(&st.cfg, &e.message),
+            Err(e) if !e.is_internal() => new_workspace_page(&st.cfg, &e.message, &ret),
             Err(e) => return Err(e),
         }));
     }
