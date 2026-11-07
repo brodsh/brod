@@ -62,3 +62,4 @@ INSERT INTO git_sync_events (id, app_id, at, source, remote_oid, branch, result,
 INSERT INTO blobs (sha256, size, created_at) VALUES ('aa00000000000000000000000000000000000000000000000000000000000001', 12, 1700000000);
 INSERT INTO version_manifests (app_id, version, parent, author, note, created_at, file_count, bytes) VALUES ('app_1', 2, 1, 'usr_a', 'Update', 1700000000, 1, 12);
 INSERT INTO manifest_entries (app_id, version, path, sha256, size, mode) VALUES ('app_1', 2, 'index.html', 'aa00000000000000000000000000000000000000000000000000000000000001', 12, 420);
+INSERT INTO app_sign_in_codes (id, app_id, email, hash, attempts, created_at, expires_at, used_at) VALUES ('sic_1', 'app_1', 'ana@acme.test', 'aa00', 0, 1, 2, NULL);
