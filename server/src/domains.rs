@@ -6,8 +6,15 @@
 // then proven with a TXT record at _brod.<domain> holding brod-verify=<token>. Only proven domains are served (and
 // get certificates, see tls.rs and /_caddy/ask), and only one workspace can prove a name. Signing in still happens on
 // the API host: /auth/app hands the one-time code only to a proven domain of that same app (allowed_host).
+//
+// A domain whose DNS is on Cloudflare (found from its public NS records, no account or token needed) also gets a link
+// to the zone's DNS records, a zone file to import, and a warning when its record looks proxied, which Brod cannot
+// serve through. A failed lookup only means those extras are left out.
 use crate::db::{Connection, Row, params};
 use serde_json::{Map, Value, json};
+use std::collections::HashMap;
+use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
+use std::time::{Duration, Instant};
 
 use crate::config::Config;
 use crate::db::{Sql, event, tx};
@@ -124,21 +131,26 @@ pub fn parse_txt(data: &str) -> String {
     if any && !inside { parts } else { data.to_string() }
 }
 
-/// The TXT strings at a name, from a DNS-over-HTTPS resolver. None when the resolver could not be reached.
-pub async fn txt_records(st: &State, name: &str) -> Option<Vec<String>> {
+/// One query to the DNS-over-HTTPS resolver, as its JSON answer. None when the resolver could not be reached.
+async fn doh(st: &State, name: &str, rtype: &str, timeout: Duration) -> Option<Value> {
     let r = st
         .http
         .get(&st.cfg.dns_resolver_url)
-        .query(&[("name", name), ("type", "TXT")])
+        .query(&[("name", name), ("type", rtype)])
         .header("accept", "application/dns-json")
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(timeout)
         .send()
         .await
         .ok()?;
     if !r.status().is_success() {
         return None;
     }
-    let j: Value = r.json().await.ok()?;
+    r.json().await.ok()
+}
+
+/// The TXT strings at a name. None when the resolver could not be reached.
+pub async fn txt_records(st: &State, name: &str) -> Option<Vec<String>> {
+    let j = doh(st, name, "TXT", Duration::from_secs(10)).await?;
     Some(
         j.get("Answer")
             .and_then(|a| a.as_array())
@@ -152,9 +164,167 @@ pub async fn txt_records(st: &State, name: &str) -> Option<Vec<String>> {
     )
 }
 
+// ---------- Cloudflare ----------
+
+/// The DNS records page of a zone. Cloudflare's dashboard asks which account and zone when there is more than one.
+const CLOUDFLARE_RECORDS_URL: &str = "https://dash.cloudflare.com/?to=/:account/:zone/dns/records";
+/// A page of the domains list should not wait long on DNS. Whatever is not answered by then is left out.
+const CLOUDFLARE_LOOKUP: Duration = Duration::from_secs(3);
+const CLOUDFLARE_SEEN_FOR: Duration = Duration::from_secs(120);
+
+fn dns_name(name: &str) -> String {
+    name.trim_end_matches('.').to_lowercase()
+}
+fn answers<'a>(j: &'a Value, section: &str, rtype: i64) -> impl Iterator<Item = (String, &'a str)> {
+    j.get(section)
+        .and_then(|a| a.as_array())
+        .into_iter()
+        .flatten()
+        .filter(move |x| x.get("type").and_then(|t| t.as_i64()) == Some(rtype))
+        .filter_map(|x| Some((dns_name(x.get("name")?.as_str()?), x.get("data")?.as_str()?)))
+}
+fn is_cloudflare_ns(host: &str) -> bool {
+    dns_name(host).ends_with(".ns.cloudflare.com")
+}
+
+/// What an NS answer for `q` says about the zone holding `q`: its name and whether Cloudflare runs it, or None when it
+/// says nothing and the parent has to be asked. Records for other names do not count: a name that is a CNAME is
+/// answered with the nameservers of its target, and that may well be someone else's Cloudflare zone.
+fn read_zone(q: &str, j: &Value) -> Option<(String, bool)> {
+    if answers(j, "Answer", 5).any(|(name, _)| name == q) {
+        return None;
+    }
+    let ns: Vec<&str> = answers(j, "Answer", 2).filter(|(name, _)| name == q).map(|(_, host)| host).collect();
+    if !ns.is_empty() {
+        return Some((q.to_string(), ns.iter().all(|host| is_cloudflare_ns(host))));
+    }
+    answers(j, "Answer", 6).chain(answers(j, "Authority", 6)).find_map(|(name, soa)| {
+        let holds_q = q == name || q.ends_with(&format!(".{name}"));
+        holds_q.then(|| (name, soa.split_whitespace().next().is_some_and(is_cloudflare_ns)))
+    })
+}
+
+/// The Cloudflare zone holding a hostname, if it is on Cloudflare.
+async fn cloudflare_zone(st: &State, hostname: &str) -> Option<String> {
+    let labels: Vec<&str> = hostname.split('.').collect();
+    for i in 0..labels.len().saturating_sub(1).min(6) {
+        let q = labels[i..].join(".");
+        let j = doh(st, &q, "NS", CLOUDFLARE_LOOKUP).await?;
+        if let Some((zone, cloudflare)) = read_zone(&q, &j) {
+            return cloudflare.then_some(zone);
+        }
+    }
+    None
+}
+
+/// Whether public A answers show a name going somewhere other than the target. A proxied record never shows its CNAME
+/// and answers with Cloudflare's addresses. A flattened one, as at a zone's root, has no CNAME either but answers with
+/// the target's addresses, so that is what they are compared with.
+fn differs_from_target(at: &Value, target: &Value) -> bool {
+    if answers(at, "Answer", 5).next().is_some() {
+        return false;
+    }
+    let want: Vec<&str> = answers(target, "Answer", 1).map(|(_, ip)| ip).collect();
+    let got: Vec<&str> = answers(at, "Answer", 1).map(|(_, ip)| ip).collect();
+    !want.is_empty() && !got.is_empty() && !got.iter().any(|ip| want.contains(ip))
+}
+
+async fn looks_proxied(st: &State, d: &DomainRow, target: &str) -> bool {
+    // Any name under a wildcard record answers for it.
+    let name = if d.app_id.is_none() { format!("brod-check.{}", d.hostname) } else { d.hostname.clone() };
+    let (at, target) = tokio::join!(doh(st, &name, "A", CLOUDFLARE_LOOKUP), doh(st, target, "A", CLOUDFLARE_LOOKUP));
+    matches!((at, target), (Some(at), Some(target)) if differs_from_target(&at, &target))
+}
+
+#[derive(Clone)]
+struct OnCloudflare {
+    zone: String,
+    proxied: bool,
+}
+
+async fn on_cloudflare(st: &State, d: &DomainRow) -> Option<OnCloudflare> {
+    let lookup = async {
+        let zone = cloudflare_zone(st, &d.hostname).await?;
+        let proxied = looks_proxied(st, d, &target_of(&st.cfg)).await;
+        Some(OnCloudflare { zone, proxied })
+    };
+    tokio::time::timeout(CLOUDFLARE_LOOKUP, lookup).await.ok().flatten()
+}
+
+type CloudflareSeen = HashMap<String, (Instant, Option<OnCloudflare>)>;
+
+/// What the domains list last found, by domain: every redraw of the page reads the list, and a workspace can have 50
+/// domains. Adding or verifying a domain always looks again, for someone who has just changed the records.
+fn cloudflare_seen() -> MutexGuard<'static, CloudflareSeen> {
+    static SEEN: OnceLock<Mutex<CloudflareSeen>> = OnceLock::new();
+    SEEN.get_or_init(Default::default).lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+async fn on_cloudflare_for_list(st: &State, d: &DomainRow) -> Option<OnCloudflare> {
+    if let Some((at, found)) = cloudflare_seen().get(&d.name())
+        && at.elapsed() < CLOUDFLARE_SEEN_FOR
+    {
+        return found.clone();
+    }
+    let found = on_cloudflare(st, d).await;
+    let mut seen = cloudflare_seen();
+    seen.retain(|_, (at, _)| at.elapsed() < CLOUDFLARE_SEEN_FOR);
+    seen.insert(d.name(), (Instant::now(), found.clone()));
+    found
+}
+
+async fn on_cloudflare_now(st: &State, d: &DomainRow) -> Option<OnCloudflare> {
+    cloudflare_seen().remove(&d.name());
+    on_cloudflare(st, d).await
+}
+
+/// The domain's two records as a BIND zone file for Cloudflare's Import and Export. The tag makes the CNAME DNS only
+/// whatever the import form's "Proxy imported DNS records" box says.
+fn cloudflare_zone_file(d: &DomainRow, target: &str) -> String {
+    let (h, token, target) = (&d.hostname, &d.token, target.trim_end_matches('.'));
+    let cname = if d.app_id.is_none() { format!("*.{h}") } else { h.clone() };
+    format!("_brod.{h}. 300 IN TXT \"brod-verify={token}\"\n{cname}. 300 IN CNAME {target}. ; cf_tags=cf-proxied:false\n")
+}
+
+fn add_cloudflare(cfg: &Config, d: &DomainRow, m: &mut Map<String, Value>, on: OnCloudflare) {
+    let target = target_of(cfg);
+    let cname = if d.app_id.is_none() { format!("*.{}", d.hostname) } else { d.hostname.clone() };
+    let mut info = json!({
+        "zone": on.zone,
+        "records_url": CLOUDFLARE_RECORDS_URL,
+        "cname_proxy_status": "DNS only",
+        "zone_file": cloudflare_zone_file(d, &target),
+        "zone_file_name": format!("{}-brod-dns.txt", d.hostname),
+    });
+    if on.proxied {
+        let warning = format!(
+            "{cname} does not point straight at {target}. In Cloudflare, set the record to DNS only (grey cloud) and remove any older A or AAAA record there: Brod cannot serve this domain through Cloudflare's proxy."
+        );
+        info["warning"] = json!(warning);
+    }
+    if d.verified_at.is_none() {
+        m.insert(
+            "next_step".into(),
+            json!(format!(
+                "This domain's DNS is on Cloudflare, in the zone {}. Give the person this link to open: {CLOUDFLARE_RECORDS_URL}. There they add both DNS records (choosing the zone if asked), with the CNAME's proxy status set to DNS only (grey cloud), not Proxied. \
+                 Or import cloudflare.zone_file there with Import and Export, which sets it for you. Then verify (POST /v1/domains/<domain>/verify, or set_domain again). \
+                 Cloudflare flattens a CNAME at the root of a zone, so a bare domain works too.",
+                on.zone
+            )),
+        );
+    } else if let Some(w) = info.get("warning").and_then(|w| w.as_str()) {
+        m.insert("next_step".into(), json!(w));
+    }
+    m.insert("cloudflare".into(), info);
+}
+
+fn target_of(cfg: &Config) -> String {
+    cfg.custom_domain_target.clone().unwrap_or_else(|| hostname_of(&cfg.api_host))
+}
+
 fn describe(cfg: &Config, d: &DomainRow) -> Map<String, Value> {
     let wildcard = d.app_id.is_none();
-    let target = cfg.custom_domain_target.clone().unwrap_or_else(|| hostname_of(&cfg.api_host));
+    let target = target_of(cfg);
     let verified = d.verified_at.is_some();
     let mut m = Map::new();
     m.insert("domain".into(), json!(d.name()));
@@ -244,22 +414,36 @@ async fn check(st: &State, c: &Caller, d: DomainRow, quiet: bool) -> Result<(Dom
         .await?;
     Ok((DomainRow { verified_at: Some(at), ..d }, None))
 }
-fn result(cfg: &Config, (d, found): (DomainRow, Option<Vec<String>>)) -> Value {
+fn result(cfg: &Config, (d, found): (DomainRow, Option<Vec<String>>), cloudflare: Option<OnCloudflare>) -> Value {
     let mut m = describe(cfg, &d);
     if let Some(f) = found {
         m.insert("txt_found".into(), json!(f));
     }
+    if let Some(on) = cloudflare {
+        add_cloudflare(cfg, &d, &mut m, on);
+    }
     Value::Object(m)
 }
 
-pub fn list_domains(conn: &Connection, cfg: &Config, c: &Caller) -> Result<Value> {
+pub async fn list_domains(st: &State, c: &Caller) -> Result<Value> {
     require_role(c, "builder", "see custom domains")?;
-    let rows = conn.all(
-        "SELECT d.*, a.slug FROM domains d LEFT JOIN apps a ON a.id = d.app_id WHERE d.workspace_id = ? ORDER BY d.hostname",
-        [&c.workspace.id],
-        DomainRow::from_row,
-    )?;
-    Ok(json!({ "workspace": c.workspace.slug, "domains": rows.iter().map(|d| Value::Object(describe(cfg, d))).collect::<Vec<_>>() }))
+    let ws = c.workspace.id.clone();
+    let rows = st
+        .db
+        .call(move |conn| {
+            conn.all(
+                "SELECT d.*, a.slug FROM domains d LEFT JOIN apps a ON a.id = d.app_id WHERE d.workspace_id = ? ORDER BY d.hostname",
+                [&ws],
+                DomainRow::from_row,
+            )
+        })
+        .await?;
+    let domains = futures_util::future::join_all(rows.into_iter().map(|d| async move {
+        let cloudflare = on_cloudflare_for_list(st, &d).await;
+        result(&st.cfg, (d, None), cloudflare)
+    }))
+    .await;
+    Ok(json!({ "workspace": c.workspace.slug, "domains": domains }))
 }
 
 /// Claim a domain for an app (give app) or, as an admin, for the whole workspace (give *.domain).
@@ -335,7 +519,8 @@ pub async fn add_domain(st: &State, c: &Caller, domain: &str, app: Option<String
         })
         .await?;
     // The records may already be there, for example when a domain moves between apps.
-    Ok(result(&st.cfg, check(st, c, row, true).await?))
+    let (checked, cloudflare) = tokio::join!(check(st, c, row.clone(), true), on_cloudflare_now(st, &row));
+    Ok(result(&st.cfg, checked?, cloudflare))
 }
 
 async fn mine(st: &State, c: &Caller, domain: &str, verb: &'static str) -> Result<DomainRow> {
@@ -352,7 +537,8 @@ async fn mine(st: &State, c: &Caller, domain: &str, verb: &'static str) -> Resul
 
 pub async fn verify_domain(st: &State, c: &Caller, domain: &str) -> Result<Value> {
     let d = mine(st, c, domain, "verify").await?;
-    Ok(result(&st.cfg, check(st, c, d, false).await?))
+    let (checked, cloudflare) = tokio::join!(check(st, c, d.clone(), false), on_cloudflare_now(st, &d));
+    Ok(result(&st.cfg, checked?, cloudflare))
 }
 
 pub async fn remove_domain(st: &State, c: &Caller, domain: &str) -> Result<Value> {
@@ -499,5 +685,75 @@ mod tests {
         assert_eq!(parse_txt("\"brod-verify=\" \"abc\""), "brod-verify=abc");
         assert_eq!(parse_txt("\"a \\\"quoted\\\" b\""), "a \"quoted\" b");
         assert_eq!(parse_txt("bare"), "bare");
+    }
+
+    const CF_SOA: &str = "addyson.ns.cloudflare.com. dns.cloudflare.com. 2418963829 10000 2400 604800 1800";
+
+    #[test]
+    fn finds_the_cloudflare_zone_from_ns_answers() {
+        // These are the shapes cloudflare-dns.com returned for real names.
+        let apex = json!({ "Answer": [
+            { "name": "brod.sh", "type": 2, "data": "lou.ns.cloudflare.com." },
+            { "name": "brod.sh", "type": 2, "data": "addyson.ns.cloudflare.com." } ] });
+        assert_eq!(read_zone("brod.sh", &apex), Some(("brod.sh".into(), true)));
+
+        let below = json!({ "Status": 0, "Authority": [{ "name": "brod.sh", "type": 6, "data": CF_SOA }] });
+        assert_eq!(read_zone("www.brod.sh", &below), Some(("brod.sh".into(), true)));
+
+        let elsewhere = json!({ "Answer": [
+            { "name": "github.com", "type": 2, "data": "dns1.p08.nsone.net." } ] });
+        assert_eq!(read_zone("github.com", &elsewhere), Some(("github.com".into(), false)));
+        let elsewhere_soa =
+            json!({ "Authority": [{ "name": "example.org", "type": 6, "data": "ns1.example.net. h.example.net. 1 2 3 4 5" }] });
+        assert_eq!(read_zone("shop.example.org", &elsewhere_soa), Some(("example.org".into(), false)));
+
+        assert_eq!(read_zone("shop.example.org", &json!({ "Status": 0 })), None);
+    }
+
+    #[test]
+    fn a_cname_answer_does_not_make_someone_elses_zone_ours() {
+        // A customer's name already pointed at brod.sh is answered with brod.sh's own nameservers.
+        let chain = json!({ "Answer": [
+            { "name": "shop.example.org", "type": 5, "data": "brod.sh." },
+            { "name": "brod.sh", "type": 2, "data": "lou.ns.cloudflare.com." } ] });
+        assert_eq!(read_zone("shop.example.org", &chain), None);
+        // An authority record for a zone that does not hold the name says nothing either.
+        let other = json!({ "Authority": [{ "name": "brod.sh", "type": 6, "data": CF_SOA }] });
+        assert_eq!(read_zone("shop.example.org", &other), None);
+        // Nor does a parent ending in the same letters.
+        assert_eq!(read_zone("shop.notbrod.sh", &other), None);
+    }
+
+    #[test]
+    fn tells_a_proxied_name_from_a_dns_only_one() {
+        let target = json!({ "Answer": [{ "name": "brod.sh", "type": 1, "data": "89.58.60.193" }] });
+        let proxied = json!({ "Answer": [{ "name": "shop.example.org", "type": 1, "data": "104.21.1.1" }] });
+        assert!(differs_from_target(&proxied, &target));
+        let dns_only = json!({ "Answer": [
+            { "name": "shop.example.org", "type": 5, "data": "brod.sh." },
+            { "name": "brod.sh", "type": 1, "data": "89.58.60.193" } ] });
+        assert!(!differs_from_target(&dns_only, &target));
+        let flattened = json!({ "Answer": [{ "name": "example.org", "type": 1, "data": "89.58.60.193" }] });
+        assert!(!differs_from_target(&flattened, &target), "a CNAME at the root of a zone");
+        assert!(!differs_from_target(&json!({ "Status": 3 }), &target), "no record yet");
+        assert!(!differs_from_target(&proxied, &json!({ "Status": 3 })), "nothing to compare with");
+    }
+
+    #[test]
+    fn the_zone_file_keeps_the_cname_out_of_the_proxy() {
+        let row = |app: Option<&str>| DomainRow {
+            id: "dom_1".into(),
+            hostname: "shop.example.org".into(),
+            workspace_id: "w".into(),
+            app_id: app.map(String::from),
+            token: "abc".into(),
+            verified_at: None,
+            slug: None,
+        };
+        assert_eq!(
+            cloudflare_zone_file(&row(Some("a")), "brod.sh"),
+            "_brod.shop.example.org. 300 IN TXT \"brod-verify=abc\"\nshop.example.org. 300 IN CNAME brod.sh. ; cf_tags=cf-proxied:false\n"
+        );
+        assert!(cloudflare_zone_file(&row(None), "brod.sh.").contains("\n*.shop.example.org. 300 IN CNAME brod.sh. ;"));
     }
 }

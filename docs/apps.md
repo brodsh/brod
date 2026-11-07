@@ -550,6 +550,29 @@ Then verify: call `set_domain` again with the same domain, or `POST /v1/domains/
 record over DNS-over-HTTPS (`DNS_RESOLVER_URL`, default `https://cloudflare-dns.com/dns-query`). If the lookup fails,
 the answer is `502 dns_unavailable`.
 
+**Domains on Cloudflare.** Brod reads the public NS records of the zone holding the domain. If they are
+`*.ns.cloudflare.com`, adding, verifying or listing the domain also answers with a `cloudflare` object: the `zone`, a
+`records_url` to the zone's DNS records in the dashboard, and a `zone_file` to import there. The Domains tab shows these
+as a link and a download. Brod needs no Cloudflare account or token, and if the lookup fails the object is simply left
+out and the normal steps apply. Adding a domain on the Domains tab also opens the records page in a new tab, once, when
+the records are still missing. A browser that blocks the tab leaves the link on the page. An agent has no browser, so
+`next_step` tells it to give the person the link.
+
+- **Set the CNAME to DNS only (grey cloud), not Proxied.** The TXT record cannot be proxied, so a proxied domain still
+  verifies, but it may not serve. When the CNAME target is itself on Cloudflare in another account, as `brod.sh` is,
+  expect Error 1014. Flexible SSL loops against Brod's redirect to HTTPS. Universal SSL does not cover deeper names such
+  as `<app>.apps.example.com`. Brod also sees Cloudflare's address instead of the visitor's.
+- **Importing.** On the zone's DNS records page, choose Import and Export and pick the file (`zone_file`). Its CNAME has
+  `cf_tags=cf-proxied:false`, so it stays DNS only whatever the import form says. A name that already has `A` or `AAAA`
+  records cannot also have a CNAME: remove them first.
+- **Root of a zone.** Cloudflare flattens a CNAME there, so a bare domain works with the same records.
+- **A warning when it looks proxied.** If a domain's public `A` answers show no CNAME and do not match the target's
+  addresses, `cloudflare.warning` says so and the Domains tab marks the domain. An older `A` record looks the same.
+  The list can be two minutes behind. Adding or verifying a domain always looks again.
+
+Cloudflare has no link that fills in a record. Its way to do that, Domain Connect, needs a template published in
+advance by whoever runs the server and every link signed with that server's key, so Brod does not use it.
+
 - Nothing is served at a domain until it is verified.
 - Several workspaces may claim the same name while it is pending, so nobody can squat on it. Only the one holding the
   TXT record can verify it, and then no other can (`409 domain_taken`).

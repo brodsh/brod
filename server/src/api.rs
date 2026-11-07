@@ -275,7 +275,7 @@ pub async fn serve(st: &State, mut req: Req) -> Result<Response> {
         }
         Some("domains") => {
             if m == Method::GET && s(1).is_none() {
-                return Ok(json(db(Box::new(crate::domains::list_domains)).await?));
+                return Ok(json(crate::domains::list_domains(st, &c).await?));
             }
             if m == Method::POST && s(1).is_none() {
                 let b = req.json_object().await?;

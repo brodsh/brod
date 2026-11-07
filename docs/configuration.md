@@ -108,7 +108,7 @@ This page is generated from `.env.example` by `node scripts/config-docs.mjs`. Ed
 
 | Variable | Example or default | What it does |
 | --- | --- | --- |
-| `DNS_RESOLVER_URL` | `https://cloudflare-dns.com/dns-query` | The DNS-over-HTTPS resolver that checks a custom domain's TXT record. Default: Cloudflare's. |
+| `DNS_RESOLVER_URL` | `https://cloudflare-dns.com/dns-query` | The DNS-over-HTTPS resolver that checks a custom domain's TXT record and whether its DNS is on Cloudflare. Default: Cloudflare's. |
 | `CUSTOM_DOMAIN_TARGET` |  | The name custom domains point their CNAME at. Default: BROD_PUBLIC_URL's host. |
 
 ## Logs
